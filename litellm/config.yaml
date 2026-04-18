@@ -1,0 +1,23 @@
+model_list:
+  - model_name: stroom-bulk
+    litellm_params:
+      model: ollama/qwen3.6
+      api_base: os.environ/OLLAMA_BASE_URL
+
+  - model_name: stroom-embed
+    litellm_params:
+      model: ollama/nomic-embed-text
+      api_base: os.environ/OLLAMA_BASE_URL
+
+  - model_name: stroom-deep
+    litellm_params:
+      model: claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: stroom-long-context
+    litellm_params:
+      model: gemini/gemini-3.1-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
