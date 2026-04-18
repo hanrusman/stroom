@@ -4,7 +4,7 @@ You are setting up **infrastructure (Fase 0)** and the **database schema (Fase 1
 
 ## What you are building
 
-1. 4 Docker services: Postgres (pgvector), LiteLLM proxy, Kokoro TTS, nginx for media.
+1. 3 Docker services: Postgres (pgvector), LiteLLM proxy, nginx for media.
 2. Database schema: 3 extensions, 8 tables, 3 views.
 3. Seed rows in `sources`.
 
@@ -58,7 +58,7 @@ Wait ~90 seconds for all healthchecks to settle, then:
 docker compose ps
 ```
 
-All 4 services must be `healthy`. If any is not, run `docker compose logs <service>` and report back. **Do not edit docker-compose.yml on your own.**
+All 3 services must be `healthy`. If any is not, run `docker compose logs <service>` and report back. **Do not edit docker-compose.yml on your on.
 
 ### 0.3 Verify services
 
@@ -76,8 +76,8 @@ curl -s http://localhost:4000/v1/models \
 # nginx media: returns 200 or 403 (both mean it's up — directory is empty)
 curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8090/
 
-# Kokoro: voice list is non-empty
-curl -s http://localhost:8880/v1/audio/voices | jq 'length'
+# Kokoro: (Removed - now integrated into API in Fase 4)
+# curl -s http://localhost:8880/v1/audio/voices | jq 'length'
 ```
 
 If any of these fail, stop and report.
@@ -131,9 +131,8 @@ psql "postgresql://stroom:${STROOM_DB_PASSWORD}@localhost:5433/stroom" \
 
 ## Acceptance checklist
 
-- [ ] `docker compose ps` — 4 services `healthy`
+- [ ] `docker compose ps` — 3 services `healthy`
 - [ ] `curl` to LiteLLM → 4 model aliases
-- [ ] `curl` to Kokoro → voice list non-empty
 - [ ] `\dt` → 8 tables
 - [ ] `\dv` → 3 views
 - [ ] `sources` → ≥ 3 rows

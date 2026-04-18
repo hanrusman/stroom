@@ -71,47 +71,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  kokoro:
-    image: ghcr.io/remsky/kokoro-fastapi:latest
-    container_name: stroom-kokoro
-    restart: unless-stopped
-    security_opt:
-      - no-new-privileges:true
-    ports:
-      - "127.0.0.1:8880:8880"
-    environment:
-      TZ: Europe/Amsterdam
-    networks:
-      - stroom-backend
-    # GPU reservation — uncomment if strongbad has NVIDIA + nvidia-container-toolkit.
-    # CPU-only works but is ~3-4× slower. If you uncomment this, remove the
-    # `deploy.resources.limits` block below and merge reservations + limits under one `resources:`.
-    #
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:8880/v1/audio/voices"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 90s
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-          cpus: '4.0'
-          pids: 300
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   stroom-media:
     image: nginx:alpine
     container_name: stroom-media
