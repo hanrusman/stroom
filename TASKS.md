@@ -58,7 +58,7 @@ Wait ~90 seconds for all healthchecks to settle, then:
 docker compose ps
 ```
 
-All 3 services must be `healthy`. If any is not, run `docker compose logs <service>` and report back. **Do not edit docker-compose.yml on your on.
+All 3 services must be `healthy`. If any is not, run `docker compose logs <service>` and report back. **Do not edit docker-compose.yml on your own.**
 
 ### 0.3 Verify services
 
@@ -156,3 +156,64 @@ psql "postgresql://stroom:${STROOM_DB_PASSWORD}@localhost:5433/stroom" \
 4. Anything unexpected, no matter how small.
 
 Then wait for review.
+
+---
+
+# Roadmap: Fase 2 - 10
+
+## Fase 2 — n8n Pollers
+Build the data ingestion pipeline in n8n.
+- Setup YouTube Data API poller.
+- Setup RSS feed poller.
+- Setup Podcast (iTunes/RSS) poller.
+- Insert raw items into `items` table.
+
+## Fase 3 — Automated Summarization
+Connect the dots between raw items and AI.
+- n8n flow: `v_processing_queue` $\rightarrow$ LiteLLM (Qwen) $\rightarrow$ Summary + Insights.
+- Update `items` with summary and populate `insights` table.
+- Mark item as `ready`.
+
+## Fase 4 — Core API (FastAPI)
+The backend that powers the frontend and integrations.
+- Setup FastAPI structure in `/api`.
+- Implement Database Layer (SQLAlchemy/SQLModel).
+- Endpoints for the "Stream" (getItems, getItemDetail).
+- Integrated Kokoro-ONNX for TTS generation.
+- "Regenerate summary" endpoint via LiteLLM.
+
+## Fase 5 — Obsidian Integration
+Export curated knowledge to personal vault.
+- Implement "Save to Obsidian" logic.
+- Mapping categories to Obsidian folders.
+- Integration with Obsidian Local REST API.
+
+## Fase 6 — Vikunja Integration
+Turn insights into action.
+- Implement "Add to Vikunja" logic.
+- Mapping insights to Vikunja tasks.
+- Integration with Vikunja API.
+
+## Fase 7 — Podcast Generation
+The "Weekly Review" audio experience.
+- Aggregator: Select saved insights for a given range (day/week/month).
+- Scripting: LiteLLM generates a conversational script based on insights.
+- TTS: Convert script to audio via Kokoro.
+- Storage: Save result to `media/` folder for Nginx.
+
+## Fase 8 — Frontend (Next.js PWA)
+The visual interface based on the provided sketch.
+- Main "Stream" view with filtering.
+- Item detail view with insight management.
+- "Spiegel" (Reflections) view for daily journaling.
+- Podcast player and generator UI.
+
+## Fase 9 — "Deeper" Chat
+AI-powered exploration of a specific insight.
+- Implement a chat interface for drilling down into a single insight.
+- LLM context management (Insight + Item Summary + External Knowledge).
+
+## Fase 10 — Final Polishing & Deployment
+- Performance optimization.
+- Final security hardening.
+- Complete deployment to strongbad.
