@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 from typing import List, Optional, Literal
 from pydantic import BaseModel
@@ -141,5 +142,5 @@ async def explore_insight(
     insight_id: str, query: str, session=Depends(get_async_session)
 ):
     llm = LLMService(app.state.http_client)
-    response = await llm.explore_insight(session, insight_id, query)
-    return {"response": response}
+    generator = await llm.explore_insight(session, insight_id, query)
+    return StreamingResponse(generator, media_type="text/plain")
