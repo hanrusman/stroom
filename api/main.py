@@ -6,8 +6,9 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
-from models.base import Item, Insight, ItemStatus, ProcessingStatus
+from models.base import Item, Insight, ItemStatus, ProcessingStatus, InsightCategory, Save
 from services.llm_service import LLMService
+from services.obsidian_service import ObsidianService
 from sqlalchemy.orm import selectinload
 import httpx
 
@@ -36,6 +37,21 @@ class ItemDetail(BaseModel):
     summary: Optional[str]
     type: str
     insights: List[InsightRead]
+
+
+class SaveCreate(BaseModel):
+    insight_id: str
+    category: InsightCategory
+    note: Optional[str] = None
+
+
+class SaveRead(BaseModel):
+    id: str
+    insight_id: str
+    category: InsightCategory
+    note: Optional[str]
+    obsidian_synced: bool
+    obsidian_path: Optional[str]
 
 
 # --- Lifespan for shared HTTP client ---
@@ -144,3 +160,35 @@ async def explore_insight(
     llm = LLMService(app.state.http_client)
     generator = await llm.explore_insight(session, insight_id, query)
     return StreamingResponse(generator, media_type="text/plain")
+
+
+@app.post("/saves", response_model=SaveRead)
+async def create_save(
+    save_in: SaveCreate, session=Depends(get_async_session)
+):
+    # Verify insight exists
+    insight = await session.get(Insight, save_in.insight_id)
+    if not insight:
+        raise HTTPException(status_code=404, detail="Insight not found")
+
+    db_save = Save(
+        insight_id=save_in.insight_id,
+        category=save_in.category,
+        note=save_in.note,
+    )
+    session.add(db_save)
+    await session.commit()
+    await session.refresh(db_save)
+
+    # Push to Obsidian
+    obsidian = ObsidianService(app.state.http_client)
+    db_save = await obsidian.push_insight(session, str(db_save.id))
+
+    return SaveRead(
+        id=str(db_save.id),
+        insight_id=str(db_save.insight_id),
+        category=db_save.category,
+        note=db_save.note,
+        obsidian_synced=db_save.obsidian_synced,
+        obsidian_path=db_save.obsidian_path
+    )

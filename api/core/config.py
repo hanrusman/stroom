@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     GEMINI_API_KEY: str = ""
     OLLAMA_BASE_URL: str = "http://host.docker.internal:11434"
+    
+    # Obsidian Local REST API
+    OBSIDIAN_BASE_URL: str = "http://host.docker.internal:27124"
+    OBSIDIAN_API_KEY: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
