@@ -80,7 +80,7 @@ services:
         max-size: "10m"
         max-file: "3"
 
-  litellm:
+  stroom-litellm:
     image: ghcr.io/berriai/litellm:main-stable
     container_name: stroom-litellm
     restart: unless-stopped
