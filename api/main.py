@@ -6,9 +6,10 @@ from typing import List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
-from models.base import Item, Insight, ItemStatus, ProcessingStatus, InsightCategory, Save
+from models.base import Item, Insight, ItemStatus, ProcessingStatus, InsightCategory, Save, Todo
 from services.llm_service import LLMService
 from services.obsidian_service import ObsidianService
+from services.vikunja_service import VikunjaService
 from sqlalchemy.orm import selectinload
 import httpx
 
@@ -52,6 +53,19 @@ class SaveRead(BaseModel):
     note: Optional[str]
     obsidian_synced: bool
     obsidian_path: Optional[str]
+
+
+class TodoCreate(BaseModel):
+    insight_id: str
+    title: str
+
+
+class TodoRead(BaseModel):
+    id: str
+    insight_id: str
+    vikunja_task_id: int
+    title: str
+    done: bool
 
 
 # --- Lifespan for shared HTTP client ---
@@ -166,7 +180,6 @@ async def explore_insight(
 async def create_save(
     save_in: SaveCreate, session=Depends(get_async_session)
 ):
-    # Verify insight exists
     insight = await session.get(Insight, save_in.insight_id)
     if not insight:
         raise HTTPException(status_code=404, detail="Insight not found")
@@ -180,7 +193,6 @@ async def create_save(
     await session.commit()
     await session.refresh(db_save)
 
-    # Push to Obsidian
     obsidian = ObsidianService(app.state.http_client)
     db_save = await obsidian.push_insight(session, str(db_save.id))
 
@@ -190,5 +202,20 @@ async def create_save(
         category=db_save.category,
         note=db_save.note,
         obsidian_synced=db_save.obsidian_synced,
-        obsidian_path=db_save.obsidian_path
+        obsidian_path=db_save.obsidian_path,
+    )
+
+
+@app.post("/todos", response_model=TodoRead)
+async def create_todo(
+    todo_in: TodoCreate, session=Depends(get_async_session)
+):
+    vikunja = VikunjaService(app.state.http_client)
+    db_todo = await vikunja.create_task(session, todo_in.insight_id, todo_in.title)
+    return TodoRead(
+        id=str(db_todo.id),
+        insight_id=str(db_todo.insight_id),
+        vikunja_task_id=db_todo.vikunja_task_id,
+        title=db_todo.title,
+        done=db_todo.done,
     )
