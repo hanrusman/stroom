@@ -2,10 +2,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query
 from sqlmodel import Session, select
 from typing import List, Optional, Literal
-from .core.db import get_async_session
-from .core.config import settings
-from .models.base import Item, Insight, Source, ItemStatus, ProcessingStatus
-from .services.llm_service import LLMService
+from pydantic import BaseModel
+from core.db import get_async_session
+from core.config import settings
+from models.base import Item, Insight, ItemStatus, ProcessingStatus
+from services.llm_service import LLMService
 from sqlalchemy.orm import selectinload
 import httpx
 
