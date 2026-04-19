@@ -1,4 +1,46 @@
 services:
+  stroom-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: stroom-api
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8100:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - ASYNC_DATABASE_URL=${ASYNC_DATABASE_URL}
+      - LITELLM_MASTER_KEY=${LITELLM_MASTER_KEY}
+      - LITELLM_URL=${LITELLM_URL}
+      - TZ=Europe/Amsterdam
+    networks:
+      - stroom-backend
+      - personal_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1.0'
+          pids: 200
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    depends_on:
+      stroom-db:
+        condition: service_healthy
+      stroom-litellm:
+        condition: service_healthy
+
   stroom-db:
     image: pgvector/pgvector:pg16
     container_name: stroom-db
@@ -16,6 +58,7 @@ services:
       - "127.0.0.1:5433:5432"
     networks:
       - stroom-backend
+      - personal_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U stroom -d stroom"]
       interval: 30s
@@ -53,6 +96,7 @@ services:
       TZ: Europe/Amsterdam
     networks:
       - stroom-backend
+      - personal_net
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://localhost:4000/health/liveliness"]
       interval: 30s
@@ -83,6 +127,7 @@ services:
       - "127.0.0.1:8090:80"
     networks:
       - stroom-backend
+      - personal_net
     healthcheck:
       test: ["CMD", "wget", "--spider", "--quiet", "http://localhost/"]
       interval: 60s
@@ -106,4 +151,6 @@ volumes:
 
 networks:
   stroom-backend:
-    driver: bridge
+    internal: true
+  personal_net:
+    external: true

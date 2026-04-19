@@ -1,4 +1,3 @@
-import os
 import json
 import httpx
 from fastapi import HTTPException
@@ -76,7 +75,6 @@ class LLMService:
             item.processing_status = "ready"
 
             # 2. Update insights: Delete old and insert new
-            # Use a delete statement for efficiency
             await session.exec(delete(Insight).where(Insight.item_id == item.id))
 
             new_insights_list = data.get("insights", [])

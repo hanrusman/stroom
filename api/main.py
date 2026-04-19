@@ -1,8 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query
-from sqlmodel import select
-from typing import List, Optional
-from pydantic import BaseModel
+from sqlmodel import Session, select
+from typing import List, Optional, Literal
 from .core.db import get_async_session
 from .core.config import settings
 from .models.base import Item, Insight, Source, ItemStatus, ProcessingStatus
@@ -58,7 +57,7 @@ async def health_check():
 
 @app.get("/stream", response_model=List[StreamItem])
 async def get_stream(
-    status: Optional[ItemStatus] = "all",
+    status: Literal["all", "new", "pinned", "later", "archived"] = "all",
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     session=Depends(get_async_session),
@@ -110,12 +109,9 @@ async def get_item_detail(item_id: str, session=Depends(get_async_session)):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    # We can use the relation since it's an async session and we can use await
-    # However, for simplicity in this endpoint, we just fetch the insights
-    from sqlalchemy import select as sa_select
-
+    # Use sqlmodel.select instead of sa_select
     insights_result = await session.exec(
-        sa_select(Insight).where(Insight.item_id == item.id)
+        select(Insight).where(Insight.item_id == item.id)
     )
     insights = insights_result.all()
 
