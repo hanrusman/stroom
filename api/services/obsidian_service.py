@@ -26,8 +26,7 @@ class ObsidianService:
         """
         Creates a markdown file format with frontmatter for Obsidian.
         """
-        # Create a safe filename compatible with Obsidian
-        date_str = str(save.saved_at.date())
+        
         
         # Frontmatter
         lines = [
@@ -51,7 +50,7 @@ class ObsidianService:
             
         lines.extend([
             "---",
-            f"**Bron:** [{item.title}](item.url if hasattr(item, 'url') else '')", 
+            f"**Bron:** [{item.title}]({item.media_url or ''})", 
             f"**Geëxporteerd via Stroom**"
         ])
         
