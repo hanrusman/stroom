@@ -227,7 +227,11 @@ async def create_episode(
 
     podcast_svc = PodcastService(app.state.http_client)
     background_tasks.add_task(podcast_svc.generate_episode_task, str(db_episode.id))
+<<<<<<< HEAD
 
+=======
+    
+>>>>>>> a2d80a5 (fix(podcast): in-process Kokoro-ONNX, fix background session, add media volume)
     return EpisodeRead(
         id=str(db_episode.id),
         range=db_episode.range,
