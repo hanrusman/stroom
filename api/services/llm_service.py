@@ -154,9 +154,7 @@ class LLMService:
     async def explore_insight(
         self, session: AsyncSession, insight_id: str, user_query: str
     ):
-        from models.base import Insight, Item
-        from sqlmodel import or_
-
+        from models.base import Insight, Item        
         insight = await session.get(Insight, insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")

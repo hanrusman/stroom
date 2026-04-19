@@ -143,4 +143,4 @@ async def explore_insight(
 ):
     llm = LLMService(app.state.http_client)
     generator = await llm.explore_insight(session, insight_id, query)
-    return StreamingResponse(generator, media_type="text/event-stream")
+    return StreamingResponse(generator, media_type="text/plain")
