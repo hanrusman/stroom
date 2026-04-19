@@ -1,7 +1,7 @@
 services:
   stroom-api:
     build:
-      context: ./api
+      context: ../../stroom-src/api
       dockerfile: Dockerfile
     container_name: stroom-api
     restart: unless-stopped
@@ -151,7 +151,7 @@ services:
 
   stroom-web:
     build:
-      context: ./web
+      context: ../../stroom-src/web
       dockerfile: Dockerfile
     container_name: stroom-web
     restart: unless-stopped
