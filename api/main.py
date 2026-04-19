@@ -3,6 +3,7 @@ from sqlmodel import Session, select
 from typing import List
 from .core.db import get_session
 from .models.base import Item, Insight, Source
+from .services.llm_service import LLMService
 
 app = FastAPI(title="Stroom API")
 
@@ -60,3 +61,19 @@ async def get_item_detail(item_id: str, session: Session = Depends(get_session))
         "type": item.type,
         "insights": [{"id": i.id, "text": i.text} for i in insights],
     }
+
+
+@app.post("/items/{item_id}/regenerate")
+async def regenerate_summary(item_id: str, session: Session = Depends(get_session)):
+    llm = LLMService(session)
+    item = await llm.regenerate_summary(item_id)
+    return {"id": item.id, "summary": item.summary, "status": item.processing_status}
+
+
+@app.post("/insights/{insight_id}/explore")
+async def explore_insight(
+    insight_id: str, query: str, session: Session = Depends(get_session)
+):
+    llm = LLMService(session)
+    response = await llm.explore_insight(insight_id, query)
+    return {"response": response}
