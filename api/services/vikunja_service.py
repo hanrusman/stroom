@@ -21,7 +21,7 @@ class VikunjaService:
         if not item:
             raise HTTPException(status_code=404, detail="Item not found")
 
-        description = f"**Bron:** [{item.title}]({item.url if hasattr(item, 'url') else ''})\n\n**Inzicht:** {insight.text}"
+        description = f"**Bron:** [{item.title}]({item.media_url or ''})\n\n**Inzicht:** {insight.text}"
 
         project_id = settings.VIKUNJA_DEFAULT_PROJECT_ID
         url = f"{settings.VIKUNJA_URL.rstrip('/')}/projects/{project_id}/tasks"
@@ -37,8 +37,7 @@ class VikunjaService:
         }
 
         if not settings.VIKUNJA_TOKEN:
-            # If no token is provided, just simulate for dev
-            vikunja_task_id = 9999
+            raise HTTPException(status_code=503, detail="Vikunja not configured — set VIKUNJA_TOKEN in .env")
         else:
             try:
                 response = await self.http_client.put(
