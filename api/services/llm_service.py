@@ -41,6 +41,68 @@ class LLMService:
 
         return response.json()["choices"][0]["message"]["content"]
 
+    async def call_llm_stream(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+    ):
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        async with self.http_client.stream(
+            "POST",
+            settings.LITELLM_URL,
+            headers={"Authorization": f"Bearer {settings.LITELLM_MASTER_KEY}"},
+            json=payload,
+            timeout=60.0,
+        ) as response:
+            if response.status_code != 200:
+                text = await response.aread()
+                raise HTTPException(
+                    status_code=response.status_code,
+                    detail=f"LiteLLM error: {text}",
+                )
+
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data_str = line[6:]
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        if "choices" in chunk and len(chunk["choices"]) > 0:
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content", "")
+                            if content:
+                                yield content
+                    except json.JSONDecodeError:
+                        continue
+
+    async def get_embedding(self, text: str) -> List[float]:
+        embed_url = settings.LITELLM_URL.replace("/chat/completions", "/embeddings")
+        payload = {
+            "model": "stroom-embed",
+            "input": text,
+        }
+        response = await self.http_client.post(
+            embed_url,
+            headers={"Authorization": f"Bearer {settings.LITELLM_MASTER_KEY}"},
+            json=payload,
+            timeout=60.0,
+        )
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=response.status_code,
+                detail=f"LiteLLM Embedding error: {response.text}",
+            )
+        return response.json()["data"][0]["embedding"]
+
+
     async def regenerate_summary(self, session: AsyncSession, item_id: str):
         from models.base import Item, Insight
 
@@ -93,12 +155,40 @@ class LLMService:
         self, session: AsyncSession, insight_id: str, user_query: str
     ):
         from models.base import Insight, Item
+        from sqlmodel import or_
 
         insight = await session.get(Insight, insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")
 
         item = await session.get(Item, insight.item_id)
+
+        # Context assembly (P3)
+        # We find previously saved similar insights using pgvector.
+        query_embedding = await self.get_embedding(user_query)
+        
+        # Similar insights from the same module or generally
+        # We use l2_distance or cosine_distance. Both work if pgvector is enabled.
+        # We ensure insight itself is not duplicated.
+        similar_insights_stmt = (
+            select(Insight)
+            .where(Insight.id != insight.id)
+            .where(Insight.embedding != None)
+            .order_by(Insight.embedding.cosine_distance(query_embedding))
+            .limit(3)
+        )
+        similar_insights_result = await session.exec(similar_insights_stmt)
+        similar_insights = similar_insights_result.all()
+
+        similar_insights_context = ""
+        if similar_insights:
+            similar_insights_context = "Eerder bewaarde, mogelijk gerelateerde inzichten:\n" + "\n".join(
+                f"- {sim.text}" for sim in similar_insights
+            )
+
+        # For transcript fragment retrieval, a dynamic BM25/keyword logic would fit here,
+        # but for now we simply pass the overall summary plus the similar insights since 
+        # a dedicated chunking table does not exist. (We prioritize speed).
 
         # Dutch prompt for deep exploration
         prompt = [
@@ -107,11 +197,13 @@ class LLMService:
                 "content": (
                     f"Je bent een analytische expert. De gebruiker wil dieper graven in een specifiek inzicht uit de {item.type} '{item.title}'.\n\n"
                     f"Context van het item: {item.summary}\n\n"
-                    f"Het specifieke inzicht: {insight.text}\n\n"
+                    f"{similar_insights_context}\n\n"
+                    f"Het referentie inzicht: {insight.text}\n\n"
                     "Geef een verdiepend antwoord in het Nederlands. Wees concreet, verbind het met bredere concepten en blijf in de Martin-Bril toon."
                 ),
             },
             {"role": "user", "content": user_query},
         ]
 
-        return await self.call_llm("stroom-deep", prompt)
+        # Use streaming call instead of regular call (P2)
+        return self.call_llm_stream("stroom-deep", prompt)
