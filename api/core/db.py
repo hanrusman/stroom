@@ -1,4 +1,3 @@
-from sqlalchemy import create_engine
 from sqlmodel import Session, create_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
@@ -13,6 +12,11 @@ async_engine = create_async_engine(settings.ASYNC_DATABASE_URL, echo=settings.SQ
 
 def get_session():
     with Session(engine) as session:
+        yield session
+
+
+async def get_async_session():
+    async with AsyncSession(async_engine) as session:
         yield session
 
 

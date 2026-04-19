@@ -3,8 +3,9 @@ import json
 import httpx
 from fastapi import HTTPException
 from typing import List, Dict, Any
-from sqlmodel import select
-from .core.config import settings
+from sqlmodel import select, delete
+from sqlmodel.ext.asyncio.session import AsyncSession
+from core.config import settings
 
 
 class LLMService:
@@ -41,10 +42,10 @@ class LLMService:
 
         return response.json()["choices"][0]["message"]["content"]
 
-    async def regenerate_summary(self, session, item_id: str):
-        from .models.base import Item, Insight
+    async def regenerate_summary(self, session: AsyncSession, item_id: str):
+        from models.base import Item, Insight
 
-        item = session.get(Item, item_id)
+        item = await session.get(Item, item_id)
         if not item:
             raise HTTPException(status_code=404, detail="Item not found")
 
@@ -69,31 +70,37 @@ class LLMService:
 
         try:
             data = json.loads(raw_content)
-            item.summary = data.get("summary", item.summary)
 
-            # Update insights
-            # Remove old insights first
-            session.exec(
-                select(Insight).where(Insight.item_id == item.id)
-            ).all()  # just to ensure they are loaded
-            # We'll handle the actual deletion and insertion in the service layer
-            # For now, we update the summary and mark as ready
+            # 1. Update summary
+            item.summary = data.get("summary", item.summary)
             item.processing_status = "ready"
+
+            # 2. Update insights: Delete old and insert new
+            # Use a delete statement for efficiency
+            await session.exec(delete(Insight).where(Insight.item_id == item.id))
+
+            new_insights_list = data.get("insights", [])
+            for idx, text in enumerate(new_insights_list):
+                insight = Insight(item_id=item.id, position=idx + 1, text=text)
+                session.add(insight)
+
             session.add(item)
-            session.commit()
-            session.refresh(item)
+            await session.commit()
+            await session.refresh(item)
             return item
         except json.JSONDecodeError:
             raise HTTPException(status_code=500, detail="LLM returned invalid JSON")
 
-    async def explore_insight(self, session, insight_id: str, user_query: str):
-        from .models.base import Insight, Item
+    async def explore_insight(
+        self, session: AsyncSession, insight_id: str, user_query: str
+    ):
+        from models.base import Insight, Item
 
-        insight = session.get(Insight, insight_id)
+        insight = await session.get(Insight, insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")
 
-        item = session.get(Item, insight.item_id)
+        item = await session.get(Item, insight.item_id)
 
         # Dutch prompt for deep exploration
         prompt = [
