@@ -1,13 +1,17 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
+import Link from "next/link";
 import "./globals.css";
 import { Inter } from "next/font/google";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "Stroom | Your River of Insights",
-  description: "Aggregated, AI-summarized insights from your favorite sources.",
+  title: "Stroom",
+  description: "Jouw persoonlijke stroom van inzichten.",
   manifest: "/manifest.json",
+};
+
+export const viewport: Viewport = {
   themeColor: "#0b0f19",
 };
 
@@ -32,10 +36,10 @@ export default function RootLayout({
           </div>
           
           <nav className="flex flex-col gap-2 flex-grow">
-            {['Stream', 'Spiegel', 'Podcast'].map((item, idx) => (
-              <a key={item} href={idx === 0 ? '/' : `/${item.toLowerCase()}`} className={`px-4 py-3 rounded-xl transition-all duration-300 font-medium ${idx === 0 ? 'bg-primary/20 text-primary border border-primary/20 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'hover:bg-white/5 text-gray-400 hover:text-white'}`}>
-                {item}
-              </a>
+            {[['Stroom', '/'], ['Spiegel', '/spiegel'], ['Podcast', '/podcast']].map(([label, href], idx) => (
+              <Link key={label} href={href} className={`px-4 py-3 rounded-xl transition-all duration-300 font-medium ${idx === 0 ? 'bg-primary/20 text-primary border border-primary/20 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'hover:bg-white/5 text-gray-400 hover:text-white'}`}>
+                {label}
+              </Link>
             ))}
           </nav>
           

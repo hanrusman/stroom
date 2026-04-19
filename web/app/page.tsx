@@ -33,8 +33,8 @@ export default function Stream() {
     <div className="max-w-4xl mx-auto z-10 relative">
       <div className="flex flex-col md:flex-row md:items-center justify-between mb-10 gap-4">
         <div>
-          <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-2">Your Stream</h2>
-          <p className="text-secondary text-lg">Curated intelligence, waiting to be explored.</p>
+          <h2 className="text-3xl md:text-4xl font-extrabold tracking-tight mb-2">Jouw Stroom</h2>
+          <p className="text-secondary text-lg">Samengevatte inzichten, klaar om te verkennen.</p>
         </div>
         
         <div className="glass px-4 py-2 rounded-full inline-flex items-center gap-2 border border-white/10 shadow-lg w-max">
@@ -72,7 +72,7 @@ export default function Stream() {
 
             <div className="bg-background/40 p-5 rounded-xl border border-white/5">
               <h4 className="flex items-center gap-2 font-bold mb-3 text-sm uppercase tracking-wider text-accent">
-                <Sparkles className="w-4 h-4" /> Key Insights
+                <Sparkles className="w-4 h-4" /> Inzichten
               </h4>
               <ul className="space-y-4">
                 {item.insights.map((insight, idx) => (

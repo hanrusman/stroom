@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 from typing import List, Optional, Literal
@@ -97,6 +98,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Stroom API", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8101",
+        "https://stroom.c4w.nl",
+    ],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # --- Endpoints ---
