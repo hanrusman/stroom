@@ -1,23 +1,72 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID, uuid4
+from enum import Enum
 from sqlmodel import SQLModel, Field, Relationship
+from sqlalchemy import Column
 from pgvector.sqlalchemy import Vector
 
-# --- Enums are handled as strings/literals in SQLModel for simplicity,
-# but we can add Pydantic validators later.
+
+class ContentKind(str, Enum):
+    YOUTUBE = "youtube"
+    RSS = "rss"
+    PODCAST = "podcast"
+
+
+class ProcessingStatus(str, Enum):
+    PENDING = "pending"
+    TRANSCRIBING = "transcribing"
+    SUMMARIZING = "summarizing"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class ItemStatus(str, Enum):
+    NEW = "new"
+    PINNED = "pinned"
+    LATER = "later"
+    ARCHIVED = "archived"
+
+
+class InsightCategory(str, Enum):
+    IDEEN = "ideeën"
+    QUOTES = "quotes"
+    FILM_TV = "film-tv"
+    KIDS = "kids"
+    PODCASTS = "podcasts"
+    BOEKEN = "boeken"
+
+
+class EpisodeRange(str, Enum):
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+
+
+class EpisodeStatus(str, Enum):
+    GENERATING = "generating"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class FeedEventType(str, Enum):
+    NEW = "new"
+    PINNED = "pinned"
+    LATER = "later"
+    ARCHIVED = "archived"
+    VIEWED = "viewed"
 
 
 class Source(SQLModel, table=True):
     __tablename__ = "sources"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    kind: str  # 'youtube', 'rss', 'podcast'
+    kind: ContentKind
     name: str
     url: str
     poll_interval_min: int = Field(default=60)
     last_polled_at: Optional[datetime] = None
     last_poll_status: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     items: List["Item"] = Relationship(back_populates="source")
 
@@ -27,7 +76,7 @@ class Item(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     source_id: UUID = Field(foreign_key="sources.id")
     external_id: str
-    type: str  # 'youtube', 'rss', 'podcast'
+    type: ContentKind
     title: str
     description: Optional[str] = None
     author: Optional[str] = None
@@ -39,10 +88,10 @@ class Item(SQLModel, table=True):
     summary: Optional[str] = None
     summary_model: Optional[str] = None
     summary_generated_at: Optional[datetime] = None
-    processing_status: str = Field(default="pending")  # 'pending', 'transcribing', etc.
+    processing_status: ProcessingStatus = Field(default=ProcessingStatus.PENDING)
     processing_error: Optional[str] = None
-    status: str = Field(default="new")  # 'new', 'pinned', 'later', 'archived'
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    status: ItemStatus = Field(default=ItemStatus.NEW)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     source: Source = Relationship(back_populates="items")
     insights: List["Insight"] = Relationship(back_populates="item")
@@ -54,9 +103,11 @@ class Insight(SQLModel, table=True):
     item_id: UUID = Field(foreign_key="items.id")
     position: int
     text: str
-    suggested_category: Optional[str] = None  # 'ideeën', 'quotes', etc.
-    embedding: Optional[Vector] = Field(default=None, sa_column=Vector(768))
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    suggested_category: Optional[InsightCategory] = None
+    embedding: Optional[List[float]] = Field(
+        default=None, sa_column=Column(Vector(768))
+    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     item: Item = Relationship(back_populates="insights")
 
@@ -65,40 +116,40 @@ class Save(SQLModel, table=True):
     __tablename__ = "saves"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     insight_id: UUID = Field(foreign_key="insights.id")
-    category: str
+    category: InsightCategory
     note: Optional[str] = None
     obsidian_synced: bool = Field(default=False)
     obsidian_path: Optional[str] = None
-    saved_at: datetime = Field(default_factory=datetime.utcnow)
+    saved_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class FeedEvent(SQLModel, table=True):
     __tablename__ = "feed_events"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     item_id: UUID = Field(foreign_key="items.id")
-    event_type: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    event_type: FeedEventType
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Episode(SQLModel, table=True):
     __tablename__ = "episodes"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    range: str  # 'day', 'week', 'month'
+    range: EpisodeRange
     title: str
     script: Optional[str] = None
     audio_url: Optional[str] = None
     audio_size_bytes: Optional[int] = None
     duration_seconds: Optional[int] = None
-    status: str = Field(default="generating")
+    status: EpisodeStatus = Field(default=EpisodeStatus.GENERATING)
     error: Optional[str] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Reflection(SQLModel, table=True):
     __tablename__ = "reflections"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     content: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class Todo(SQLModel, table=True):
@@ -109,4 +160,4 @@ class Todo(SQLModel, table=True):
     title: str
     done: bool = Field(default=False)
     done_at: Optional[datetime] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

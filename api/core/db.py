@@ -1,20 +1,14 @@
-import os
 from sqlalchemy import create_engine
 from sqlmodel import Session, create_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.ext.asyncio import create_async_engine
-from dotenv import load_dotenv
+from .config import settings
 
-load_dotenv()
+# Sync engine for migrations/simple tasks
+engine = create_engine(settings.DATABASE_URL, echo=settings.SQL_ECHO)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL", "postgresql://stroom:password@localhost:5433/stroom"
-)
-# For async operations, we use postgresql+asyncpg
-ASYNC_DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://")
-
-engine = create_engine(DATABASE_URL, echo=True)
-async_engine = create_async_engine(ASYNC_DATABASE_URL, echo=True)
+# Async engine for API requests
+async_engine = create_async_engine(settings.ASYNC_DATABASE_URL, echo=settings.SQL_ECHO)
 
 
 def get_session():
