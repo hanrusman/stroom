@@ -159,8 +159,6 @@ services:
       - no-new-privileges:true
     ports:
       - "127.0.0.1:8101:3000"
-    volumes:
-      - ./web:/app
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8100
       - TZ=Europe/Amsterdam
