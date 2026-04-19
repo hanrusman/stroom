@@ -1,19 +1,24 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 from typing import List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
-from models.base import Item, Insight, ItemStatus, ProcessingStatus, InsightCategory, Save, Todo
+from models.base import (
+    Item, Insight, ItemStatus, ProcessingStatus,
+    InsightCategory, Save, Todo,
+    Episode, EpisodeRange, EpisodeStatus,
+)
 from services.llm_service import LLMService
 from services.obsidian_service import ObsidianService
 from services.vikunja_service import VikunjaService
+from services.podcast_service import PodcastService
 from sqlalchemy.orm import selectinload
 import httpx
 
-# --- Response Models for OpenAPI ---
+# --- Response Models ---
 
 
 class InsightRead(BaseModel):
@@ -68,18 +73,33 @@ class TodoRead(BaseModel):
     done: bool
 
 
-# --- Lifespan for shared HTTP client ---
+class EpisodeCreate(BaseModel):
+    range: EpisodeRange
+    title: str
+
+
+class EpisodeRead(BaseModel):
+    id: str
+    range: EpisodeRange
+    title: str
+    status: EpisodeStatus
+    audio_url: Optional[str]
+
+
+# --- Lifespan ---
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Initialize global HTTP client
     app.state.http_client = httpx.AsyncClient(timeout=300.0)
     yield
     await app.state.http_client.aclose()
 
 
 app = FastAPI(title="Stroom API", lifespan=lifespan)
+
+
+# --- Endpoints ---
 
 
 @app.get("/health")
@@ -94,12 +114,6 @@ async def get_stream(
     offset: int = Query(0),
     session=Depends(get_async_session),
 ):
-    """
-    Fetches items for the main stream.
-    Only items with processing_status == 'ready' are shown.
-    Filtering by status: 'all', 'new', 'pinned', 'later'.
-    """
-    # Use selectinload to avoid N+1 and filter by processing_status
     statement = (
         select(Item)
         .where(Item.processing_status == ProcessingStatus.READY)
@@ -108,31 +122,25 @@ async def get_stream(
         .offset(offset)
         .limit(limit)
     )
-
     if status and status != "all":
         statement = statement.where(Item.status == status)
 
     results = await session.exec(statement)
     items = results.all()
 
-    stream_data = []
-    for item in items:
-        stream_data.append(
-            StreamItem(
-                id=str(item.id),
-                title=item.title,
-                summary=item.summary,
-                type=item.type,
-                status=item.status,
-                published_at=str(item.published_at) if item.published_at else None,
-                duration=item.duration_seconds,
-                insights=[
-                    InsightRead(id=str(i.id), text=i.text) for i in item.insights
-                ],
-            )
+    return [
+        StreamItem(
+            id=str(item.id),
+            title=item.title,
+            summary=item.summary,
+            type=item.type,
+            status=item.status,
+            published_at=str(item.published_at) if item.published_at else None,
+            duration=item.duration_seconds,
+            insights=[InsightRead(id=str(i.id), text=i.text) for i in item.insights],
         )
-
-    return stream_data
+        for item in items
+    ]
 
 
 @app.get("/items/{item_id}", response_model=ItemDetail)
@@ -141,10 +149,7 @@ async def get_item_detail(item_id: str, session=Depends(get_async_session)):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    # Use sqlmodel.select instead of sa_select
-    insights_result = await session.exec(
-        select(Insight).where(Insight.item_id == item.id)
-    )
+    insights_result = await session.exec(select(Insight).where(Insight.item_id == item.id))
     insights = insights_result.all()
 
     return ItemDetail(
@@ -160,11 +165,7 @@ async def get_item_detail(item_id: str, session=Depends(get_async_session)):
 async def regenerate_summary(item_id: str, session=Depends(get_async_session)):
     llm = LLMService(app.state.http_client)
     item = await llm.regenerate_summary(session, item_id)
-    return {
-        "id": str(item.id),
-        "summary": item.summary,
-        "status": item.processing_status,
-    }
+    return {"id": str(item.id), "summary": item.summary, "status": item.processing_status}
 
 
 @app.post("/insights/{insight_id}/explore")
@@ -177,18 +178,12 @@ async def explore_insight(
 
 
 @app.post("/saves", response_model=SaveRead)
-async def create_save(
-    save_in: SaveCreate, session=Depends(get_async_session)
-):
+async def create_save(save_in: SaveCreate, session=Depends(get_async_session)):
     insight = await session.get(Insight, save_in.insight_id)
     if not insight:
         raise HTTPException(status_code=404, detail="Insight not found")
 
-    db_save = Save(
-        insight_id=save_in.insight_id,
-        category=save_in.category,
-        note=save_in.note,
-    )
+    db_save = Save(insight_id=save_in.insight_id, category=save_in.category, note=save_in.note)
     session.add(db_save)
     await session.commit()
     await session.refresh(db_save)
@@ -207,9 +202,7 @@ async def create_save(
 
 
 @app.post("/todos", response_model=TodoRead)
-async def create_todo(
-    todo_in: TodoCreate, session=Depends(get_async_session)
-):
+async def create_todo(todo_in: TodoCreate, session=Depends(get_async_session)):
     vikunja = VikunjaService(app.state.http_client)
     db_todo = await vikunja.create_task(session, todo_in.insight_id, todo_in.title)
     return TodoRead(
@@ -218,4 +211,31 @@ async def create_todo(
         vikunja_task_id=db_todo.vikunja_task_id,
         title=db_todo.title,
         done=db_todo.done,
+    )
+
+
+@app.post("/episodes", response_model=EpisodeRead)
+async def create_episode(
+    episode_in: EpisodeCreate,
+    background_tasks: BackgroundTasks,
+    session=Depends(get_async_session),
+):
+    db_episode = Episode(range=episode_in.range, title=episode_in.title)
+    session.add(db_episode)
+    await session.commit()
+    await session.refresh(db_episode)
+
+    podcast_svc = PodcastService(app.state.http_client)
+    background_tasks.add_task(podcast_svc.generate_episode_task, str(db_episode.id))
+<<<<<<< HEAD
+
+=======
+    
+>>>>>>> a2d80a5 (fix(podcast): in-process Kokoro-ONNX, fix background session, add media volume)
+    return EpisodeRead(
+        id=str(db_episode.id),
+        range=db_episode.range,
+        title=db_episode.title,
+        status=db_episode.status,
+        audio_url=db_episode.audio_url,
     )

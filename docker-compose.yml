@@ -9,6 +9,9 @@ services:
       - no-new-privileges:true
     ports:
       - "127.0.0.1:8100:8000"
+    volumes:
+      - ./media:/app/media:rw
+      - ./models:/app/models:ro
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - ASYNC_DATABASE_URL=${ASYNC_DATABASE_URL}
