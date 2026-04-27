@@ -244,7 +244,7 @@ export interface RefreshAllResult {
   errors: number;
   inserted: number;
   checked: number;
-  thumbnails_filled?: number;
+  thumbnails_scheduled?: number;
 }
 
 export async function refreshAllAdminSources(): Promise<RefreshAllResult> {

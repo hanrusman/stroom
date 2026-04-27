@@ -1439,10 +1439,22 @@ async def _backfill_missing_thumbnails(session, limit: int) -> int:
     return filled
 
 
+async def _bg_backfill_thumbnails(limit: int):
+    """Achter de response: nieuwe DB-sessie, scrape, commit. Best-effort, logged."""
+    from core.db import async_session_maker
+    try:
+        async with async_session_maker() as bg_session:
+            n = await _backfill_missing_thumbnails(bg_session, limit)
+            print(f"[refresh-all bg] {n} thumbnails gevuld")
+    except Exception as exc:
+        print(f"[refresh-all bg] thumbnail backfill faalde: {exc}")
+
+
 @app.post("/admin/sources/refresh-all")
-async def admin_refresh_all(session=Depends(get_async_session),
+async def admin_refresh_all(background_tasks: BackgroundTasks,
+                            session=Depends(get_async_session),
                             user=Depends(require_user)):
-    """Refresh every active source + backfill missing thumbnails for recent RSS items."""
+    """Refresh every active source. Schedules thumbnail-backfill als achtergrondtaak."""
     r = await session.exec(sa_text(
         "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
     ))
@@ -1465,11 +1477,7 @@ async def admin_refresh_all(session=Depends(get_async_session),
         total_checked += res["checked"]
         per_source.append({"name": row[1], **res})
 
-    try:
-        thumbs_filled = await _backfill_missing_thumbnails(session, REFRESH_THUMB_BACKFILL_LIMIT)
-    except Exception as e:
-        thumbs_filled = 0
-        print(f"[refresh-all] thumbnail backfill faalde: {e}")
+    background_tasks.add_task(_bg_backfill_thumbnails, REFRESH_THUMB_BACKFILL_LIMIT)
 
     return {
         "ok": True,
@@ -1477,7 +1485,7 @@ async def admin_refresh_all(session=Depends(get_async_session),
         "errors": errors,
         "inserted": total_inserted,
         "checked": total_checked,
-        "thumbnails_filled": thumbs_filled,
+        "thumbnails_scheduled": REFRESH_THUMB_BACKFILL_LIMIT,
         "per_source": per_source,
     }
 

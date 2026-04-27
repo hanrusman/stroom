@@ -521,7 +521,7 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
     try {
       const r = await refreshAllAdminSources();
       setToast(`${r.sources} sources gecheckt — ${r.inserted} nieuwe items` +
-        (r.thumbnails_filled ? ` · ${r.thumbnails_filled} thumbnails` : '') +
+        (r.thumbnails_scheduled ? ` · ${r.thumbnails_scheduled} thumbnails op de achtergrond` : '') +
         (r.errors > 0 ? ` (${r.errors} errors)` : ''));
       reload();
     } catch (e) {
