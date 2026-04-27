@@ -1283,6 +1283,48 @@ def _feed_media_url(entry):
 def _feed_thumb_url(entry):
     if entry.get("media_thumbnail"):
         return entry["media_thumbnail"][0].get("url")
+    # Per-episode itunes:image (podcasts) of generieke image-tag.
+    v = entry.get("itunes_image") or entry.get("image")
+    if isinstance(v, dict):
+        return v.get("href") or v.get("url")
+    if isinstance(v, str):
+        return v
+    return None
+
+
+_OG_PATTERNS = [
+    re.compile(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', re.I),
+    re.compile(r'<meta[^>]+name=["\']twitter:image["\'][^>]+content=["\']([^"\']+)["\']', re.I),
+    re.compile(r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']twitter:image["\']', re.I),
+]
+
+
+async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
+    """Fetch URL, return og:image / twitter:image. Best-effort: returns None on any failure."""
+    if not url:
+        return None
+    try:
+        r = await client.get(
+            url,
+            headers={"User-Agent": "StroomBot/1.0 (+image-ingest)"},
+            timeout=8.0, follow_redirects=True,
+        )
+        if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
+            return None
+        head = r.text[:200_000]
+        for pat in _OG_PATTERNS:
+            m = pat.search(head)
+            if m:
+                img = m.group(1).strip()
+                if img.startswith("//"):
+                    return "https:" + img
+                if img.startswith("/"):
+                    from urllib.parse import urljoin
+                    return urljoin(url, img)
+                return img
+    except Exception:
+        return None
     return None
 
 
@@ -1314,6 +1356,13 @@ async def _refresh_one(session, src) -> dict:
         if st:
             published = datetime(*st[:6], tzinfo=timezone.utc)
 
+        media = _feed_media_url(entry)
+        thumb = _feed_thumb_url(entry)
+        # Geen feed-thumbnail én een artikel-URL → og:image scrapen.
+        # Skip podcasts (media_url is audio) en youtube (heeft eigen thumb pad).
+        if not thumb and media and src.kind == "rss":
+            thumb = await _scrape_og_image(app.state.http_client, media)
+
         r = await session.exec(sa_text(
             """
             INSERT INTO items
@@ -1326,7 +1375,7 @@ async def _refresh_one(session, src) -> dict:
             RETURNING id::text
             """
         ).bindparams(s=str(src.id), e=ext_id, k=src.kind, f=fmt, t=title, d=desc,
-                     a=author, m=_feed_media_url(entry), th=_feed_thumb_url(entry), p=published))
+                     a=author, m=media, th=thumb, p=published))
         row = r.first()
         if not row:
             continue
