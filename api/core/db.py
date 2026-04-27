@@ -19,3 +19,8 @@ async def get_async_session():
     async with AsyncSession(async_engine) as session:
         yield session
 
+
+def async_session_maker():
+    """Standalone async session ctx-manager (use outside Depends)."""
+    return AsyncSession(async_engine)
+

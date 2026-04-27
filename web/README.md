@@ -1,13 +1,20 @@
-# Stroom Frontend (Fase 8)
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+</div>
 
-This directory will hold the Next.js PWA frontend.
+# Run and deploy your AI Studio app
 
-To initialize the project locally on your machine (where `node` and `npm`/`npx` is installed):
+This contains everything you need to run your app locally.
 
-1. Switch to this directory: `cd web`
-2. Run the Next.js scaffold:
-   ```bash
-   npx create-next-app@latest . --typescript --tailwind --eslint --app --src-dir --import-alias "@/*" --use-npm
-   ```
-3. Once generated, uncomment the build and execution steps in `Dockerfile`.
-4. Ensure `NEXT_PUBLIC_API_URL=http://localhost:8100` makes it to your `.env.local` or Next.js config so the frontend can hit the FastAPI backend.
+View your app in AI Studio: https://ai.studio/apps/7699c77b-b921-4fd9-81bc-9c9c6aeac8d3
+
+## Run Locally
+
+**Prerequisites:**  Node.js
+
+
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`

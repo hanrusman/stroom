@@ -15,6 +15,7 @@ class ContentKind(str, Enum):
 
 class ProcessingStatus(str, Enum):
     PENDING = "pending"
+    QUEUED = "queued"
     TRANSCRIBING = "transcribing"
     SUMMARIZING = "summarizing"
     READY = "ready"
@@ -57,6 +58,33 @@ class FeedEventType(str, Enum):
     VIEWED = "viewed"
 
 
+class ItemFormat(str, Enum):
+    ARTICLE = "article"
+    PODCAST = "podcast"
+    VIDEO = "video"
+    SHORT = "short"
+
+
+class Topic(SQLModel, table=True):
+    __tablename__ = "topics"
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    slug: str = Field(unique=True, index=True)
+    name: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class SourceTopic(SQLModel, table=True):
+    __tablename__ = "source_topics"
+    source_id: UUID = Field(foreign_key="sources.id", primary_key=True)
+    topic_id: UUID = Field(foreign_key="topics.id", primary_key=True)
+
+
+class ItemTopic(SQLModel, table=True):
+    __tablename__ = "item_topics"
+    item_id: UUID = Field(foreign_key="items.id", primary_key=True)
+    topic_id: UUID = Field(foreign_key="topics.id", primary_key=True)
+
+
 class Source(SQLModel, table=True):
     __tablename__ = "sources"
     id: UUID = Field(default_factory=uuid4, primary_key=True)
@@ -66,6 +94,7 @@ class Source(SQLModel, table=True):
     poll_interval_min: int = Field(default=60)
     last_polled_at: Optional[datetime] = None
     last_poll_status: Optional[str] = None
+    image_url: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     items: List["Item"] = Relationship(back_populates="source")
@@ -77,6 +106,7 @@ class Item(SQLModel, table=True):
     source_id: UUID = Field(foreign_key="sources.id")
     external_id: str
     type: ContentKind
+    format: Optional[ItemFormat] = None
     title: str
     description: Optional[str] = None
     author: Optional[str] = None
