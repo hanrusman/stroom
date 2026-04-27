@@ -634,6 +634,118 @@ async def list_filtered_items(
     ]
 
 
+# --- Topic digest ---
+
+
+class TopicDigest(BaseModel):
+    markdown: str
+    item_count: int
+    model: Optional[str]
+    window_hours: int
+    generated_at: str
+
+
+DIGEST_WINDOW_HOURS = 24
+DIGEST_MAX_ITEMS = 40
+DIGEST_PER_ITEM_CHARS = 600
+
+
+def _strip_html(s: Optional[str]) -> str:
+    if not s:
+        return ""
+    s = re.sub(r"<[^>]+>", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+@app.get("/huygens/{slug}/digest", response_model=TopicDigest)
+async def get_topic_digest(slug: str, session=Depends(get_async_session)):
+    topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    row = (await session.exec(sa_text(
+        "SELECT markdown, item_count, model, window_hours, generated_at "
+        "FROM topic_digests WHERE topic_id = :tid"
+    ).bindparams(tid=topic.id))).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="No digest yet")
+    return TopicDigest(
+        markdown=row[0], item_count=row[1], model=row[2],
+        window_hours=row[3], generated_at=str(row[4]),
+    )
+
+
+@app.post("/huygens/{slug}/digest", response_model=TopicDigest)
+async def regenerate_topic_digest(slug: str, session=Depends(get_async_session)):
+    topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    rows = (await session.exec(sa_text(
+        f"""
+        SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at
+        FROM items i
+        JOIN item_topics it ON it.item_id = i.id
+        JOIN sources s ON s.id = i.source_id
+        WHERE it.topic_id = :tid
+          AND i.published_at >= now() - INTERVAL '{DIGEST_WINDOW_HOURS} hours'
+          AND s.active = true
+        ORDER BY i.published_at DESC
+        LIMIT {DIGEST_MAX_ITEMS}
+        """
+    ).bindparams(tid=topic.id))).all()
+
+    if not rows:
+        raise HTTPException(status_code=400, detail=f"Geen items in {topic.name} van laatste {DIGEST_WINDOW_HOURS}u")
+
+    blocks: list[str] = []
+    for title, fmt, sname, summary, desc, pub in rows:
+        body = (summary or "").strip() or _strip_html(desc)
+        if not body:
+            continue
+        body = body[:DIGEST_PER_ITEM_CHARS]
+        when = str(pub)[:16] if pub else ""
+        blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n\n{body}")
+    if not blocks:
+        raise HTTPException(status_code=400, detail="Items hebben geen tekst om samen te vatten")
+
+    corpus = "\n\n---\n\n".join(blocks)
+    system_prompt = (
+        "Je bent een redacteur die een persoonlijke dagsamenvatting schrijft over een specifiek thema. "
+        f"De gebruiker volgt het thema '{topic.name}' en heeft geen tijd om alles te lezen. "
+        "Schrijf een markdown-digest in het Nederlands met:\n"
+        "1. Een korte intro (2 zinnen) over wat er vandaag opviel.\n"
+        "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen, "
+        "met inline-bronvermelding tussen haakjes (Bronnaam).\n"
+        "3. Een 'Verder lezen' lijstje van max 5 items die individueel de moeite waard zijn.\n"
+        "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat."
+    )
+    llm = LLMService(app.state.http_client)
+    try:
+        markdown = await llm.call_llm("stroom-deep", [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Items van laatste {DIGEST_WINDOW_HOURS}u:\n\n{corpus}"},
+        ], temperature=0.4)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
+
+    markdown = markdown.strip()
+    item_count = len(blocks)
+    await session.exec(sa_text(
+        """
+        INSERT INTO topic_digests (topic_id, markdown, item_count, model, window_hours, generated_at)
+        VALUES (:tid, :m, :n, 'stroom-deep', :w, now())
+        ON CONFLICT (topic_id) DO UPDATE SET
+          markdown = EXCLUDED.markdown,
+          item_count = EXCLUDED.item_count,
+          model = EXCLUDED.model,
+          window_hours = EXCLUDED.window_hours,
+          generated_at = EXCLUDED.generated_at
+        """
+    ).bindparams(tid=topic.id, m=markdown, n=item_count, w=DIGEST_WINDOW_HOURS))
+    await session.commit()
+    return await get_topic_digest(slug, session)
+
+
 @app.post("/huygens/items/{item_id}/summarize", response_model=HuygensItemDetail)
 async def summarize_item(item_id: str, session=Depends(get_async_session),
                          user=Depends(require_user)):

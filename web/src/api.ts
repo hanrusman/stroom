@@ -150,6 +150,29 @@ export async function fetchFilteredItems(filter: ItemFilter, limit = 100): Promi
   return r.json();
 }
 
+export interface TopicDigest {
+  markdown: string;
+  item_count: number;
+  model: string | null;
+  window_hours: number;
+  generated_at: string;
+}
+
+export async function fetchTopicDigest(slug: string): Promise<TopicDigest | null> {
+  try {
+    const r = await apiFetch(`/api/huygens/${slug}/digest`);
+    return r.json();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function regenerateTopicDigest(slug: string): Promise<TopicDigest> {
+  const r = await apiFetch(`/api/huygens/${slug}/digest`, { method: 'POST' });
+  return r.json();
+}
+
 // --- Admin: sources ---
 
 export type SourceKind = 'rss' | 'podcast' | 'youtube';

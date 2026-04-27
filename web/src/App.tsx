@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchFilteredItems,
+         fetchTopicDigest, regenerateTopicDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter } from './api';
+         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, TopicDigest } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -487,6 +488,76 @@ export default function App() {
 }
 
 
+function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
+  const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setDigest(undefined); setErr(null); setOpen(false);
+    fetchTopicDigest(slug).then(setDigest).catch(() => setDigest(null));
+  }, [slug]);
+
+  const regen = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const fresh = await regenerateTopicDigest(slug);
+      setDigest(fresh);
+      setOpen(true);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const ago = digest ? new Date(digest.generated_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+
+  return (
+    <section className="mb-12 border border-brand-ink/10 rounded-3xl bg-brand-surface/40 p-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Newspaper size={20} className="text-brand-accent" />
+          <div>
+            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">Dagdigest · {topicName}</div>
+            {digest && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
+                {digest.item_count} items · {digest.window_hours}u · {ago}
+              </div>
+            )}
+            {digest === null && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {digest && (
+            <button onClick={() => setOpen(o => !o)}
+              className="flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+              {open ? 'Verberg' : 'Toon'}
+            </button>
+          )}
+          <button onClick={regen} disabled={busy}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] transition-all ${
+              busy ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
+                   : 'bg-brand-accent text-brand-cream hover:opacity-90'
+            }`}>
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {digest ? 'Ververs' : 'Genereer'}
+          </button>
+        </div>
+      </div>
+      {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
+      {open && digest && (
+        <div className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 whitespace-pre-wrap max-w-none">
+          {digest.markdown}
+        </div>
+      )}
+    </section>
+  );
+}
+
 const FILTER_LABELS: Record<ItemFilter, string> = {
   saved: 'Opgeslagen',
   summarized: 'Met samenvatting',
@@ -674,7 +745,8 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <FilterView filter={activeFilter} onOpen={openItem} />
             ) : data ? (
               <>
-                <h1 className="font-display text-6xl md:text-8xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-16">{data.name}</h1>
+                <h1 className="font-display text-6xl md:text-8xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-10">{data.name}</h1>
+                <DigestPanel slug={data.slug} topicName={data.name} />
                 {data.rails.map(rail => <Rail key={rail.format} format={rail.format} items={rail.items} onOpen={openItem} />)}
               </>
             ) : (
