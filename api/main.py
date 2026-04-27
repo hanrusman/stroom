@@ -691,7 +691,7 @@ async def regenerate_topic_digest(slug: str, model: DigestModel = Query("opus"),
 
     rows = (await session.exec(sa_text(
         f"""
-        SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at
+        SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
         FROM items i
         JOIN item_topics it ON it.item_id = i.id
         JOIN sources s ON s.id = i.source_id
@@ -707,13 +707,14 @@ async def regenerate_topic_digest(slug: str, model: DigestModel = Query("opus"),
         raise HTTPException(status_code=400, detail=f"Geen items in {topic.name} van laatste {DIGEST_WINDOW_HOURS}u")
 
     blocks: list[str] = []
-    for title, fmt, sname, summary, desc, pub in rows:
+    for title, fmt, sname, summary, desc, pub, url in rows:
         body = (summary or "").strip() or _strip_html(desc)
         if not body:
             continue
         body = body[:DIGEST_PER_ITEM_CHARS]
         when = str(pub)[:16] if pub else ""
-        blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n\n{body}")
+        url_line = f"URL: {url}\n" if url else ""
+        blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n{url_line}\n{body}")
     if not blocks:
         raise HTTPException(status_code=400, detail="Items hebben geen tekst om samen te vatten")
 
@@ -723,10 +724,12 @@ async def regenerate_topic_digest(slug: str, model: DigestModel = Query("opus"),
         f"De gebruiker volgt het thema '{topic.name}' en heeft geen tijd om alles te lezen. "
         "Schrijf een markdown-digest in het Nederlands met:\n"
         "1. Een korte intro (2 zinnen) over wat er vandaag opviel.\n"
-        "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen, "
-        "met inline-bronvermelding tussen haakjes (Bronnaam).\n"
-        "3. Een 'Verder lezen' lijstje van max 5 items die individueel de moeite waard zijn.\n"
-        "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat."
+        "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen. "
+        "Verwijs naar bronnen met markdown-links: [Bronnaam](URL).\n"
+        "3. Een '## Verder lezen' lijst (markdown bullet list) van max 5 items die individueel de moeite waard zijn — "
+        "elke regel als `- [Titel](URL) — korte reden waarom (1 zin).`\n"
+        "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat. "
+        "Gebruik UITSLUITEND de URLs die in de bronlijst staan; verzin geen URLs."
     )
     llm_alias = DIGEST_MODEL_MAP[model]
     llm = LLMService(app.state.http_client)

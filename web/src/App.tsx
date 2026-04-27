@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
+import { marked } from 'marked';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
@@ -567,9 +568,10 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
       {open && digest && (
-        <div className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 whitespace-pre-wrap max-w-none">
-          {digest.markdown}
-        </div>
+        <div
+          className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
+          dangerouslySetInnerHTML={{ __html: marked.parse(digest.markdown, { async: false, breaks: true }) as string }}
+        />
       )}
     </section>
   );
