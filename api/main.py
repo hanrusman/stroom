@@ -595,33 +595,76 @@ async def rate_lesson(lesson_id: str, body: LessonRating, session=Depends(get_as
 # --- Filtered list (saved / summarized / scheduled) ---
 
 
-HuygensFilter = Literal["saved", "summarized", "scheduled"]
+HuygensFilter = Literal["all", "saved", "summarized", "scheduled"]
+HuygensWindow = Literal["all", "24h", "7d", "30d"]
+
+_WINDOW_INTERVAL: dict[str, str] = {
+    "24h": "24 hours",
+    "7d":  "7 days",
+    "30d": "30 days",
+}
 
 
 @app.get("/huygens/items", response_model=List[HuygensItem])
 async def list_filtered_items(
-    filter: HuygensFilter = Query(...),
+    filter: HuygensFilter = Query("all"),
+    window: HuygensWindow = Query("all"),
+    topic: Optional[str] = Query(None, description="Topic slug to constrain to"),
     limit: int = Query(100, le=500),
     offset: int = Query(0),
     session=Depends(get_async_session),
 ):
-    where = {
-        "saved": "i.status = 'pinned'::item_status",
-        "summarized": "i.summary IS NOT NULL AND i.summary <> ''",
-        "scheduled": "i.scheduled_for IS NOT NULL",
-    }[filter]
+    if filter == "all" and window == "all" and not topic:
+        raise HTTPException(status_code=400, detail="At least one filter required")
+
+    clauses: list[str] = ["s.active = true"]
+    params: dict = {"lim": limit, "off": offset}
+
+    if filter == "saved":
+        clauses.append("i.status = 'pinned'::item_status")
+    elif filter == "summarized":
+        clauses.append("i.summary IS NOT NULL AND i.summary <> ''")
+    elif filter == "scheduled":
+        clauses.append("i.scheduled_for IS NOT NULL")
+
+    if window != "all":
+        clauses.append(f"i.published_at >= now() - INTERVAL '{_WINDOW_INTERVAL[window]}'")
+
+    join_topic = ""
+    if topic:
+        topic_row = (await session.exec(select(Topic).where(Topic.slug == topic))).first()
+        if not topic_row:
+            raise HTTPException(status_code=404, detail="Topic not found")
+        join_topic = "JOIN item_topics it ON it.item_id = i.id"
+        clauses.append("it.topic_id = :tid")
+        params["tid"] = topic_row.id
+
     order = "i.scheduled_for ASC" if filter == "scheduled" else "COALESCE(i.published_at, i.created_at) DESC"
     sql = f"""
-        SELECT i.id::text, i.title, i.description, i.author,
+        SELECT DISTINCT i.id::text, i.title, i.description, i.author,
                i.thumbnail_url, i.media_url,
                s.name, s.image_url, i.published_at
         FROM items i
         JOIN sources s ON s.id = i.source_id
-        WHERE {where}
+        {join_topic}
+        WHERE {" AND ".join(clauses)}
+        ORDER BY {order.replace('i.', '')}
+        LIMIT :lim OFFSET :off
+    """
+    # SELECT DISTINCT requires order columns to be in SELECT — rewrite ordering to use selected cols
+    sql = f"""
+        SELECT i.id::text, i.title, i.description, i.author,
+               i.thumbnail_url, i.media_url,
+               s.name, s.image_url, i.published_at, i.scheduled_for
+        FROM items i
+        JOIN sources s ON s.id = i.source_id
+        {join_topic}
+        WHERE {" AND ".join(clauses)}
+        GROUP BY i.id, s.name, s.image_url
         ORDER BY {order}
         LIMIT :lim OFFSET :off
     """
-    result = await session.exec(sa_text(sql).bindparams(lim=limit, off=offset))
+    result = await session.exec(sa_text(sql).bindparams(**params))
     rows = result.all()
     return [
         HuygensItem(

@@ -7,7 +7,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          scheduleItem, fetchLessons, rateLesson, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, TopicDigest, DigestModel } from './api';
+         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -578,40 +578,62 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
 }
 
 const FILTER_LABELS: Record<ItemFilter, string> = {
+  all: 'Alles',
   saved: 'Opgeslagen',
   summarized: 'Met samenvatting',
   scheduled: 'Gepland',
 };
 
-function FilterView({ filter, onOpen }: { filter: ItemFilter; onOpen: (id: string) => void }) {
+const WINDOW_LABELS: Record<ItemWindow, string> = {
+  all: 'Altijd',
+  '24h': '24 uur',
+  '7d': '7 dagen',
+  '30d': '30 dagen',
+};
+
+function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
+  filter: ItemFilter; window: ItemWindow; topicSlug: string; topicName: string;
+  onOpen: (id: string) => void;
+}) {
   const [items, setItems] = useState<HuygensItem[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     setItems(null); setErr(null);
-    fetchFilteredItems(filter).then(setItems).catch(e => setErr(String(e)));
-  }, [filter]);
+    fetchFilteredItems({ filter, window, topic: topicSlug })
+      .then(setItems).catch(e => setErr(e instanceof ApiError ? e.detail : String(e)));
+  }, [filter, window, topicSlug]);
   if (err) return <div className="text-red-600 text-sm py-12">Fout: {err}</div>;
   if (!items) return <div className="text-brand-ink/40 italic py-12">Loading…</div>;
-  if (items.length === 0) return <div className="text-brand-ink/40 italic py-12">Geen items in deze view.</div>;
+  const subtitle = [
+    filter !== 'all' && FILTER_LABELS[filter],
+    window !== 'all' && `laatste ${WINDOW_LABELS[window]}`,
+  ].filter(Boolean).join(' · ');
   return (
     <>
-      <h1 className="font-display text-5xl md:text-7xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-12">
-        {FILTER_LABELS[filter]} <span className="font-mono text-[14px] text-brand-ink/40 align-middle ml-4">{items.length}</span>
+      <h1 className="font-display text-5xl md:text-7xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-3">
+        {topicName} <span className="font-mono text-[14px] text-brand-ink/40 align-middle ml-4">{items.length}</span>
       </h1>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {items.map(it => (
-          <button key={it.id} onClick={() => onOpen(it.id)}
-            className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5">
-            <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-3">{it.source_name}</div>
-            <h3 className="font-serif font-semibold text-[18px] text-brand-ink leading-[1.25] line-clamp-3">{it.title}</h3>
-            {it.published_at && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40 mt-3">
-                {new Date(it.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
+      {subtitle && (
+        <div className="font-mono text-[11px] uppercase tracking-[0.22em] text-brand-ink/50 mb-12">{subtitle}</div>
+      )}
+      {items.length === 0 ? (
+        <div className="text-brand-ink/40 italic py-12">Geen items in deze view.</div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {items.map(it => (
+            <button key={it.id} onClick={() => onOpen(it.id)}
+              className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5">
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-3">{it.source_name}</div>
+              <h3 className="font-serif font-semibold text-[18px] text-brand-ink leading-[1.25] line-clamp-3">{it.title}</h3>
+              {it.published_at && (
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40 mt-3">
+                  {new Date(it.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                </div>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </>
   );
 }
@@ -621,7 +643,8 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [adminMode, setAdminMode] = useState<boolean>(() => readUrl().admin);
   const [topics, setTopics] = useState<Topic[]>([]);
   const [activeSlug, setActiveSlug] = useState<string | null>(null);
-  const [activeFilter, setActiveFilter] = useState<ItemFilter | null>(null);
+  const [activeFilter, setActiveFilter] = useState<ItemFilter>('all');
+  const [activeWindow, setActiveWindow] = useState<ItemWindow>('all');
   const [data, setData] = useState<HuygensTopic | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
@@ -671,16 +694,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
   const selectTopic = (slug: string) => {
     setActiveSlug(slug);
-    setActiveFilter(null);
     const url = new URL(window.location.href);
     url.searchParams.set('topic', slug);
     url.searchParams.delete('item');
     window.history.replaceState({}, '', url.toString());
-  };
-
-  const selectFilter = (f: ItemFilter | null) => {
-    setActiveFilter(f);
-    if (f) setActiveSlug(null);
   };
 
   useEffect(() => {
@@ -737,31 +754,47 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           <ItemDetailView id={itemId} onBack={closeItem} />
         ) : (
           <>
-            <section className="mb-8">
-              <div className="flex items-center gap-3 overflow-x-auto hide-scrollbar pb-1 mb-3">
-                <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-4 shrink-0">Filters</span>
-                {(['saved', 'summarized', 'scheduled'] as ItemFilter[]).map(f => (
+            <section className="mb-8 space-y-3">
+              <div className="flex items-center gap-4 overflow-x-auto hide-scrollbar pb-1">
+                <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-6 shrink-0">Topics</span>
+                {topics.map(t => (
+                  <TopicChip key={t.slug} topic={t} active={t.slug === activeSlug} onClick={() => selectTopic(t.slug)} />
+                ))}
+              </div>
+              <div className="flex items-center gap-3 overflow-x-auto hide-scrollbar pb-1">
+                <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-4 shrink-0">Filter</span>
+                {(['all', 'saved', 'summarized', 'scheduled'] as ItemFilter[]).map(f => (
                   <button key={f}
-                    onClick={() => selectFilter(activeFilter === f ? null : f)}
-                    className={`px-5 py-2 rounded-full text-[12px] font-medium whitespace-nowrap shrink-0 transition-all ${
+                    onClick={() => setActiveFilter(f)}
+                    className={`px-4 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap shrink-0 transition-all ${
                       activeFilter === f ? 'bg-brand-accent text-brand-cream shadow-sm'
                       : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
                     }`}
                   >{FILTER_LABELS[f]}</button>
                 ))}
-              </div>
-              <div className="flex items-center gap-4 overflow-x-auto hide-scrollbar pb-1">
-                <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-6 shrink-0">Topics</span>
-                {topics.map(t => (
-                  <TopicChip key={t.slug} topic={t} active={t.slug === activeSlug && !activeFilter} onClick={() => selectTopic(t.slug)} />
+                <span className="w-px h-5 bg-brand-ink/10 mx-2 shrink-0" />
+                {(['all', '24h', '7d', '30d'] as ItemWindow[]).map(w => (
+                  <button key={w}
+                    onClick={() => setActiveWindow(w)}
+                    className={`px-4 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap shrink-0 transition-all ${
+                      activeWindow === w ? 'bg-brand-accent text-brand-cream shadow-sm'
+                      : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
+                    }`}
+                  >{WINDOW_LABELS[w]}</button>
                 ))}
               </div>
             </section>
 
             {error && <div className="text-red-600 text-sm mb-8">Fout: {error}</div>}
 
-            {activeFilter ? (
-              <FilterView filter={activeFilter} onOpen={openItem} />
+            {activeSlug && (activeFilter !== 'all' || activeWindow !== 'all') ? (
+              <FilterView
+                filter={activeFilter}
+                window={activeWindow}
+                topicSlug={activeSlug}
+                topicName={topics.find(t => t.slug === activeSlug)?.name ?? activeSlug}
+                onOpen={openItem}
+              />
             ) : data ? (
               <>
                 <h1 className="font-display text-6xl md:text-8xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-10">{data.name}</h1>

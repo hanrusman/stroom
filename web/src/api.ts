@@ -143,10 +143,18 @@ export async function rateLesson(lessonId: string, rating: 1 | -1 | null): Promi
   return r.json();
 }
 
-export type ItemFilter = 'saved' | 'summarized' | 'scheduled';
+export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled';
+export type ItemWindow = 'all' | '24h' | '7d' | '30d';
 
-export async function fetchFilteredItems(filter: ItemFilter, limit = 100): Promise<HuygensItem[]> {
-  const r = await apiFetch(`/api/huygens/items?filter=${filter}&limit=${limit}`);
+export async function fetchFilteredItems(opts: {
+  filter?: ItemFilter; window?: ItemWindow; topic?: string; limit?: number;
+}): Promise<HuygensItem[]> {
+  const p = new URLSearchParams();
+  if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);
+  if (opts.window && opts.window !== 'all') p.set('window', opts.window);
+  if (opts.topic) p.set('topic', opts.topic);
+  p.set('limit', String(opts.limit ?? 100));
+  const r = await apiFetch(`/api/huygens/items?${p.toString()}`);
   return r.json();
 }
 
