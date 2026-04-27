@@ -159,11 +159,13 @@ export async function fetchFilteredItems(opts: {
 }
 
 export interface TopicDigest {
-  markdown: string;
-  item_count: number;
+  markdown: string | null;
+  item_count: number | null;
   model: string | null;
   window_hours: number;
-  generated_at: string;
+  generated_at: string | null;
+  is_generating: boolean;
+  error: string | null;
 }
 
 export async function fetchTopicDigest(slug: string): Promise<TopicDigest | null> {

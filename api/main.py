@@ -681,11 +681,13 @@ async def list_filtered_items(
 
 
 class TopicDigest(BaseModel):
-    markdown: str
-    item_count: int
+    markdown: Optional[str]
+    item_count: Optional[int]
     model: Optional[str]
     window_hours: int
-    generated_at: str
+    generated_at: Optional[str]
+    is_generating: bool = False
+    error: Optional[str] = None
 
 
 DIGEST_WINDOW_HOURS = 24
@@ -706,14 +708,16 @@ async def get_topic_digest(slug: str, session=Depends(get_async_session)):
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
     row = (await session.exec(sa_text(
-        "SELECT markdown, item_count, model, window_hours, generated_at "
+        "SELECT markdown, item_count, model, window_hours, generated_at, is_generating, error "
         "FROM topic_digests WHERE topic_id = :tid"
     ).bindparams(tid=topic.id))).first()
     if not row:
         raise HTTPException(status_code=404, detail="No digest yet")
     return TopicDigest(
         markdown=row[0], item_count=row[1], model=row[2],
-        window_hours=row[3], generated_at=str(row[4]),
+        window_hours=row[3],
+        generated_at=str(row[4]) if row[4] else None,
+        is_generating=row[5], error=row[6],
     )
 
 
@@ -725,80 +729,125 @@ DIGEST_MODEL_MAP: dict[str, str] = {
 }
 
 
+DIGEST_GENERATION_STALE_MIN = 10  # bg-task is dood als hij na 10 min nog 'is_generating' is
+
+
+async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: DigestModel):
+    """Background-task: leest items, roept LLM aan, schrijft naar topic_digests. Eigen DB-sessie."""
+    from core.db import async_session_maker
+    llm_alias = DIGEST_MODEL_MAP[model]
+    try:
+        async with async_session_maker() as bg:
+            rows = (await bg.exec(sa_text(
+                f"""
+                SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
+                FROM items i
+                JOIN item_topics it ON it.item_id = i.id
+                JOIN sources s ON s.id = i.source_id
+                WHERE it.topic_id = :tid
+                  AND i.published_at >= now() - INTERVAL '{DIGEST_WINDOW_HOURS} hours'
+                  AND s.active = true
+                ORDER BY i.published_at DESC
+                LIMIT {DIGEST_MAX_ITEMS}
+                """
+            ).bindparams(tid=topic_id))).all()
+
+            if not rows:
+                await bg.exec(sa_text(
+                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=:tid"
+                ).bindparams(e=f"Geen items van laatste {DIGEST_WINDOW_HOURS}u", tid=topic_id))
+                await bg.commit()
+                return
+
+            blocks: list[str] = []
+            for title, fmt, sname, summary, desc, pub, url in rows:
+                body = (summary or "").strip() or _strip_html(desc)
+                if not body:
+                    continue
+                body = body[:DIGEST_PER_ITEM_CHARS]
+                when = str(pub)[:16] if pub else ""
+                url_line = f"URL: {url}\n" if url else ""
+                blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n{url_line}\n{body}")
+
+            if not blocks:
+                await bg.exec(sa_text(
+                    "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' WHERE topic_id=:tid"
+                ).bindparams(tid=topic_id))
+                await bg.commit()
+                return
+
+            corpus = "\n\n---\n\n".join(blocks)
+            system_prompt = (
+                "Je bent een redacteur die een persoonlijke dagsamenvatting schrijft over een specifiek thema. "
+                f"De gebruiker volgt het thema '{topic_name}' en heeft geen tijd om alles te lezen. "
+                "Schrijf een markdown-digest in het Nederlands met:\n"
+                "1. Een korte intro (2 zinnen) over wat er vandaag opviel.\n"
+                "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen. "
+                "Verwijs naar bronnen met markdown-links: [Bronnaam](URL).\n"
+                "3. Een '## Verder lezen' lijst (markdown bullet list) van max 5 items die individueel de moeite waard zijn — "
+                "elke regel als `- [Titel](URL) — korte reden waarom (1 zin).`\n"
+                "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat. "
+                "Gebruik UITSLUITEND de URLs die in de bronlijst staan; verzin geen URLs."
+            )
+            llm = LLMService(app.state.http_client)
+            markdown = await llm.call_llm(llm_alias, [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Items van laatste {DIGEST_WINDOW_HOURS}u:\n\n{corpus}"},
+            ], temperature=0.4, timeout=300.0)
+
+            await bg.exec(sa_text(
+                """
+                UPDATE topic_digests SET
+                  markdown = :m, item_count = :n, model = :ml, window_hours = :w,
+                  generated_at = now(), is_generating = false, error = NULL
+                WHERE topic_id = :tid
+                """
+            ).bindparams(m=markdown.strip(), n=len(blocks), ml=llm_alias,
+                         w=DIGEST_WINDOW_HOURS, tid=topic_id))
+            await bg.commit()
+            print(f"[digest bg] {slug} klaar — {len(blocks)} items, {llm_alias}")
+    except Exception as exc:
+        try:
+            async with async_session_maker() as bg:
+                await bg.exec(sa_text(
+                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=:tid"
+                ).bindparams(e=str(exc)[:500], tid=topic_id))
+                await bg.commit()
+        except Exception:
+            pass
+        print(f"[digest bg] {slug} faalde: {exc}")
+
+
 @app.post("/huygens/{slug}/digest", response_model=TopicDigest)
-async def regenerate_topic_digest(slug: str, model: DigestModel = Query("opus"),
+async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
+                                  model: DigestModel = Query("opus"),
                                   session=Depends(get_async_session)):
     topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
 
-    rows = (await session.exec(sa_text(
-        f"""
-        SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
-        FROM items i
-        JOIN item_topics it ON it.item_id = i.id
-        JOIN sources s ON s.id = i.source_id
-        WHERE it.topic_id = :tid
-          AND i.published_at >= now() - INTERVAL '{DIGEST_WINDOW_HOURS} hours'
-          AND s.active = true
-        ORDER BY i.published_at DESC
-        LIMIT {DIGEST_MAX_ITEMS}
-        """
-    ).bindparams(tid=topic.id))).all()
+    existing = (await session.exec(sa_text(
+        "SELECT is_generating, generation_started_at FROM topic_digests WHERE topic_id = :tid"
+    ).bindparams(tid=topic.id))).first()
 
-    if not rows:
-        raise HTTPException(status_code=400, detail=f"Geen items in {topic.name} van laatste {DIGEST_WINDOW_HOURS}u")
+    if existing and existing[0]:
+        started = existing[1]
+        if started and (datetime.now(started.tzinfo) - started).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
+            raise HTTPException(status_code=409, detail="Genereren is al bezig — even wachten.")
 
-    blocks: list[str] = []
-    for title, fmt, sname, summary, desc, pub, url in rows:
-        body = (summary or "").strip() or _strip_html(desc)
-        if not body:
-            continue
-        body = body[:DIGEST_PER_ITEM_CHARS]
-        when = str(pub)[:16] if pub else ""
-        url_line = f"URL: {url}\n" if url else ""
-        blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n{url_line}\n{body}")
-    if not blocks:
-        raise HTTPException(status_code=400, detail="Items hebben geen tekst om samen te vatten")
-
-    corpus = "\n\n---\n\n".join(blocks)
-    system_prompt = (
-        "Je bent een redacteur die een persoonlijke dagsamenvatting schrijft over een specifiek thema. "
-        f"De gebruiker volgt het thema '{topic.name}' en heeft geen tijd om alles te lezen. "
-        "Schrijf een markdown-digest in het Nederlands met:\n"
-        "1. Een korte intro (2 zinnen) over wat er vandaag opviel.\n"
-        "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen. "
-        "Verwijs naar bronnen met markdown-links: [Bronnaam](URL).\n"
-        "3. Een '## Verder lezen' lijst (markdown bullet list) van max 5 items die individueel de moeite waard zijn — "
-        "elke regel als `- [Titel](URL) — korte reden waarom (1 zin).`\n"
-        "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat. "
-        "Gebruik UITSLUITEND de URLs die in de bronlijst staan; verzin geen URLs."
-    )
-    llm_alias = DIGEST_MODEL_MAP[model]
-    llm = LLMService(app.state.http_client)
-    try:
-        markdown = await llm.call_llm(llm_alias, [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Items van laatste {DIGEST_WINDOW_HOURS}u:\n\n{corpus}"},
-        ], temperature=0.4)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"LLM error: {exc}")
-
-    markdown = markdown.strip()
-    item_count = len(blocks)
-    await session.exec(sa_text(
-        """
-        INSERT INTO topic_digests (topic_id, markdown, item_count, model, window_hours, generated_at)
-        VALUES (:tid, :m, :n, :ml, :w, now())
-        ON CONFLICT (topic_id) DO UPDATE SET
-          markdown = EXCLUDED.markdown,
-          item_count = EXCLUDED.item_count,
-          model = EXCLUDED.model,
-          window_hours = EXCLUDED.window_hours,
-          generated_at = EXCLUDED.generated_at
-        """
-    ).bindparams(tid=topic.id, m=markdown, n=item_count, ml=llm_alias, w=DIGEST_WINDOW_HOURS))
+    if existing:
+        await session.exec(sa_text(
+            "UPDATE topic_digests SET is_generating=true, generation_started_at=now(), error=NULL "
+            "WHERE topic_id = :tid"
+        ).bindparams(tid=topic.id))
+    else:
+        await session.exec(sa_text(
+            "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at) "
+            "VALUES (:tid, :w, true, now())"
+        ).bindparams(tid=topic.id, w=DIGEST_WINDOW_HOURS))
     await session.commit()
+
+    background_tasks.add_task(_run_digest_generation, topic.id, topic.name, slug, model)
     return await get_topic_digest(slug, session)
 
 

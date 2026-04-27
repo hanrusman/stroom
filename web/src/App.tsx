@@ -548,15 +548,34 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
 
   useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
 
+  // Poll terwijl een generation actief is.
+  useEffect(() => {
+    if (!digest?.is_generating) return;
+    const t = setInterval(() => {
+      fetchTopicDigest(slug).then(d => {
+        setDigest(d);
+        if (d && !d.is_generating) {
+          setBusy(false);
+          if (d.error) setErr(d.error);
+          else if (d.markdown) setOpen(true);
+        }
+      }).catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [slug, digest?.is_generating]);
+
   const regen = async () => {
     setBusy(true); setErr(null);
     try {
       const fresh = await regenerateTopicDigest(slug, model);
       setDigest(fresh);
-      setOpen(true);
+      // Als 'm direct klaar staat (cached), stop spinner; anders blijft poll-effect 'm aansturen.
+      if (!fresh.is_generating) {
+        setBusy(false);
+        if (fresh.error) setErr(fresh.error);
+      }
     } catch (e) {
       setErr(e instanceof ApiError ? e.detail : String(e));
-    } finally {
       setBusy(false);
     }
   };
@@ -570,7 +589,12 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
           <Newspaper size={20} className="text-brand-accent" />
           <div>
             <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">Dagdigest · {topicName}</div>
-            {digest && (
+            {digest?.is_generating && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
+                Bezig met genereren…
+              </div>
+            )}
+            {digest && !digest.is_generating && digest.generated_at && (
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
                 {digest.item_count} items · {digest.window_hours}u · {ago}
               </div>
@@ -581,30 +605,30 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {digest && (
+          {digest?.markdown && (
             <button onClick={() => setOpen(o => !o)}
               className="flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
-          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy}
+          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
             className="px-3 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
             {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
               <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
             ))}
           </select>
-          <button onClick={regen} disabled={busy}
+          <button onClick={regen} disabled={busy || !!digest?.is_generating}
             className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] transition-all ${
-              busy ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
+              busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
                    : 'bg-brand-accent text-brand-cream hover:opacity-90'
             }`}>
-            {busy ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
-            {digest ? 'Ververs' : 'Genereer'}
+            {busy || digest?.is_generating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {digest?.markdown ? 'Ververs' : 'Genereer'}
           </button>
         </div>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
-      {open && digest && (
+      {open && digest?.markdown && (
         <div
           className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
           dangerouslySetInnerHTML={{ __html: marked.parse(digest.markdown, { async: false, breaks: true }) as string }}
