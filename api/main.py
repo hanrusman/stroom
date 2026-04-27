@@ -732,7 +732,7 @@ DIGEST_MODEL_MAP: dict[str, str] = {
 DIGEST_GENERATION_STALE_MIN = 10  # bg-task is dood als hij na 10 min nog 'is_generating' is
 
 
-async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: DigestModel):
+async def _run_digest_generation(topic_id: str, topic_name: str, slug: str, model: DigestModel):
     """Background-task: leest items, roept LLM aan, schrijft naar topic_digests. Eigen DB-sessie."""
     from core.db import async_session_maker
     llm_alias = DIGEST_MODEL_MAP[model]
@@ -744,7 +744,7 @@ async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: Di
                 FROM items i
                 JOIN item_topics it ON it.item_id = i.id
                 JOIN sources s ON s.id = i.source_id
-                WHERE it.topic_id = :tid
+                WHERE it.topic_id = CAST(:tid AS uuid)
                   AND i.published_at >= now() - INTERVAL '{DIGEST_WINDOW_HOURS} hours'
                   AND s.active = true
                 ORDER BY i.published_at DESC
@@ -754,7 +754,7 @@ async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: Di
 
             if not rows:
                 await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=:tid"
+                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=CAST(:tid AS uuid)"
                 ).bindparams(e=f"Geen items van laatste {DIGEST_WINDOW_HOURS}u", tid=topic_id))
                 await bg.commit()
                 return
@@ -771,7 +771,7 @@ async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: Di
 
             if not blocks:
                 await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' WHERE topic_id=:tid"
+                    "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' WHERE topic_id=CAST(:tid AS uuid)"
                 ).bindparams(tid=topic_id))
                 await bg.commit()
                 return
@@ -800,7 +800,7 @@ async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: Di
                 UPDATE topic_digests SET
                   markdown = :m, item_count = :n, model = :ml, window_hours = :w,
                   generated_at = now(), is_generating = false, error = NULL
-                WHERE topic_id = :tid
+                WHERE topic_id = CAST(:tid AS uuid)
                 """
             ).bindparams(m=markdown.strip(), n=len(blocks), ml=llm_alias,
                          w=DIGEST_WINDOW_HOURS, tid=topic_id))
@@ -810,7 +810,7 @@ async def _run_digest_generation(topic_id, topic_name: str, slug: str, model: Di
         try:
             async with async_session_maker() as bg:
                 await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=:tid"
+                    "UPDATE topic_digests SET is_generating=false, error=:e WHERE topic_id=CAST(:tid AS uuid)"
                 ).bindparams(e=str(exc)[:500], tid=topic_id))
                 await bg.commit()
         except Exception:
@@ -825,10 +825,13 @@ async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
     topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
+    # Capture als plain values vóór commit/close — anders triggert lazy-load na sessie-sluit.
+    topic_id = str(topic.id)
+    topic_name = topic.name
 
     existing = (await session.exec(sa_text(
-        "SELECT is_generating, generation_started_at FROM topic_digests WHERE topic_id = :tid"
-    ).bindparams(tid=topic.id))).first()
+        "SELECT is_generating, generation_started_at FROM topic_digests WHERE topic_id = CAST(:tid AS uuid)"
+    ).bindparams(tid=topic_id))).first()
 
     if existing and existing[0]:
         started = existing[1]
@@ -838,16 +841,16 @@ async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
     if existing:
         await session.exec(sa_text(
             "UPDATE topic_digests SET is_generating=true, generation_started_at=now(), error=NULL "
-            "WHERE topic_id = :tid"
-        ).bindparams(tid=topic.id))
+            "WHERE topic_id = CAST(:tid AS uuid)"
+        ).bindparams(tid=topic_id))
     else:
         await session.exec(sa_text(
             "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at) "
-            "VALUES (:tid, :w, true, now())"
-        ).bindparams(tid=topic.id, w=DIGEST_WINDOW_HOURS))
+            "VALUES (CAST(:tid AS uuid), :w, true, now())"
+        ).bindparams(tid=topic_id, w=DIGEST_WINDOW_HOURS))
     await session.commit()
 
-    background_tasks.add_task(_run_digest_generation, topic.id, topic.name, slug, model)
+    background_tasks.add_task(_run_digest_generation, topic_id, topic_name, slug, model)
     return await get_topic_digest(slug, session)
 
 
