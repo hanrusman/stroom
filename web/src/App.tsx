@@ -48,17 +48,27 @@ const Meta = ({ item }: { item: HuygensItem }) => (
 
 const ArticleCard = ({ item, onOpen }: { key?: React.Key; item: HuygensItem; onOpen: (id: string) => void }) => {
   const summary = stripHtml(item.description);
+  const img = item.thumbnail_url ?? item.source_image_url;
   return (
     <motion.article
       onClick={() => onOpen(item.id)}
       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-      className="snap-start shrink-0 w-[85vw] md:w-[400px] h-[420px] rounded-3xl p-8 flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
+      className="snap-start shrink-0 w-[85vw] md:w-[340px] h-[400px] rounded-3xl overflow-hidden flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
     >
-      <h3 className="font-serif font-semibold text-[26px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.15] tracking-[-0.01em] mb-5">
-        {item.title}
-      </h3>
-      <p className="text-brand-ink/75 line-clamp-[10] text-[14px] leading-[1.6] font-normal flex-1">{summary}</p>
-      <Meta item={item} />
+      {img ? (
+        <div className="w-full h-32 overflow-hidden bg-brand-surface-low shrink-0">
+          <img src={img} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out" />
+        </div>
+      ) : (
+        <div className="w-full h-2 bg-brand-accent/30 shrink-0" />
+      )}
+      <div className="p-6 flex flex-col flex-1 min-h-0">
+        <h3 className="font-serif font-semibold text-[22px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.2] tracking-[-0.01em] mb-3">
+          {item.title}
+        </h3>
+        <p className="text-brand-ink/70 line-clamp-[6] text-[13px] leading-[1.55] flex-1">{summary}</p>
+        <Meta item={item} />
+      </div>
     </motion.article>
   );
 };
@@ -67,28 +77,54 @@ const MediaCard = ({ item, format, onOpen }: { key?: React.Key; item: HuygensIte
   const summary = stripHtml(item.description);
   const isVideo = format === 'video';
   const img = item.thumbnail_url ?? item.source_image_url;
+
+  // Podcasts: compact horizontaal — thumbnail links, tekst rechts.
+  if (!isVideo) {
+    return (
+      <motion.article
+        onClick={() => onOpen(item.id)}
+        initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+        className="snap-start shrink-0 w-[85vw] md:w-[360px] h-[140px] rounded-2xl overflow-hidden flex gap-3 p-3 bg-brand-surface border border-brand-ink/5 hover:shadow-sm transition-all cursor-pointer group"
+      >
+        <div className="w-28 h-28 shrink-0 rounded-xl overflow-hidden bg-brand-surface-low">
+          {img ? (
+            <img src={img} alt={item.title} className="w-full h-full object-cover" />
+          ) : (
+            <div className="w-full h-full flex items-center justify-center"><Headphones size={24} className="text-brand-ink/30" /></div>
+          )}
+        </div>
+        <div className="flex flex-col flex-1 min-w-0">
+          <h3 className="font-serif font-semibold text-[15px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.25] mb-1">
+            {item.title}
+          </h3>
+          <Meta item={item} />
+        </div>
+      </motion.article>
+    );
+  }
+
+  // Videos: groter, aspect-video met play-icoon.
   return (
     <motion.article
       onClick={() => onOpen(item.id)}
       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-      className="snap-start shrink-0 w-[85vw] md:w-[400px] flex flex-col gap-4 group cursor-pointer"
+      className="snap-start shrink-0 w-[85vw] md:w-[360px] flex flex-col gap-3 group cursor-pointer"
     >
-      <div className={`w-full ${isVideo ? 'aspect-video' : 'aspect-square'} rounded-3xl overflow-hidden relative bg-brand-surface`}>
+      <div className="w-full aspect-video rounded-2xl overflow-hidden relative bg-brand-surface">
         {img ? (
           <img src={img} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out" />
         ) : (
           <div className="w-full h-full bg-gradient-to-br from-brand-surface to-brand-surface-low" />
         )}
-        <div className={`absolute top-4 left-4 flex items-center gap-1.5 px-3 py-1 rounded-full text-[9px] font-bold uppercase tracking-[0.2em] backdrop-blur-md ${isVideo ? 'bg-brand-accent text-white' : 'bg-brand-cream/90 text-brand-ink shadow-sm'}`}>
-          {isVideo && <PlayCircle size={10} />}
-          {format}
+        <div className="absolute top-3 left-3 flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-[0.2em] backdrop-blur-md bg-brand-accent text-white">
+          <PlayCircle size={10} /> video
         </div>
       </div>
-      <div className="flex flex-col gap-2 px-2">
-        <h3 className="font-serif font-semibold text-[22px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-2 leading-[1.2] tracking-[-0.01em]">
+      <div className="flex flex-col gap-1 px-1">
+        <h3 className="font-serif font-semibold text-[18px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-2 leading-[1.25]">
           {item.title}
         </h3>
-        <p className="text-brand-ink/65 line-clamp-2 text-[14px] leading-[1.5] font-normal">{summary}</p>
+        <p className="text-brand-ink/65 line-clamp-2 text-[13px] leading-[1.45]">{summary}</p>
         <Meta item={item} />
       </div>
     </motion.article>

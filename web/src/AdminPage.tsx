@@ -130,6 +130,12 @@ const SourceRow = ({ src, topics, onSaved, onDeleted, onRefreshed }: {
         <input value={draft.url ?? ''} onChange={e => setDraft({ ...draft, url: e.target.value })}
           placeholder="Feed URL"
           className="mt-1.5 w-full px-2.5 py-1.5 rounded-md border border-brand-ink/20 text-[11px] font-mono bg-brand-cream" />
+        <div className="mt-1.5 flex items-center gap-2">
+          {draft.image_url && <img src={draft.image_url} alt="" className="w-8 h-8 rounded object-cover bg-brand-surface shrink-0" />}
+          <input value={draft.image_url ?? ''} onChange={e => setDraft({ ...draft, image_url: e.target.value || null })}
+            placeholder="Image URL (optioneel)"
+            className="flex-1 px-2.5 py-1.5 rounded-md border border-brand-ink/20 text-[11px] font-mono bg-brand-cream" />
+        </div>
       </td>
       <td className="py-3 pr-4 align-top">
         <select value={draft.kind} onChange={e => setDraft({ ...draft, kind: e.target.value as SourceKind })}
@@ -275,6 +281,12 @@ const SourceCard = ({ src, topics, onSaved, onDeleted, onRefreshed }: {
       <input value={draft.url ?? ''} onChange={e => setDraft({ ...draft, url: e.target.value })}
         placeholder="Feed URL"
         className="w-full px-3 py-2 rounded-md border border-brand-ink/20 text-[12px] font-mono bg-brand-cream" />
+      <div className="flex items-center gap-2">
+        {draft.image_url && <img src={draft.image_url} alt="" className="w-10 h-10 rounded object-cover bg-brand-surface shrink-0" />}
+        <input value={draft.image_url ?? ''} onChange={e => setDraft({ ...draft, image_url: e.target.value || null })}
+          placeholder="Image URL (optioneel — wordt anders auto uit feed gehaald)"
+          className="flex-1 px-3 py-2 rounded-md border border-brand-ink/20 text-[12px] font-mono bg-brand-cream" />
+      </div>
       <div className="grid grid-cols-2 gap-2">
         <label className="block">
           <span className="block text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mb-1 font-mono">Kind</span>
