@@ -6,7 +6,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          scheduleItem, fetchLessons, rateLesson, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, TopicDigest } from './api';
+         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, TopicDigest, DigestModel } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -488,21 +488,32 @@ export default function App() {
 }
 
 
+const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
+  qwen: 'Qwen (lokaal)',
+  sonnet: 'Sonnet',
+  opus: 'Opus',
+};
+
 function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
   const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [model, setModel] = useState<DigestModel>(() =>
+    (localStorage.getItem('stroom-digest-model') as DigestModel) || 'opus'
+  );
 
   useEffect(() => {
     setDigest(undefined); setErr(null); setOpen(false);
     fetchTopicDigest(slug).then(setDigest).catch(() => setDigest(null));
   }, [slug]);
 
+  useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
+
   const regen = async () => {
     setBusy(true); setErr(null);
     try {
-      const fresh = await regenerateTopicDigest(slug);
+      const fresh = await regenerateTopicDigest(slug, model);
       setDigest(fresh);
       setOpen(true);
     } catch (e) {
@@ -538,6 +549,12 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
+          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy}
+            className="px-3 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
+            {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
+              <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
+            ))}
+          </select>
           <button onClick={regen} disabled={busy}
             className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] transition-all ${
               busy ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'

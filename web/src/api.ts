@@ -168,8 +168,10 @@ export async function fetchTopicDigest(slug: string): Promise<TopicDigest | null
   }
 }
 
-export async function regenerateTopicDigest(slug: string): Promise<TopicDigest> {
-  const r = await apiFetch(`/api/huygens/${slug}/digest`, { method: 'POST' });
+export type DigestModel = 'qwen' | 'sonnet' | 'opus';
+
+export async function regenerateTopicDigest(slug: string, model: DigestModel = 'opus'): Promise<TopicDigest> {
+  const r = await apiFetch(`/api/huygens/${slug}/digest?model=${model}`, { method: 'POST' });
   return r.json();
 }
 

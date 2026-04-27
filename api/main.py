@@ -674,8 +674,17 @@ async def get_topic_digest(slug: str, session=Depends(get_async_session)):
     )
 
 
+DigestModel = Literal["qwen", "sonnet", "opus"]
+DIGEST_MODEL_MAP: dict[str, str] = {
+    "qwen": "stroom-bulk",
+    "sonnet": "stroom-sonnet",
+    "opus": "stroom-deep",
+}
+
+
 @app.post("/huygens/{slug}/digest", response_model=TopicDigest)
-async def regenerate_topic_digest(slug: str, session=Depends(get_async_session)):
+async def regenerate_topic_digest(slug: str, model: DigestModel = Query("opus"),
+                                  session=Depends(get_async_session)):
     topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -719,9 +728,10 @@ async def regenerate_topic_digest(slug: str, session=Depends(get_async_session))
         "3. Een 'Verder lezen' lijstje van max 5 items die individueel de moeite waard zijn.\n"
         "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat."
     )
+    llm_alias = DIGEST_MODEL_MAP[model]
     llm = LLMService(app.state.http_client)
     try:
-        markdown = await llm.call_llm("stroom-deep", [
+        markdown = await llm.call_llm(llm_alias, [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": f"Items van laatste {DIGEST_WINDOW_HOURS}u:\n\n{corpus}"},
         ], temperature=0.4)
@@ -733,7 +743,7 @@ async def regenerate_topic_digest(slug: str, session=Depends(get_async_session))
     await session.exec(sa_text(
         """
         INSERT INTO topic_digests (topic_id, markdown, item_count, model, window_hours, generated_at)
-        VALUES (:tid, :m, :n, 'stroom-deep', :w, now())
+        VALUES (:tid, :m, :n, :ml, :w, now())
         ON CONFLICT (topic_id) DO UPDATE SET
           markdown = EXCLUDED.markdown,
           item_count = EXCLUDED.item_count,
@@ -741,7 +751,7 @@ async def regenerate_topic_digest(slug: str, session=Depends(get_async_session))
           window_hours = EXCLUDED.window_hours,
           generated_at = EXCLUDED.generated_at
         """
-    ).bindparams(tid=topic.id, m=markdown, n=item_count, w=DIGEST_WINDOW_HOURS))
+    ).bindparams(tid=topic.id, m=markdown, n=item_count, ml=llm_alias, w=DIGEST_WINDOW_HOURS))
     await session.commit()
     return await get_topic_digest(slug, session)
 
