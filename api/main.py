@@ -1410,10 +1410,39 @@ async def admin_refresh_source(source_id: str,
     return {"ok": True, **result}
 
 
+REFRESH_THUMB_BACKFILL_LIMIT = 100
+
+
+async def _backfill_missing_thumbnails(session, limit: int) -> int:
+    """Scrape og:image voor RSS-items die nog geen thumbnail hebben. Returns count gevuld."""
+    rows = (await session.exec(sa_text(
+        """
+        SELECT i.id::text, i.media_url
+        FROM items i
+        WHERE i.thumbnail_url IS NULL
+          AND i.media_url IS NOT NULL
+          AND i.type = 'rss'::content_kind
+        ORDER BY i.published_at DESC NULLS LAST
+        LIMIT :lim
+        """
+    ).bindparams(lim=limit))).all()
+    filled = 0
+    for iid, url in rows:
+        img = await _scrape_og_image(app.state.http_client, url)
+        if img:
+            await session.exec(sa_text(
+                "UPDATE items SET thumbnail_url=:t WHERE id = CAST(:i AS uuid)"
+            ).bindparams(t=img, i=iid))
+            filled += 1
+    if filled:
+        await session.commit()
+    return filled
+
+
 @app.post("/admin/sources/refresh-all")
 async def admin_refresh_all(session=Depends(get_async_session),
                             user=Depends(require_user)):
-    """Refresh every active source. Returns aggregate + per-source counts."""
+    """Refresh every active source + backfill missing thumbnails for recent RSS items."""
     r = await session.exec(sa_text(
         "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
     ))
@@ -1435,12 +1464,20 @@ async def admin_refresh_all(session=Depends(get_async_session),
         total_inserted += res["inserted"]
         total_checked += res["checked"]
         per_source.append({"name": row[1], **res})
+
+    try:
+        thumbs_filled = await _backfill_missing_thumbnails(session, REFRESH_THUMB_BACKFILL_LIMIT)
+    except Exception as e:
+        thumbs_filled = 0
+        print(f"[refresh-all] thumbnail backfill faalde: {e}")
+
     return {
         "ok": True,
         "sources": len(rows),
         "errors": errors,
         "inserted": total_inserted,
         "checked": total_checked,
+        "thumbnails_filled": thumbs_filled,
         "per_source": per_source,
     }
 
