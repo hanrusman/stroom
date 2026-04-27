@@ -305,3 +305,58 @@ Eén ding waar we op wachten: lijst van **echte feed-URL's** uit jouw podcast-ap
 
   Wanneer user kiest: prompt aanpassen + callback-handler omzetten. Klein werk (~15 min).
 - `/opt/stacks/vps-stacks/claude/.claude/settings.local.json` heeft nog stale grants naar `/opt/stacks/stroom-src/...` — geen werking, alleen rommel.
+
+---
+
+## Update 2026-04-27 — topic-digest + thumbnails + async-fixes
+
+Branch: `feat/topic-digest`. Alles op `stroom-src` repo. Niet gemerged naar `main` (af te ronden in volgende sessie).
+
+### Per-topic dagdigest (KLAAR — werkt na 500-fix)
+- **Schema:** migration `008-topic-digests.sql` (één rij per topic) + `009-topic-digest-async.sql` (kolommen `is_generating`, `generation_started_at`, `error`; `markdown`/`item_count` nullable).
+- **Endpoints:**
+  - `GET /huygens/{slug}/digest` → opgeslagen digest (404 als nog geen rij of `markdown=null`).
+  - `POST /huygens/{slug}/digest?model=qwen|sonnet|opus` → start async generatie via `BackgroundTasks`, return direct met `is_generating=true`. **Geen 504 meer.**
+  - `409` als al `is_generating=true` én `< DIGEST_GENERATION_STALE_MIN` (10 min) geleden gestart — voorkomt dubbele runs. Stale lock wordt overschreven.
+- **LLM-aliases (`DIGEST_MODEL_MAP`):**
+  - `qwen` → `stroom-bulk` (lokaal Qwen3.6, gratis)
+  - `sonnet` → `stroom-sonnet` (LiteLLM-alias, betaald)
+  - `opus` → `stroom-opus` (idem)
+- **Window:** 24u (`DIGEST_WINDOW_HOURS`). Pakt items van actieve sources met published_at >= now()-24h, ORDER BY published_at DESC, max ~30 items.
+- **Prompt:** "Schrijf een markdown-digest in het Nederlands…" — output is markdown met `[verder lezen](item://<uuid>)` links.
+- **Frontend:**
+  - Digest-paneel boven topic-rails, klapt open bij klik.
+  - Knop "Genereer/Ververs" met model-selector (Qwen/Sonnet/Opus).
+  - Tijdens generatie: knop grijs + spinner + label "Bezig met genereren…".
+  - Polling elke 4s zolang `is_generating=true`. Zodra klaar → markdown rendered (markdown→HTML lib), panel klapt automatisch open.
+  - `item://<uuid>` links worden afgevangen → opent detailpagina (URL `?item=<uuid>`).
+  - Error-message wordt netjes getoond als `error` is gezet.
+- **Bug-historie deze sessie:**
+  1. **504 timeout** bij Qwen-runs >2 min → opgelost door `BackgroundTasks` + UI-polling (commit `8ab0c24`).
+  2. **500 Internal Server Error** na async-omzetting → SQLAlchemy lazy-load van `topic.id` werd pas in `BackgroundTasks.add_task` opgevraagd, ná sessie-close → `MissingGreenlet`. Fix: `topic_id = str(topic.id)` en `topic_name = topic.name` capturen vóór commit; alle SQL-binds gebruiken nu `CAST(:tid AS uuid)` (commit `9f1fbe7`).
+- **Recovery na crash:** vastgelopen rijen met `is_generating=true` resetten met:
+  ```sql
+  UPDATE topic_digests SET is_generating=false WHERE is_generating=true;
+  ```
+
+### Filters gekoppeld aan topic + datumvenster (commit `c519406`)
+- Topic-chip-filters werken nu mét datumvenster (24h/7d/etc.) — voorheen reset bij topic-switch.
+
+### Thumbnails (commits `0ef3141`, `338b85c`, `1a07b8a`, `b59c42c`)
+- **Ingest** scrape't `og:image` voor RSS-artikelen + per-episode `itunes:image` voor podcasts.
+- **Seed `008-backfill-thumbnails`** voor historische items.
+- **Refresh-all** backfilled missende thumbnails — async (commit `1035878`) zodat de admin-call niet meer 504't bij grote runs.
+- Article-card valt terug op gradient als geen image.
+
+### LessonsSection bovenaan in detail (commit `b16f022`)
+- `summary` wordt als HTML gerendered.
+- Lessons-blok wordt boven de description geplaatst, niet onderaan.
+
+### LLM timeout 60→180s (commit `3d8bee6`)
+- LiteLLM-call krijgt nu 180s timeout + duidelijke fout bij lege content.
+
+### Open / volgende sessie
+- **Branch mergen** naar `main` zodra alles getest is. Topic-digest werkt nu (na lazy-load fix); user moet bevestigen dat Qwen-genereren end-to-end goed gaat.
+- **Auto-refresh van digest** bij nightly cron? Nu enkel handmatig via knop. Optie: nightly draait automatisch Qwen-digest voor elke topic met >5 items in laatste 24u.
+- **Digest-history** — nu één rij per topic (UPDATE bij refresh). Eventueel naar `topic_digests_history` schrijven om eerdere versies te bekijken.
+- **Web-archief opruimen:** `vps-stacks/stroom-src/web.archive-20260426-101202/` en `vps-stacks/stroom-src/docker-compose.yml.archive-20260426-101202` zijn untracked — kunnen weg of in git.
