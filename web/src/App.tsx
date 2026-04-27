@@ -406,18 +406,19 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
         </div>
       )}
 
+      <LessonsSection itemId={id} />
+
       {item.summary && (
         <details open className="mb-8 border-t border-brand-ink/10 pt-6">
           <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
             Samenvatting{item.summary_model ? ` · ${item.summary_model}` : ''} · {item.summary.length} chars
           </summary>
-          <div className="font-serif italic text-[20px] leading-[1.5] text-brand-ink/80 border-l-2 border-brand-accent/40 pl-6 mt-6 whitespace-pre-wrap">
-            {item.summary}
-          </div>
+          <div
+            className="prose-stroom font-serif text-[17px] leading-[1.65] text-brand-ink/85 max-w-none mt-6"
+            dangerouslySetInnerHTML={{ __html: marked.parse(item.summary, { async: false, breaks: true }) as string }}
+          />
         </details>
       )}
-
-      <LessonsSection itemId={id} />
 
       {item.description && (
         <details className="mb-8 border-t border-brand-ink/10 pt-6">
