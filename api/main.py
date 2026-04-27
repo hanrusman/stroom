@@ -1322,13 +1322,23 @@ def _feed_first_text(entry, *keys):
 
 
 def _feed_media_url(entry):
+    # Skip image-enclosures: veel RSS-feeds hangen featured images aan als enclosure.
+    # Die horen in thumbnail_url, niet in media_url (die wordt als 'open original' link gebruikt).
     for enc in entry.get("enclosures") or []:
-        if enc.get("url"):
-            return enc["url"]
+        if not enc.get("url"):
+            continue
+        t = (enc.get("type") or "").lower()
+        if t.startswith("image/"):
+            continue
+        return enc["url"]
     if entry.get("media_content"):
         for mc in entry["media_content"]:
-            if mc.get("url"):
-                return mc["url"]
+            if not mc.get("url"):
+                continue
+            t = (mc.get("type") or "").lower()
+            if t.startswith("image/"):
+                continue
+            return mc["url"]
     return entry.get("link")
 
 
