@@ -17,6 +17,7 @@ class LLMService:
         messages: List[Dict[str, str]],
         temperature: float = 0.7,
         response_format: str = "text",
+        timeout: float = 180.0,
     ):
         payload = {
             "model": model,
@@ -30,7 +31,7 @@ class LLMService:
             settings.LITELLM_URL,
             headers={"Authorization": f"Bearer {settings.LITELLM_MASTER_KEY}"},
             json=payload,
-            timeout=60.0,
+            timeout=timeout,
         )
 
         if response.status_code != 200:
@@ -39,7 +40,13 @@ class LLMService:
                 detail=f"LiteLLM error: {response.text}",
             )
 
-        return response.json()["choices"][0]["message"]["content"]
+        content = response.json()["choices"][0]["message"].get("content")
+        if not content:
+            raise HTTPException(
+                status_code=502,
+                detail=f"LLM gaf lege content terug (model {model}); probeer een ander model.",
+            )
+        return content
 
     async def call_llm_stream(
         self,
