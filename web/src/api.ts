@@ -16,6 +16,12 @@ export interface HuygensItem {
   source_name: string;
   source_image_url: string | null;
   published_at: string | null;
+  format?: ItemFormat | null;
+  status?: ItemStatus | null;
+  processing_status?: ProcessingStatus | null;
+  has_summary?: boolean;
+  has_transcript?: boolean;
+  scheduled_for?: string | null;
 }
 
 export interface Rail {
@@ -143,7 +149,7 @@ export async function rateLesson(lessonId: string, rating: 1 | -1 | null): Promi
   return r.json();
 }
 
-export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled';
+export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled' | 'archived';
 export type ItemWindow = 'all' | '24h' | '7d' | '30d';
 
 export async function fetchFilteredItems(opts: {

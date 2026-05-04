@@ -46,14 +46,90 @@ const Meta = ({ item }: { item: HuygensItem }) => (
   </div>
 );
 
-const ArticleCard = ({ item, onOpen }: { key?: React.Key; item: HuygensItem; onOpen: (id: string) => void }) => {
+type CardAction = 'archived' | 'later' | 'summarize' | 'transcribe';
+
+const IconBtn = ({ icon: Icon, title, active, busy, disabled, onClick }: {
+  icon: React.ComponentType<{ size?: number }>; title: string;
+  active?: boolean; busy?: boolean; disabled?: boolean;
+  onClick: (e: React.MouseEvent) => void;
+}) => (
+  <button onClick={onClick} disabled={busy || disabled} title={title}
+    className={`w-7 h-7 flex items-center justify-center rounded-full transition-all ${
+      busy || disabled ? 'opacity-30 cursor-not-allowed' :
+      active ? 'bg-brand-accent text-white shadow-sm' :
+      'bg-brand-cream/60 hover:bg-brand-cream text-brand-ink/60 hover:text-brand-ink'
+    }`}>
+    {busy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+  </button>
+);
+
+const CardActions = ({ item, onUpdate }: {
+  item: HuygensItem; onUpdate?: (updated: Partial<HuygensItem>) => void;
+}) => {
+  const [busy, setBusy] = useState<CardAction | null>(null);
+
+  const run = async (key: CardAction, fn: () => Promise<ItemDetail>, e: React.MouseEvent) => {
+    e.stopPropagation(); e.preventDefault();
+    if (busy) return;
+    setBusy(key);
+    try {
+      const d = await fn();
+      onUpdate?.({
+        status: d.status, processing_status: d.processing_status,
+        has_summary: !!(d.summary && d.summary.trim()),
+        has_transcript: !!(d.transcript && d.transcript.trim()),
+        scheduled_for: d.scheduled_for,
+      });
+    } catch {
+      // stil — gebruiker ziet dat de status niet flipt
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const isArchived = item.status === 'archived';
+  const isLater = item.status === 'later' || !!item.scheduled_for;
+  const proc = item.processing_status;
+  const isMedia = item.format === 'podcast' || item.format === 'video';
+  const transcribing = proc === 'queued' || proc === 'transcribing';
+  const summarizing = proc === 'summarizing';
+
+  return (
+    <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-brand-ink/5"
+         onClick={e => e.stopPropagation()}>
+      <IconBtn icon={Archive} title={isArchived ? 'Uit archief' : 'Archiveer'}
+        active={isArchived} busy={busy === 'archived'}
+        onClick={e => run('archived', () => setItemStatus(item.id, isArchived ? 'new' : 'archived'), e)} />
+      <IconBtn icon={CalendarClock} title={isLater ? 'Niet later' : 'Later lezen'}
+        active={isLater} busy={busy === 'later'}
+        onClick={e => run('later', () => setItemStatus(item.id, isLater ? 'new' : 'later'), e)} />
+      <span className="w-px h-4 bg-brand-ink/10 mx-0.5" />
+      <IconBtn icon={Sparkles} title={item.has_summary ? 'Samenvatting bestaat' : 'Samenvatten'}
+        active={item.has_summary} busy={busy === 'summarize' || summarizing}
+        disabled={item.has_summary || !!busy}
+        onClick={e => run('summarize', () => summarizeItem(item.id), e)} />
+      {isMedia && (
+        <IconBtn icon={Mic}
+          title={item.has_transcript ? 'Transcript bestaat' : transcribing ? 'In de queue…' : 'Transcribeer'}
+          active={item.has_transcript}
+          busy={busy === 'transcribe' || transcribing}
+          disabled={!item.media_url || item.has_transcript || transcribing}
+          onClick={e => run('transcribe', () => transcribeItem(item.id), e)} />
+      )}
+    </div>
+  );
+};
+
+type CardProps = { item: HuygensItem; onOpen: (id: string) => void; onUpdate?: (u: Partial<HuygensItem>) => void };
+
+const ArticleCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps) => {
   const summary = stripHtml(item.description);
   const img = item.thumbnail_url ?? item.source_image_url;
   return (
     <motion.article
       onClick={() => onOpen(item.id)}
       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-      className="snap-start shrink-0 w-[85vw] md:w-[340px] h-[400px] rounded-3xl overflow-hidden flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
+      className="snap-start shrink-0 w-[85vw] md:w-[340px] h-[440px] rounded-3xl overflow-hidden flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
     >
       {img ? (
         <div className="w-full h-32 overflow-hidden bg-brand-surface-low shrink-0">
@@ -66,14 +142,15 @@ const ArticleCard = ({ item, onOpen }: { key?: React.Key; item: HuygensItem; onO
         <h3 className="font-serif font-semibold text-[22px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.2] tracking-[-0.01em] mb-3">
           {item.title}
         </h3>
-        <p className="text-brand-ink/70 line-clamp-[6] text-[13px] leading-[1.55] flex-1">{summary}</p>
+        <p className="text-brand-ink/70 line-clamp-[5] text-[13px] leading-[1.55] flex-1">{summary}</p>
         <Meta item={item} />
+        <CardActions item={item} onUpdate={onUpdate} />
       </div>
     </motion.article>
   );
 };
 
-const MediaCard = ({ item, format, onOpen }: { key?: React.Key; item: HuygensItem; format: 'podcast' | 'video'; onOpen: (id: string) => void }) => {
+const MediaCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format: 'podcast' | 'video' } & CardProps) => {
   const summary = stripHtml(item.description);
   const isVideo = format === 'video';
   const img = item.thumbnail_url ?? item.source_image_url;
@@ -84,21 +161,24 @@ const MediaCard = ({ item, format, onOpen }: { key?: React.Key; item: HuygensIte
       <motion.article
         onClick={() => onOpen(item.id)}
         initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-        className="snap-start shrink-0 w-[85vw] md:w-[360px] h-[140px] rounded-2xl overflow-hidden flex gap-3 p-3 bg-brand-surface border border-brand-ink/5 hover:shadow-sm transition-all cursor-pointer group"
+        className="snap-start shrink-0 w-[85vw] md:w-[360px] rounded-2xl overflow-hidden p-3 bg-brand-surface border border-brand-ink/5 hover:shadow-sm transition-all cursor-pointer group"
       >
-        <div className="w-28 h-28 shrink-0 rounded-xl overflow-hidden bg-brand-surface-low">
-          {img ? (
-            <img src={img} alt={item.title} className="w-full h-full object-cover" />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center"><Headphones size={24} className="text-brand-ink/30" /></div>
-          )}
+        <div className="flex gap-3">
+          <div className="w-24 h-24 shrink-0 rounded-xl overflow-hidden bg-brand-surface-low">
+            {img ? (
+              <img src={img} alt={item.title} className="w-full h-full object-cover" />
+            ) : (
+              <div className="w-full h-full flex items-center justify-center"><Headphones size={24} className="text-brand-ink/30" /></div>
+            )}
+          </div>
+          <div className="flex flex-col flex-1 min-w-0">
+            <h3 className="font-serif font-semibold text-[15px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.25] mb-1">
+              {item.title}
+            </h3>
+            <Meta item={item} />
+          </div>
         </div>
-        <div className="flex flex-col flex-1 min-w-0">
-          <h3 className="font-serif font-semibold text-[15px] text-brand-ink group-hover:text-brand-accent transition-colors line-clamp-3 leading-[1.25] mb-1">
-            {item.title}
-          </h3>
-          <Meta item={item} />
-        </div>
+        <CardActions item={item} onUpdate={onUpdate} />
       </motion.article>
     );
   }
@@ -126,12 +206,13 @@ const MediaCard = ({ item, format, onOpen }: { key?: React.Key; item: HuygensIte
         </h3>
         <p className="text-brand-ink/65 line-clamp-2 text-[13px] leading-[1.45]">{summary}</p>
         <Meta item={item} />
+        <CardActions item={item} onUpdate={onUpdate} />
       </div>
     </motion.article>
   );
 };
 
-const ShortCard = ({ item, onOpen }: { key?: React.Key; item: HuygensItem; onOpen: (id: string) => void }) => {
+const ShortCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps) => {
   const summary = stripHtml(item.description);
   return (
     <motion.article
@@ -144,17 +225,18 @@ const ShortCard = ({ item, onOpen }: { key?: React.Key; item: HuygensItem; onOpe
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5">
         {item.source_name}
       </div>
+      <CardActions item={item} onUpdate={onUpdate} />
     </motion.article>
   );
 };
 
-const ItemCard = ({ item, format, onOpen }: { key?: React.Key; item: HuygensItem; format: ItemFormat; onOpen: (id: string) => void }) => {
-  if (format === 'article') return <ArticleCard item={item} onOpen={onOpen} />;
-  if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} />;
-  return <MediaCard item={item} format={format} onOpen={onOpen} />;
+const ItemCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format: ItemFormat } & CardProps) => {
+  if (format === 'article') return <ArticleCard item={item} onOpen={onOpen} onUpdate={onUpdate} />;
+  if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} onUpdate={onUpdate} />;
+  return <MediaCard item={item} format={format} onOpen={onOpen} onUpdate={onUpdate} />;
 };
 
-const Rail = ({ format, items, onOpen }: { key?: React.Key; format: ItemFormat; items: HuygensItem[]; onOpen: (id: string) => void }) => {
+const Rail = ({ format, items, onOpen, onUpdate }: { key?: React.Key; format: ItemFormat; items: HuygensItem[]; onOpen: (id: string) => void; onUpdate?: (id: string, u: Partial<HuygensItem>) => void }) => {
   const meta = RAIL_META[format];
   const Icon = meta.icon;
   return (
@@ -175,7 +257,8 @@ const Rail = ({ format, items, onOpen }: { key?: React.Key; format: ItemFormat; 
         <div className="text-sm text-brand-ink/30 italic px-2 pb-12">Nog geen items voor deze rail.</div>
       ) : (
         <div className="flex overflow-x-auto hide-scrollbar gap-8 pb-12 -mx-6 px-6 md:-mx-12 md:px-12 snap-x">
-          {items.map(item => <ItemCard key={item.id} item={item} format={format} onOpen={onOpen} />)}
+          {items.map(item => <ItemCard key={item.id} item={item} format={format} onOpen={onOpen}
+            onUpdate={u => onUpdate?.(item.id, u)} />)}
         </div>
       )}
     </section>
@@ -643,6 +726,7 @@ const FILTER_LABELS: Record<ItemFilter, string> = {
   saved: 'Opgeslagen',
   summarized: 'Met samenvatting',
   scheduled: 'Gepland',
+  archived: 'Archief',
 };
 
 const WINDOW_LABELS: Record<ItemWindow, string> = {
@@ -682,8 +766,8 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {items.map(it => (
-            <button key={it.id} onClick={() => onOpen(it.id)}
-              className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5">
+            <div key={it.id} onClick={() => onOpen(it.id)}
+              className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5 cursor-pointer flex flex-col">
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-3">{it.source_name}</div>
               <h3 className="font-serif font-semibold text-[18px] text-brand-ink leading-[1.25] line-clamp-3">{it.title}</h3>
               {it.published_at && (
@@ -691,7 +775,8 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
                   {new Date(it.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </div>
               )}
-            </button>
+              <CardActions item={it} onUpdate={u => setItems(prev => prev?.map(x => x.id === it.id ? { ...x, ...u } : x) ?? prev)} />
+            </div>
           ))}
         </div>
       )}
@@ -720,6 +805,18 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
+
+  const goHome = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('item');
+    url.searchParams.delete('admin');
+    window.history.pushState({}, '', url.toString());
+    setItemId(null);
+    setAdminMode(false);
+    setActiveFilter('all');
+    setActiveWindow('all');
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
 
   const openAdmin = () => {
     const url = new URL(window.location.href);
@@ -785,10 +882,11 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
       <nav className="sticky top-0 z-40 bg-brand-cream/95 backdrop-blur-md w-full border-b border-brand-ink/10">
         <div className="flex justify-between items-center px-6 md:px-12 py-6 w-full max-w-screen-2xl mx-auto">
-          <div className="text-3xl text-brand-ink flex items-center gap-3">
+          <button onClick={goHome} title="Naar home"
+            className="text-3xl text-brand-ink flex items-center gap-3 hover:opacity-80 transition-opacity">
             <div className="w-10 h-10 rounded-lg bg-brand-blue flex items-center justify-center text-brand-cream font-display italic font-semibold text-xl">S</div>
             <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom <span className="text-brand-ink/40 not-italic font-mono text-base align-middle ml-2 tracking-[0.15em] uppercase">Huygens</span></span>
-          </div>
+          </button>
           <div className="flex gap-6 items-center text-brand-ink/40">
             <button className="hover:text-brand-accent transition-colors"><Search size={20} strokeWidth={2.5} /></button>
             <button onClick={toggleDark} title={dark ? 'Lichtmodus' : 'Donkermodus'}
@@ -824,7 +922,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               </div>
               <div className="flex items-center gap-3 overflow-x-auto hide-scrollbar pb-1">
                 <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-4 shrink-0">Filter</span>
-                {(['all', 'saved', 'summarized', 'scheduled'] as ItemFilter[]).map(f => (
+                {(['all', 'saved', 'summarized', 'scheduled', 'archived'] as ItemFilter[]).map(f => (
                   <button key={f}
                     onClick={() => setActiveFilter(f)}
                     className={`px-4 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap shrink-0 transition-all ${
@@ -860,7 +958,11 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               <>
                 <h1 className="font-display text-6xl md:text-8xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-10">{data.name}</h1>
                 <DigestPanel slug={data.slug} topicName={data.name} />
-                {data.rails.map(rail => <Rail key={rail.format} format={rail.format} items={rail.items} onOpen={openItem} />)}
+                {data.rails.map(rail => <Rail key={rail.format} format={rail.format} items={rail.items} onOpen={openItem}
+                  onUpdate={(id, u) => setData(d => d ? {
+                    ...d,
+                    rails: d.rails.map(r => ({ ...r, items: r.items.map(it => it.id === id ? { ...it, ...u } : it) })),
+                  } : d)} />)}
               </>
             ) : (
               !error && <div className="text-brand-ink/40 italic">Loading…</div>

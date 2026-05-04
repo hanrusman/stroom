@@ -393,6 +393,12 @@ class HuygensItem(BaseModel):
     source_name: str
     source_image_url: Optional[str]
     published_at: Optional[str]
+    format: Optional[str] = None
+    status: Optional[str] = None
+    processing_status: Optional[str] = None
+    has_summary: bool = False
+    has_transcript: bool = False
+    scheduled_for: Optional[str] = None
 
 
 class HuygensRail(BaseModel):
@@ -595,7 +601,7 @@ async def rate_lesson(lesson_id: str, body: LessonRating, session=Depends(get_as
 # --- Filtered list (saved / summarized / scheduled) ---
 
 
-HuygensFilter = Literal["all", "saved", "summarized", "scheduled"]
+HuygensFilter = Literal["all", "saved", "summarized", "scheduled", "archived"]
 HuygensWindow = Literal["all", "24h", "7d", "30d"]
 
 _WINDOW_INTERVAL: dict[str, str] = {
@@ -622,10 +628,16 @@ async def list_filtered_items(
 
     if filter == "saved":
         clauses.append("i.status = 'pinned'::item_status")
+    elif filter == "archived":
+        clauses.append("i.status = 'archived'::item_status")
     elif filter == "summarized":
         clauses.append("i.summary IS NOT NULL AND i.summary <> ''")
+        clauses.append("i.status <> 'archived'::item_status")
     elif filter == "scheduled":
         clauses.append("i.scheduled_for IS NOT NULL")
+        clauses.append("i.status <> 'archived'::item_status")
+    else:
+        clauses.append("i.status <> 'archived'::item_status")
 
     if window != "all":
         clauses.append(f"i.published_at >= now() - INTERVAL '{_WINDOW_INTERVAL[window]}'")
@@ -655,7 +667,10 @@ async def list_filtered_items(
     sql = f"""
         SELECT i.id::text, i.title, i.description, i.author,
                i.thumbnail_url, i.media_url,
-               s.name, s.image_url, i.published_at, i.scheduled_for
+               s.name, s.image_url, i.published_at, i.scheduled_for,
+               i.format::text, i.status::text, i.processing_status::text,
+               (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
+               (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript
         FROM items i
         JOIN sources s ON s.id = i.source_id
         {join_topic}
@@ -672,6 +687,9 @@ async def list_filtered_items(
             thumbnail_url=r[4], media_url=r[5],
             source_name=r[6], source_image_url=r[7],
             published_at=str(r[8]) if r[8] else None,
+            scheduled_for=str(r[9]) if r[9] else None,
+            format=r[10], status=r[11], processing_status=r[12],
+            has_summary=bool(r[13]), has_transcript=bool(r[14]),
         )
         for r in rows
     ]
@@ -747,6 +765,7 @@ async def _run_digest_generation(topic_id: str, topic_name: str, slug: str, mode
                 WHERE it.topic_id = CAST(:tid AS uuid)
                   AND i.published_at >= now() - INTERVAL '{DIGEST_WINDOW_HOURS} hours'
                   AND s.active = true
+                  AND i.status <> 'archived'::item_status
                 ORDER BY i.published_at DESC
                 LIMIT {DIGEST_MAX_ITEMS}
                 """
@@ -1717,7 +1736,10 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             WITH ranked AS (
               SELECT i.format::text AS fmt, i.id::text AS id, i.title, i.description, i.author,
                      i.thumbnail_url, i.media_url, s.name AS sname, s.image_url AS simg,
-                     i.published_at,
+                     i.published_at, i.scheduled_for,
+                     i.status::text AS istatus, i.processing_status::text AS pstatus,
+                     (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
+                     (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript,
                      s.max_per_rail,
                      ROW_NUMBER() OVER (
                        PARTITION BY i.source_id, i.format
@@ -1730,19 +1752,22 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
               WHERE it.topic_id = :tid
                 AND i.format IS NOT NULL
                 AND s.active = true
+                AND i.status <> 'archived'::item_status
             )
             SELECT fmt, id, title, description, author, thumbnail_url, media_url,
-                   sname, simg, published_at
+                   sname, simg, published_at, scheduled_for,
+                   istatus, pstatus, has_summary, has_transcript
             FROM ranked
             WHERE max_per_rail IS NULL OR rn <= max_per_rail
             ORDER BY score DESC NULLS LAST
-            """
+"""
         ).bindparams(tid=topic.id)
     )
     rows = result.all()
 
     rails: dict[str, List[HuygensItem]] = {f.value: [] for f in ItemFormat}
-    for fmt, iid, title, desc, author, thumb, media, sname, simg, pub in rows:
+    for (fmt, iid, title, desc, author, thumb, media, sname, simg, pub, sched,
+         istatus, pstatus, has_summary, has_transcript) in rows:
         if len(rails[fmt]) >= per_rail:
             continue
         rails[fmt].append(HuygensItem(
@@ -1750,6 +1775,9 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             thumbnail_url=thumb, media_url=media, source_name=sname,
             source_image_url=simg,
             published_at=str(pub) if pub else None,
+            scheduled_for=str(sched) if sched else None,
+            format=fmt, status=istatus, processing_status=pstatus,
+            has_summary=bool(has_summary), has_transcript=bool(has_transcript),
         ))
 
     return HuygensTopic(
