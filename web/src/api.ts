@@ -185,9 +185,11 @@ export interface TopicDigest {
   error: string | null;
 }
 
-export async function fetchTopicDigest(slug: string): Promise<TopicDigest | null> {
+export type DigestWindow = 'daily' | 'weekly';
+
+export async function fetchTopicDigest(slug: string, window: DigestWindow = 'daily'): Promise<TopicDigest | null> {
   try {
-    const r = await apiFetch(`/api/huygens/${slug}/digest`);
+    const r = await apiFetch(`/api/huygens/${slug}/digest?window=${window}`);
     return r.json();
   } catch (e) {
     if (e instanceof ApiError && e.status === 404) return null;
@@ -197,8 +199,8 @@ export async function fetchTopicDigest(slug: string): Promise<TopicDigest | null
 
 export type DigestModel = 'qwen' | 'sonnet' | 'opus';
 
-export async function regenerateTopicDigest(slug: string, model: DigestModel = 'opus'): Promise<TopicDigest> {
-  const r = await apiFetch(`/api/huygens/${slug}/digest?model=${model}`, { method: 'POST' });
+export async function regenerateTopicDigest(slug: string, model: DigestModel = 'opus', window: DigestWindow = 'daily'): Promise<TopicDigest> {
+  const r = await apiFetch(`/api/huygens/${slug}/digest?model=${model}&window=${window}`, { method: 'POST' });
   return r.json();
 }
 

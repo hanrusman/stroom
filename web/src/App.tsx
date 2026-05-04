@@ -7,7 +7,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel } from './api';
+         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -627,7 +627,7 @@ const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
   opus: 'Opus',
 };
 
-function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
+function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; topicName: string; window: DigestWindow }) {
   const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -636,18 +636,19 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
     (localStorage.getItem('stroom-digest-model') as DigestModel) || 'opus'
   );
 
+  const windowLabel = digestWindow === 'weekly' ? 'Weekdigest' : 'Dagdigest';
+
   useEffect(() => {
     setDigest(undefined); setErr(null); setOpen(false);
-    fetchTopicDigest(slug).then(setDigest).catch(() => setDigest(null));
-  }, [slug]);
+    fetchTopicDigest(slug, digestWindow).then(setDigest).catch(() => setDigest(null));
+  }, [slug, digestWindow]);
 
   useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
 
-  // Poll terwijl een generation actief is.
   useEffect(() => {
     if (!digest?.is_generating) return;
     const t = setInterval(() => {
-      fetchTopicDigest(slug).then(d => {
+      fetchTopicDigest(slug, digestWindow).then(d => {
         setDigest(d);
         if (d && !d.is_generating) {
           setBusy(false);
@@ -657,14 +658,13 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
       }).catch(() => {});
     }, 4000);
     return () => clearInterval(t);
-  }, [slug, digest?.is_generating]);
+  }, [slug, digestWindow, digest?.is_generating]);
 
   const regen = async () => {
     setBusy(true); setErr(null);
     try {
-      const fresh = await regenerateTopicDigest(slug, model);
+      const fresh = await regenerateTopicDigest(slug, model, digestWindow);
       setDigest(fresh);
-      // Als 'm direct klaar staat (cached), stop spinner; anders blijft poll-effect 'm aansturen.
       if (!fresh.is_generating) {
         setBusy(false);
         if (fresh.error) setErr(fresh.error);
@@ -675,15 +675,15 @@ function DigestPanel({ slug, topicName }: { slug: string; topicName: string }) {
     }
   };
 
-  const ago = digest ? new Date(digest.generated_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+  const ago = digest?.generated_at ? new Date(digest.generated_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
-    <section className="mb-12 border border-brand-ink/10 rounded-3xl bg-brand-surface/40 p-6">
+    <section className="border border-brand-ink/10 rounded-3xl bg-brand-surface/40 p-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
           <Newspaper size={20} className="text-brand-accent" />
           <div>
-            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">Dagdigest · {topicName}</div>
+            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">{windowLabel} · {topicName}</div>
             {digest?.is_generating && (
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
                 Bezig met genereren…
@@ -1087,7 +1087,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             ) : data ? (
               <>
                 <h1 className="font-display text-6xl md:text-8xl text-brand-ink font-medium tracking-[-0.04em] leading-[0.95] mb-10">{data.name}</h1>
-                <DigestPanel slug={data.slug} topicName={data.name} />
+                <div className="grid md:grid-cols-2 gap-4 mb-12">
+                  <DigestPanel slug={data.slug} topicName={data.name} window="daily" />
+                  <DigestPanel slug={data.slug} topicName={data.name} window="weekly" />
+                </div>
                 {data.rails.map(rail => <Rail key={rail.format} format={rail.format} items={rail.items} onOpen={openItem}
                   onUpdate={(id, u) => setData(d => d ? {
                     ...d,
