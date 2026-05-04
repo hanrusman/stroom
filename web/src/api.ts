@@ -133,10 +133,21 @@ export interface Lesson {
   body: string;
   rating: number | null;
   rated_at: string | null;
+  item_id: string;
+  item_title: string;
+  source_name: string;
+  media_url: string | null;
 }
 
 export async function fetchLessons(itemId: string): Promise<Lesson[]> {
   const r = await apiFetch(`/api/huygens/items/${itemId}/lessons`);
+  return r.json();
+}
+
+export async function fetchAllLessons(rating?: 1 | -1 | null): Promise<Lesson[]> {
+  const p = new URLSearchParams();
+  if (rating === 1 || rating === -1) p.set('rating', String(rating));
+  const r = await apiFetch(`/api/lessons${p.toString() ? '?' + p.toString() : ''}`);
   return r.json();
 }
 

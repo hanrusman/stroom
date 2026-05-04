@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
-         scheduleItem, fetchLessons, rateLesson, fetchFilteredItems,
+         scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel } from './api';
@@ -335,6 +335,15 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
             <div className={`flex-1 ${l.rating === -1 ? 'opacity-40' : ''}`}>
               <div className="font-serif font-semibold text-[17px] text-brand-ink mb-1">{l.title}</div>
               <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80">{l.body}</div>
+              <div className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40 flex items-center gap-2 flex-wrap">
+                <span>uit: {l.source_name} · {l.item_title}</span>
+                {l.media_url && (
+                  <a href={l.media_url} target="_blank" rel="noreferrer"
+                    className="text-brand-accent hover:underline inline-flex items-center gap-1">
+                    <ExternalLink size={10} /> bron
+                  </a>
+                )}
+              </div>
             </div>
           </li>
         ))}
@@ -534,9 +543,12 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   );
 };
 
-const readUrl = (): { itemId: string | null; topic: string | null; admin: boolean } => {
+const readUrl = (): { itemId: string | null; topic: string | null; admin: boolean; lessons: boolean } => {
   const p = new URLSearchParams(window.location.search);
-  return { itemId: p.get('item'), topic: p.get('topic'), admin: p.get('admin') === '1' };
+  return {
+    itemId: p.get('item'), topic: p.get('topic'),
+    admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
+  };
 };
 
 const LoginScreen = ({ onLoggedIn }: { onLoggedIn: (u: User) => void }) => {
@@ -784,6 +796,95 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
   );
 }
 
+type LessonFilter = 'useful' | 'not-useful' | 'all';
+
+const LESSON_FILTER_LABELS: Record<LessonFilter, string> = {
+  useful: 'Nuttig (👍)',
+  'not-useful': 'Niet nuttig (👎)',
+  all: 'Alles',
+};
+
+function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (id: string) => void }) {
+  const [lessons, setLessons] = useState<Lesson[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState<LessonFilter>('useful');
+
+  useEffect(() => {
+    setLessons(null); setError(null);
+    const r = filter === 'useful' ? 1 : filter === 'not-useful' ? -1 : null;
+    fetchAllLessons(r).then(setLessons).catch(e => setError(String(e)));
+  }, [filter]);
+
+  return (
+    <div className="max-w-4xl mx-auto pt-2">
+      <button onClick={onBack}
+        className="mb-8 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-ink/50 hover:text-brand-accent flex items-center gap-2">
+        <ArrowLeft size={14} /> Terug
+      </button>
+
+      <h1 className="font-display text-5xl md:text-6xl text-brand-ink font-medium tracking-[-0.04em] mb-4">Lessen</h1>
+      <p className="font-serif text-[15px] text-brand-ink/60 mb-8">
+        Alle kernlessen die je hebt aangemerkt — gegroepeerd per bron.
+      </p>
+
+      <div className="flex gap-2 mb-10">
+        {(['useful', 'not-useful', 'all'] as LessonFilter[]).map(f => (
+          <button key={f} onClick={() => setFilter(f)}
+            className={`px-4 py-1.5 rounded-full text-[12px] font-medium transition-all ${
+              filter === f ? 'bg-brand-accent text-brand-cream shadow-sm'
+              : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
+            }`}>{LESSON_FILTER_LABELS[f]}</button>
+        ))}
+      </div>
+
+      {error && <div className="text-red-600 text-sm mb-6">Fout: {error}</div>}
+      {lessons === null ? (
+        <div className="text-brand-ink/40 italic">Laden…</div>
+      ) : lessons.length === 0 ? (
+        <div className="text-brand-ink/40 italic">Geen lessen in deze categorie.</div>
+      ) : (
+        <ul className="space-y-6">
+          {lessons.map(l => (
+            <li key={l.id} className="border-t border-brand-ink/10 pt-5">
+              <div className="flex items-start gap-3 mb-2">
+                <span className={`mt-1 w-6 h-6 flex items-center justify-center rounded-full shrink-0 ${
+                  l.rating === 1 ? 'bg-emerald-500 text-white' :
+                  l.rating === -1 ? 'bg-rose-500 text-white' :
+                  'bg-brand-surface text-brand-ink/40'
+                }`}>
+                  {l.rating === 1 ? <Check size={12} /> : l.rating === -1 ? <X size={12} /> : null}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-serif font-semibold text-[18px] text-brand-ink mb-1">{l.title}</div>
+                  <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80 mb-2">{l.body}</div>
+                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 flex items-center gap-3 flex-wrap">
+                    <button onClick={() => onOpenItem(l.item_id)}
+                      className="hover:text-brand-accent transition-colors text-left">
+                      {l.source_name} · {l.item_title}
+                    </button>
+                    {l.media_url && (
+                      <a href={l.media_url} target="_blank" rel="noreferrer"
+                        className="text-brand-accent hover:underline inline-flex items-center gap-1">
+                        <ExternalLink size={10} /> bron
+                      </a>
+                    )}
+                    {l.rated_at && (
+                      <span className="text-brand-ink/30">
+                        {new Date(l.rated_at).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' })}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [dark, toggleDark] = useDarkMode();
   const [adminMode, setAdminMode] = useState<boolean>(() => readUrl().admin);
@@ -794,12 +895,14 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [data, setData] = useState<HuygensTopic | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
+  const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, admin } = readUrl();
+      const { itemId, topic, admin, lessons } = readUrl();
       setItemId(itemId);
       setAdminMode(admin);
+      setLessonsView(lessons);
       if (topic) setActiveSlug(topic);
     };
     window.addEventListener('popstate', onPop);
@@ -810,12 +913,33 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     const url = new URL(window.location.href);
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
+    url.searchParams.delete('lessons');
     window.history.pushState({}, '', url.toString());
     setItemId(null);
     setAdminMode(false);
+    setLessonsView(false);
     setActiveFilter('all');
     setActiveWindow('all');
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const openLessons = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('lessons', '1');
+    url.searchParams.delete('item');
+    url.searchParams.delete('admin');
+    window.history.pushState({}, '', url.toString());
+    setLessonsView(true);
+    setItemId(null);
+    setAdminMode(false);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const closeLessons = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('lessons');
+    window.history.pushState({}, '', url.toString());
+    setLessonsView(false);
   };
 
   const openAdmin = () => {
@@ -889,6 +1013,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           </button>
           <div className="flex gap-6 items-center text-brand-ink/40">
             <button className="hover:text-brand-accent transition-colors"><Search size={20} strokeWidth={2.5} /></button>
+            <button onClick={openLessons} title="Alle lessen"
+                    className="hover:text-brand-accent transition-colors">
+              <BookOpen size={20} strokeWidth={2.5} />
+            </button>
             <button onClick={toggleDark} title={dark ? 'Lichtmodus' : 'Donkermodus'}
                     className="hover:text-brand-accent transition-colors">
               {dark ? <Sun size={20} strokeWidth={2.5} /> : <Moon size={20} strokeWidth={2.5} />}
@@ -909,6 +1037,8 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       <main className="relative z-10 w-full max-w-screen-2xl mx-auto px-6 md:px-12 pb-32 pt-10">
         {adminMode ? (
           <AdminPage onBack={closeAdmin} />
+        ) : lessonsView ? (
+          <LessonsPage onBack={closeLessons} onOpenItem={openItem} />
         ) : itemId ? (
           <ItemDetailView id={itemId} onBack={closeItem} />
         ) : (
