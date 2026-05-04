@@ -157,13 +157,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
-        # 3. Internal-token paths (samenvat-agent callbacks)
+        # 3. Internal-token paths (samenvat-agent callback, cron) — accept token
+        # OR fall through to session-cookie auth (admin user kicking the cron from UI).
         if any(path.endswith(s) for s in _INTERNAL_TOKEN_PATH_SUFFIXES):
             tok = request.headers.get("x-stroom-internal-token", "")
             if INTERNAL_TOKEN and tok and tok == INTERNAL_TOKEN:
                 return await call_next(request)
-            from fastapi.responses import JSONResponse
-            return JSONResponse({"detail": "internal token vereist"}, status_code=401)
+            # geen (geldige) token → laat block 4 het proberen via session cookie
 
         # 4. Everything else needs a session cookie
         token = request.cookies.get(SESSION_COOKIE)
