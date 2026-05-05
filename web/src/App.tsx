@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { marked } from 'marked';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import { AdminPage } from './AdminPage';
+import { SettingsProvider, useSettings } from './settings';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
@@ -298,13 +299,14 @@ const LessonExpansion = ({ lesson, onUpdate, showSource }: {
   const [open, setOpen] = useState<boolean>(false);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const { getDefault } = useSettings();
   const hasExpansion = !!lesson.expansion;
 
   const onClick = async () => {
     if (hasExpansion) { setOpen(o => !o); return; }
     setBusy(true); setError(null);
     try {
-      const updated = await expandLesson(lesson.id, 'opus');
+      const updated = await expandLesson(lesson.id, getDefault('expand'));
       onUpdate(updated);
       setOpen(true);
     } catch (e) { setError(String(e)); }
@@ -343,6 +345,7 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
   const [distilling, setDistilling] = useState(false);
   const [distillError, setDistillError] = useState<string | null>(null);
+  const { getDefault } = useSettings();
   useEffect(() => {
     setLessons(null);
     fetchLessons(itemId).then(setLessons).catch(() => setLessons([]));
@@ -364,7 +367,7 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
   const onDistill = async () => {
     setDistilling(true); setDistillError(null);
     try {
-      const updated = await distillMoreLessons(itemId, 'opus');
+      const updated = await distillMoreLessons(itemId, getDefault('distill'));
       const prevCount = lessons?.length ?? 0;
       setLessons(updated);
       if (updated.length === prevCount) setDistillError('Geen nieuwe lessen gevonden — alles stond er al.');
@@ -724,7 +727,11 @@ export default function App() {
   if (user === null) {
     return <LoginScreen onLoggedIn={setUser} />;
   }
-  return <AuthedApp user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />;
+  return (
+    <SettingsProvider>
+      <AuthedApp user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />
+    </SettingsProvider>
+  );
 }
 
 
@@ -735,13 +742,12 @@ const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
 };
 
 function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; topicName: string; window: DigestWindow }) {
+  const { getDefault } = useSettings();
   const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState<DigestModel>(() =>
-    (localStorage.getItem('stroom-digest-model') as DigestModel) || 'opus'
-  );
+  const [model, setModel] = useState<DigestModel>(() => getDefault('digest'));
 
   const windowLabel = digestWindow === 'weekly' ? 'Weekdigest' : 'Dagdigest';
 
@@ -750,7 +756,7 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
     fetchTopicDigest(slug, digestWindow).then(setDigest).catch(() => setDigest(null));
   }, [slug, digestWindow]);
 
-  useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
+  useEffect(() => { localStorage.setItem('stroom-model-digest', model); }, [model]);
 
   useEffect(() => {
     if (!digest?.is_generating) return;
@@ -912,13 +918,12 @@ const LESSON_FILTER_LABELS: Record<LessonFilter, string> = {
 };
 
 function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWindow; filter: LessonsDigestFilter }) {
+  const { getDefault } = useSettings();
   const [digest, setDigest] = useState<LessonsDigest | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [model, setModel] = useState<DigestModel>(() =>
-    (localStorage.getItem('stroom-digest-model') as DigestModel) || 'opus'
-  );
+  const [model, setModel] = useState<DigestModel>(() => getDefault('digest'));
 
   const windowLabel = digestWindow === 'weekly' ? 'Weekdigest' : 'Dagdigest';
 
@@ -927,7 +932,7 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
     fetchLessonsDigest(digestWindow, filter).then(setDigest).catch(() => setDigest(null));
   }, [digestWindow, filter]);
 
-  useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
+  useEffect(() => { localStorage.setItem('stroom-model-digest', model); }, [model]);
 
   useEffect(() => {
     if (!digest?.is_generating) return;
@@ -1073,7 +1078,8 @@ function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (
                 <div className="flex-1 min-w-0">
                   <div className="font-serif font-semibold text-[18px] text-brand-ink mb-1">{l.title}</div>
                   <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80 mb-2">{l.body}</div>
-                  <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 flex items-center gap-3 flex-wrap">
+                  <LessonExpansion lesson={l} onUpdate={(u) => setLessons(prev => prev?.map(x => x.id === u.id ? u : x) ?? prev)} />
+                  <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 flex items-center gap-3 flex-wrap">
                     <button onClick={() => onOpenItem(l.item_id)}
                       className="hover:text-brand-accent transition-colors text-left">
                       {l.source_name} · {l.item_title}

@@ -4,8 +4,70 @@ import {
   AdminSource, AdminSourceUpdate, AdminSourceCreate, SourceKind,
   fetchAdminSources, updateAdminSource, createAdminSource, deleteAdminSource,
   refreshAdminSource, refreshAllAdminSources, fetchAdminQueue, QueueItem,
-  fetchTopics, Topic, ApiError,
+  fetchTopics, Topic, ApiError, DigestModel, ModelAction,
 } from './api';
+import { useSettings } from './settings';
+
+const MODEL_LABELS: Record<DigestModel, string> = { qwen: 'Qwen (lokaal)', sonnet: 'Sonnet', opus: 'Opus' };
+const ACTION_LABELS: Record<ModelAction, string> = {
+  expand: 'Verdiep deze les',
+  distill: 'Meer lessen destilleren',
+  digest: 'Digest genereren',
+};
+
+const ModelDefaultsPanel = () => {
+  const { settings, save } = useSettings();
+  const [draft, setDraft] = useState(settings.model_defaults);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  useEffect(() => { setDraft(settings.model_defaults); }, [settings]);
+
+  const dirty = (['expand','distill','digest'] as ModelAction[]).some(a => draft[a] !== settings.model_defaults[a]);
+
+  const onSave = async () => {
+    setBusy(true); setErr(null);
+    try {
+      await save({ model_defaults: draft });
+      setSavedAt(Date.now());
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Model-defaults</h2>
+      <p className="text-[13px] text-brand-ink/60 mb-5">Welk model wordt gebruikt als je nergens een override hebt ingesteld.</p>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {(['expand','distill','digest'] as ModelAction[]).map(action => (
+          <label key={action} className="flex flex-col gap-1.5">
+            <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">{ACTION_LABELS[action]}</span>
+            <select value={draft[action]} disabled={busy}
+              onChange={e => setDraft(d => ({ ...d, [action]: e.target.value as DigestModel }))}
+              className="px-3 py-2 rounded-xl bg-brand-surface border border-brand-ink/10 text-sm text-brand-ink disabled:opacity-50">
+              {(['qwen','sonnet','opus'] as DigestModel[]).map(m => (
+                <option key={m} value={m}>{MODEL_LABELS[m]}</option>
+              ))}
+            </select>
+          </label>
+        ))}
+      </div>
+      <div className="mt-5 flex items-center gap-3">
+        <button onClick={onSave} disabled={busy || !dirty}
+          className="px-4 py-2 rounded-xl bg-brand-accent text-brand-cream text-sm flex items-center gap-2 disabled:opacity-50 hover:opacity-90 transition">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+          Opslaan
+        </button>
+        {savedAt && !dirty && <span className="text-[11px] font-mono uppercase tracking-[0.15em] text-emerald-700">Opgeslagen</span>}
+        {err && <span className="text-[12px] text-rose-600">{err}</span>}
+      </div>
+    </section>
+  );
+};
 
 const KINDS: SourceKind[] = ['rss', 'podcast', 'youtube'];
 
@@ -567,6 +629,8 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
           </button>
         </div>
       </div>
+
+      <ModelDefaultsPanel />
 
       <div className="mb-6">
         <NewSourceForm topics={topics}

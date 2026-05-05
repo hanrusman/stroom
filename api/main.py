@@ -26,6 +26,7 @@ from core.auth import (
 )
 from routers import legacy as legacy_router
 from routers import lessons as lessons_router
+from routers import settings as settings_router
 
 
 @asynccontextmanager
@@ -109,6 +110,7 @@ app.add_middleware(AuthMiddleware)
 
 app.include_router(legacy_router.router)
 app.include_router(lessons_router.router)
+app.include_router(settings_router.router)
 
 
 # --- Auth routes ---

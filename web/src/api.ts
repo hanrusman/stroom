@@ -332,3 +332,29 @@ export async function fetchAdminQueue(): Promise<QueueItem[]> {
   const r = await apiFetch('/api/admin/queue');
   return r.json();
 }
+
+export type ModelAction = 'expand' | 'distill' | 'digest';
+
+export interface ModelDefaults {
+  expand: DigestModel;
+  distill: DigestModel;
+  digest: DigestModel;
+}
+
+export interface AppSettings {
+  model_defaults: ModelDefaults;
+}
+
+export async function fetchSettings(): Promise<AppSettings> {
+  const r = await apiFetch('/api/admin/settings');
+  return r.json();
+}
+
+export async function updateSettings(s: AppSettings): Promise<AppSettings> {
+  const r = await apiFetch('/api/admin/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(s),
+  });
+  return r.json();
+}
