@@ -70,6 +70,22 @@
 }
 .prose-stroom ul, .prose-stroom ol { margin: 0 0 1.2em 1.4em; }
 .prose-stroom li { margin: 0.3em 0; }
+.prose-stroom img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 1.5em auto;
+  border-radius: 12px;
+}
+.prose-stroom p:has(> img:only-child) { margin: 1.5em 0; }
+.prose-stroom figure { margin: 1.5em 0; }
+.prose-stroom figcaption {
+  font-size: 0.85em;
+  color: color-mix(in srgb, var(--color-brand-ink) 60%, transparent);
+  text-align: center;
+  margin-top: 0.5em;
+  font-style: italic;
+}
 .prose-stroom code {
   font-family: "JetBrains Mono", monospace;
   font-size: 0.88em;

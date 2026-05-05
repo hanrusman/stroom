@@ -40,16 +40,34 @@ async def extract_article_body(client: httpx.AsyncClient, url: str) -> Optional[
                 html_str,
                 include_comments=False, include_tables=False,
                 include_links=True, include_formatting=True, include_images=True,
-                favor_precision=True,
                 output_format="markdown",
             )
             if not text or len(text.split()) < 100:
                 return None
-            return text
+            return _dedupe_images(text)
         except Exception:
             return None
 
     return await asyncio.get_event_loop().run_in_executor(None, _do_extract, html)
+
+
+_IMG_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+
+
+def _dedupe_images(md: str) -> str:
+    """Strip duplicate ![alt](url) lines met dezelfde URL — trafilatura emit
+    soms 2x dezelfde image (eenmaal als figure, eenmaal als og:image-fallback)."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for line in md.splitlines():
+        m = _IMG_RE.search(line)
+        if m:
+            url = m.group(1)
+            if url in seen:
+                continue
+            seen.add(url)
+        out.append(line)
+    return "\n".join(out)
 
 
 async def backfill_articles(client: httpx.AsyncClient, async_session_maker,
