@@ -129,10 +129,10 @@ const ArticleCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps
     <motion.article
       onClick={() => onOpen(item.id)}
       initial={{ opacity: 0, y: 20 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-      className="snap-start shrink-0 w-[85vw] md:w-[340px] h-[440px] rounded-3xl overflow-hidden flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
+      className="snap-start shrink-0 w-[85vw] md:w-[340px] h-[480px] rounded-3xl overflow-hidden flex flex-col bg-brand-surface border border-brand-ink/5 hover:shadow-md transition-all cursor-pointer group"
     >
       {img ? (
-        <div className="w-full h-32 overflow-hidden bg-brand-surface-low shrink-0">
+        <div className="w-full aspect-[16/9] overflow-hidden bg-brand-surface-low shrink-0">
           <img src={img} alt={item.title} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-700 ease-out" />
         </div>
       ) : (
