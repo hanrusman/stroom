@@ -1,30 +1,22 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
-from sqlmodel import Session, select
+from sqlmodel import select
 from typing import List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
 from models.base import (
-    Item, Insight, ItemStatus, ProcessingStatus,
-    InsightCategory, Save, Todo,
-    Episode, EpisodeRange, EpisodeStatus,
+    Item, ItemStatus, ProcessingStatus,
     Topic, ItemFormat, Source,
 )
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
-from services.obsidian_service import ObsidianService
-from services.vikunja_service import VikunjaService
-from services.podcast_service import PodcastService
-from sqlalchemy.orm import selectinload
 import asyncio
 import httpx
 import os
 import re
 from datetime import datetime
-from fastapi import Cookie
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.auth import (
     SESSION_COOKIE, hash_password, verify_password,
@@ -32,76 +24,8 @@ from core.auth import (
     create_session, delete_session, get_session_user,
     set_session_cookie, clear_session_cookie, require_user,
 )
-
-# --- Response Models ---
-
-
-class InsightRead(BaseModel):
-    id: str
-    text: str
-
-
-class StreamItem(BaseModel):
-    id: str
-    title: str
-    summary: Optional[str]
-    type: str
-    status: str
-    published_at: Optional[str]
-    duration: Optional[int]
-    insights: List[InsightRead]
-
-
-class ItemDetail(BaseModel):
-    id: str
-    title: str
-    summary: Optional[str]
-    type: str
-    insights: List[InsightRead]
-
-
-class SaveCreate(BaseModel):
-    insight_id: str
-    category: InsightCategory
-    note: Optional[str] = None
-
-
-class SaveRead(BaseModel):
-    id: str
-    insight_id: str
-    category: InsightCategory
-    note: Optional[str]
-    obsidian_synced: bool
-    obsidian_path: Optional[str]
-
-
-class TodoCreate(BaseModel):
-    insight_id: str
-    title: str
-
-
-class TodoRead(BaseModel):
-    id: str
-    insight_id: str
-    vikunja_task_id: int
-    title: str
-    done: bool
-
-
-class EpisodeCreate(BaseModel):
-    range: EpisodeRange
-    title: str
-
-
-class EpisodeRead(BaseModel):
-    id: str
-    range: EpisodeRange
-    title: str
-    status: EpisodeStatus
-    audio_url: Optional[str]
-
-
-# --- Lifespan ---
+from routers import legacy as legacy_router
+from routers import lessons as lessons_router
 
 
 @asynccontextmanager
@@ -183,6 +107,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AuthMiddleware)
 
+app.include_router(legacy_router.router)
+app.include_router(lessons_router.router)
+
 
 # --- Auth routes ---
 
@@ -242,136 +169,6 @@ async def auth_me(request: Request, session=Depends(get_async_session)):
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
-
-
-@app.get("/stream", response_model=List[StreamItem])
-async def get_stream(
-    status: Literal["all", "new", "pinned", "later", "archived"] = "all",
-    limit: int = Query(50, le=200),
-    offset: int = Query(0),
-    session=Depends(get_async_session),
-):
-    statement = (
-        select(Item)
-        .where(Item.processing_status == ProcessingStatus.READY)
-        .options(selectinload(Item.insights))
-        .order_by(Item.created_at.desc())
-        .offset(offset)
-        .limit(limit)
-    )
-    if status and status != "all":
-        statement = statement.where(Item.status == status)
-
-    results = await session.exec(statement)
-    items = results.all()
-
-    return [
-        StreamItem(
-            id=str(item.id),
-            title=item.title,
-            summary=item.summary,
-            type=item.type,
-            status=item.status,
-            published_at=str(item.published_at) if item.published_at else None,
-            duration=item.duration_seconds,
-            insights=[InsightRead(id=str(i.id), text=i.text) for i in item.insights],
-        )
-        for item in items
-    ]
-
-
-@app.get("/items/{item_id}", response_model=ItemDetail)
-async def get_item_detail(item_id: str, session=Depends(get_async_session)):
-    item = await session.get(Item, item_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Item not found")
-
-    insights_result = await session.exec(select(Insight).where(Insight.item_id == item.id))
-    insights = insights_result.all()
-
-    return ItemDetail(
-        id=str(item.id),
-        title=item.title,
-        summary=item.summary,
-        type=item.type,
-        insights=[InsightRead(id=str(i.id), text=i.text) for i in insights],
-    )
-
-
-@app.post("/items/{item_id}/regenerate")
-async def regenerate_summary(item_id: str, session=Depends(get_async_session)):
-    llm = LLMService(app.state.http_client)
-    item = await llm.regenerate_summary(session, item_id)
-    return {"id": str(item.id), "summary": item.summary, "status": item.processing_status}
-
-
-@app.post("/insights/{insight_id}/explore")
-async def explore_insight(
-    insight_id: str, query: str, session=Depends(get_async_session)
-):
-    llm = LLMService(app.state.http_client)
-    generator = await llm.explore_insight(session, insight_id, query)
-    return StreamingResponse(generator, media_type="text/plain")
-
-
-@app.post("/saves", response_model=SaveRead)
-async def create_save(save_in: SaveCreate, session=Depends(get_async_session)):
-    insight = await session.get(Insight, save_in.insight_id)
-    if not insight:
-        raise HTTPException(status_code=404, detail="Insight not found")
-
-    db_save = Save(insight_id=save_in.insight_id, category=save_in.category, note=save_in.note)
-    session.add(db_save)
-    await session.commit()
-    await session.refresh(db_save)
-
-    obsidian = ObsidianService(app.state.http_client)
-    db_save = await obsidian.push_insight(session, str(db_save.id))
-
-    return SaveRead(
-        id=str(db_save.id),
-        insight_id=str(db_save.insight_id),
-        category=db_save.category,
-        note=db_save.note,
-        obsidian_synced=db_save.obsidian_synced,
-        obsidian_path=db_save.obsidian_path,
-    )
-
-
-@app.post("/todos", response_model=TodoRead)
-async def create_todo(todo_in: TodoCreate, session=Depends(get_async_session)):
-    vikunja = VikunjaService(app.state.http_client)
-    db_todo = await vikunja.create_task(session, todo_in.insight_id, todo_in.title)
-    return TodoRead(
-        id=str(db_todo.id),
-        insight_id=str(db_todo.insight_id),
-        vikunja_task_id=db_todo.vikunja_task_id,
-        title=db_todo.title,
-        done=db_todo.done,
-    )
-
-
-@app.post("/episodes", response_model=EpisodeRead)
-async def create_episode(
-    episode_in: EpisodeCreate,
-    background_tasks: BackgroundTasks,
-    session=Depends(get_async_session),
-):
-    db_episode = Episode(range=episode_in.range, title=episode_in.title)
-    session.add(db_episode)
-    await session.commit()
-    await session.refresh(db_episode)
-
-    podcast_svc = PodcastService(app.state.http_client)
-    background_tasks.add_task(podcast_svc.generate_episode_task, str(db_episode.id))
-
-    return EpisodeRead(
-        id=str(db_episode.id),
-        range=db_episode.range,
-        title=db_episode.title,
-        status=db_episode.status,
-        audio_url=db_episode.audio_url,
-    )
 
 
 # --- Huygens (topic-aggregation viewer) ---
@@ -436,6 +233,54 @@ class HuygensItemDetail(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: ItemStatus
+
+
+class SearchHit(BaseModel):
+    id: str
+    title: str
+    format: str
+    source_name: str
+    published_at: Optional[str]
+    snippet: str
+    rank: float
+
+
+@app.get("/search", response_model=List[SearchHit])
+async def search_items(q: str = Query(..., min_length=2),
+                       format: Optional[str] = Query(None),
+                       limit: int = Query(20, le=100),
+                       session=Depends(get_async_session)):
+    """Postgres FTS over title+summary+transcript+description.
+    `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'."""
+    fmt_filter = ""
+    if format in ("article", "podcast", "video"):
+        fmt_filter = f"AND i.format = '{format}'::item_format"
+
+    r = await session.exec(sa_text(
+        f"""
+        SELECT i.id::text, i.title, i.format::text, s.name,
+               i.published_at,
+               ts_headline('simple',
+                           coalesce(i.summary, i.description, left(i.transcript, 4000), ''),
+                           websearch_to_tsquery('simple', :q),
+                           'MaxFragments=2,MinWords=8,MaxWords=22,StartSel=<mark>,StopSel=</mark>') as snippet,
+               ts_rank(i.search_tsv, websearch_to_tsquery('simple', :q)) as rank
+        FROM items i
+        JOIN sources s ON s.id = i.source_id
+        WHERE i.search_tsv @@ websearch_to_tsquery('simple', :q)
+          AND i.status <> 'archived'::item_status
+          {fmt_filter}
+        ORDER BY rank DESC, i.published_at DESC NULLS LAST
+        LIMIT :lim
+        """
+    ).bindparams(q=q, lim=limit))
+    rows = r.all()
+    return [SearchHit(
+        id=row[0], title=row[1], format=row[2], source_name=row[3],
+        published_at=str(row[4]) if row[4] else None,
+        snippet=row[5] or "",
+        rank=float(row[6]),
+    ) for row in rows]
 
 
 @app.get("/huygens/items/{item_id}", response_model=HuygensItemDetail)
@@ -541,89 +386,6 @@ async def schedule_item(item_id: str, body: ScheduleUpdate, session=Depends(get_
 
 
 # --- Lessons ---
-
-
-class LessonRead(BaseModel):
-    id: str
-    idx: int
-    title: str
-    body: str
-    rating: Optional[int]
-    rated_at: Optional[str]
-    item_id: str
-    item_title: str
-    source_name: str
-    media_url: Optional[str]
-
-
-class LessonRating(BaseModel):
-    rating: Optional[int]  # 1, -1, or None
-
-
-_LESSON_SELECT = (
-    "SELECT l.id::text, l.idx, l.title, l.body, l.rating, l.rated_at, "
-    "       l.item_id::text, i.title, s.name, i.media_url "
-    "FROM lessons l "
-    "JOIN items i ON i.id = l.item_id "
-    "JOIN sources s ON s.id = i.source_id"
-)
-
-
-def _lesson_row(r) -> LessonRead:
-    return LessonRead(
-        id=r[0], idx=r[1], title=r[2], body=r[3],
-        rating=r[4], rated_at=str(r[5]) if r[5] else None,
-        item_id=r[6], item_title=r[7], source_name=r[8], media_url=r[9],
-    )
-
-
-@app.get("/huygens/items/{item_id}/lessons", response_model=List[LessonRead])
-async def list_lessons(item_id: str, session=Depends(get_async_session)):
-    result = await session.exec(sa_text(
-        f"{_LESSON_SELECT} WHERE l.item_id = CAST(:i AS uuid) ORDER BY l.idx ASC"
-    ).bindparams(i=item_id))
-    return [_lesson_row(r) for r in result.all()]
-
-
-@app.get("/lessons", response_model=List[LessonRead])
-async def list_all_lessons(rating: Optional[int] = Query(None, description="Filter op rating: 1, -1, of leeg voor alles"),
-                           limit: int = Query(200, le=1000),
-                           session=Depends(get_async_session),
-                           user=Depends(require_user)):
-    """Cross-item lessons-overzicht. Default: alleen +1 (nuttig)."""
-    where = ""
-    params: dict = {"lim": limit}
-    if rating in (1, -1):
-        where = "WHERE l.rating = :r"
-        params["r"] = rating
-    elif rating is None:
-        where = "WHERE l.rating = 1"
-    result = await session.exec(sa_text(
-        f"{_LESSON_SELECT} {where} ORDER BY l.rated_at DESC NULLS LAST, l.idx ASC LIMIT :lim"
-    ).bindparams(**params))
-    return [_lesson_row(r) for r in result.all()]
-
-
-@app.post("/lessons/{lesson_id}/rate", response_model=LessonRead)
-async def rate_lesson(lesson_id: str, body: LessonRating, session=Depends(get_async_session)):
-    if body.rating not in (None, 1, -1):
-        raise HTTPException(status_code=400, detail="rating must be 1, -1, or null")
-    if body.rating is None:
-        await session.exec(sa_text(
-            "UPDATE lessons SET rating = NULL, rated_at = NULL WHERE id = CAST(:i AS uuid)"
-        ).bindparams(i=lesson_id))
-    else:
-        await session.exec(sa_text(
-            "UPDATE lessons SET rating = :r, rated_at = now() WHERE id = CAST(:i AS uuid)"
-        ).bindparams(r=body.rating, i=lesson_id))
-    await session.commit()
-    result = await session.exec(sa_text(
-        f"{_LESSON_SELECT} WHERE l.id = CAST(:i AS uuid)"
-    ).bindparams(i=lesson_id))
-    row = result.first()
-    if not row:
-        raise HTTPException(status_code=404, detail="lesson not found")
-    return _lesson_row(row)
 
 
 # --- Filtered list (saved / summarized / scheduled) ---
@@ -738,15 +500,12 @@ class TopicDigest(BaseModel):
 
 DigestWindow = Literal["daily", "weekly"]
 DIGEST_WINDOWS: dict[str, int] = {"daily": 24, "weekly": 168}
-DIGEST_MAX_ITEMS = 40
-DIGEST_PER_ITEM_CHARS = 600
-
-
-def _strip_html(s: Optional[str]) -> str:
-    if not s:
-        return ""
-    s = re.sub(r"<[^>]+>", " ", s)
-    return re.sub(r"\s+", " ", s).strip()
+from pipeline.digest import (
+    DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS, DIGEST_MODEL_MAP,
+    DIGEST_GENERATION_STALE_MIN,
+    strip_html as _strip_html,
+    run_digest_generation as _pipeline_run_digest_generation,
+)
 
 
 @app.get("/huygens/{slug}/digest", response_model=TopicDigest)
@@ -772,107 +531,15 @@ async def get_topic_digest(slug: str,
 
 
 DigestModel = Literal["qwen", "sonnet", "opus"]
-DIGEST_MODEL_MAP: dict[str, str] = {
-    "qwen": "stroom-bulk",
-    "sonnet": "stroom-sonnet",
-    "opus": "stroom-deep",
-}
-
-
-DIGEST_GENERATION_STALE_MIN = 10  # bg-task is dood als hij na 10 min nog 'is_generating' is
 
 
 async def _run_digest_generation(topic_id: str, topic_name: str, slug: str,
                                  model: DigestModel, window_hours: int):
-    """Background-task: leest items, roept LLM aan, schrijft naar topic_digests. Eigen DB-sessie."""
+    """Wrapper: pipeline-call met onze DB-session-maker en LLM-service."""
     from core.db import async_session_maker
-    llm_alias = DIGEST_MODEL_MAP[model]
-    try:
-        async with async_session_maker() as bg:
-            rows = (await bg.exec(sa_text(
-                f"""
-                SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
-                FROM items i
-                JOIN item_topics it ON it.item_id = i.id
-                JOIN sources s ON s.id = i.source_id
-                WHERE it.topic_id = CAST(:tid AS uuid)
-                  AND i.published_at >= now() - INTERVAL '{window_hours} hours'
-                  AND s.active = true
-                  AND i.status <> 'archived'::item_status
-                ORDER BY i.published_at DESC
-                LIMIT {DIGEST_MAX_ITEMS}
-                """
-            ).bindparams(tid=topic_id))).all()
-
-            if not rows:
-                await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=:e "
-                    "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(e=f"Geen items van laatste {window_hours}u", tid=topic_id, w=window_hours))
-                await bg.commit()
-                return
-
-            blocks: list[str] = []
-            for title, fmt, sname, summary, desc, pub, url in rows:
-                body = (summary or "").strip() or _strip_html(desc)
-                if not body:
-                    continue
-                body = body[:DIGEST_PER_ITEM_CHARS]
-                when = str(pub)[:16] if pub else ""
-                url_line = f"URL: {url}\n" if url else ""
-                blocks.append(f"### [{fmt}] {title}\n_{sname} · {when}_\n{url_line}\n{body}")
-
-            if not blocks:
-                await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' "
-                    "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(tid=topic_id, w=window_hours))
-                await bg.commit()
-                return
-
-            corpus = "\n\n---\n\n".join(blocks)
-            window_label = "weeksamenvatting" if window_hours >= 168 else "dagsamenvatting"
-            window_short = f"{window_hours // 24} dagen" if window_hours >= 48 else f"{window_hours}u"
-            system_prompt = (
-                f"Je bent een redacteur die een persoonlijke {window_label} schrijft over een specifiek thema. "
-                f"De gebruiker volgt het thema '{topic_name}' en heeft geen tijd om alles te lezen. "
-                "Schrijf een markdown-digest in het Nederlands met:\n"
-                f"1. Een korte intro (2 zinnen) over wat er in de laatste {window_short} opviel.\n"
-                "2. Per cluster (groepeer waar logisch) een H3-kop, dan 2-4 zinnen die de gemeenschappelijke draad uitleggen. "
-                "Verwijs naar bronnen met markdown-links: [Bronnaam](URL).\n"
-                "3. Een '## Verder lezen' lijst (markdown bullet list) van max 5 items die individueel de moeite waard zijn — "
-                "elke regel als `- [Titel](URL) — korte reden waarom (1 zin).`\n"
-                "Wees scherp, geen marketingtaal. Als bronnen elkaar tegenspreken, benoem dat. "
-                "Gebruik UITSLUITEND de URLs die in de bronlijst staan; verzin geen URLs."
-            )
-            llm = LLMService(app.state.http_client)
-            markdown = await llm.call_llm(llm_alias, [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Items van laatste {window_short}:\n\n{corpus}"},
-            ], temperature=0.4, timeout=300.0)
-
-            await bg.exec(sa_text(
-                """
-                UPDATE topic_digests SET
-                  markdown = :m, item_count = :n, model = :ml,
-                  generated_at = now(), is_generating = false, error = NULL
-                WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w
-                """
-            ).bindparams(m=markdown.strip(), n=len(blocks), ml=llm_alias,
-                         w=window_hours, tid=topic_id))
-            await bg.commit()
-            print(f"[digest bg] {slug} {window_hours}u klaar — {len(blocks)} items, {llm_alias}")
-    except Exception as exc:
-        try:
-            async with async_session_maker() as bg:
-                await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=:e "
-                    "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(e=str(exc)[:500], tid=topic_id, w=window_hours))
-                await bg.commit()
-        except Exception:
-            pass
-        print(f"[digest bg] {slug} {window_hours}u faalde: {exc}")
+    llm = LLMService(app.state.http_client)
+    await _pipeline_run_digest_generation(topic_id, topic_name, slug, model, window_hours,
+                                          async_session_maker, llm)
 
 
 @app.post("/huygens/{slug}/digest", response_model=TopicDigest)
@@ -1422,6 +1089,13 @@ _OG_PATTERNS = [
 ]
 
 
+from pipeline.articles import (
+    extract_article_body as _extract_article_body,
+    backfill_articles as _pipeline_backfill_articles,
+    summarize_articles as _pipeline_summarize_articles,
+)
+
+
 async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Fetch URL, return og:image / twitter:image. Best-effort: returns None on any failure."""
     if not url:
@@ -1510,6 +1184,15 @@ async def _refresh_one(session, src) -> dict:
             """
         ).bindparams(i=new_item_id, s=str(src.id)))
         inserted += 1
+
+        # Voor articles: full body via trafilatura, opslaan in transcript.
+        # Best-effort: bij failure blijft description de fallback.
+        if fmt == "article" and media:
+            body = await _extract_article_body(app.state.http_client, media)
+            if body:
+                await session.exec(sa_text(
+                    "UPDATE items SET transcript = :t WHERE id = CAST(:i AS uuid)"
+                ).bindparams(t=body, i=new_item_id))
 
     await session.exec(sa_text(
         "UPDATE sources SET last_polled_at = now(), last_poll_status = :st "
@@ -1647,7 +1330,7 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
             refresh_errors += 1
             print(f"[cron] refresh {row[1]} faalde: {exc}")
 
-    # 2. selecteer kandidaten — alleen audio/video, geen artikelen
+    # 2a. audio/video → GPU-queue
     r = await session.exec(sa_text(
         """
         SELECT id::text FROM items
@@ -1662,7 +1345,6 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     ))
     candidate_ids = [row[0] for row in r.all()]
 
-    # 3. queue them
     queued = 0
     for item_id in candidate_ids:
         await session.exec(sa_text(
@@ -1673,7 +1355,24 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
         queued += 1
     await session.commit()
 
-    # 4. kick the queue
+    # 2b. articles met transcript zonder summary → losse LLM-flow (geen GPU)
+    r = await session.exec(sa_text(
+        """
+        SELECT id::text FROM items
+        WHERE published_at >= now() - interval '2 days'
+          AND format = 'article'::item_format
+          AND transcript IS NOT NULL AND length(transcript) >= 200
+          AND (summary IS NULL OR summary = '')
+          AND processing_status NOT IN
+              ('summarizing'::processing_status, 'queued'::processing_status, 'transcribing'::processing_status)
+        ORDER BY published_at DESC
+        LIMIT 200
+        """
+    ))
+    article_ids = [row[0] for row in r.all()]
+    await session.commit()
+
+    # 3. kick GPU-queue + start article-summarize background
     started = False
     try:
         await _process_next_queued(session)
@@ -1681,14 +1380,33 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     except Exception as exc:
         print(f"[cron] _process_next_queued faalde: {exc}")
 
+    # Article-summarize draait async, parallel aan GPU-queue
+    if article_ids:
+        from core.db import async_session_maker
+        llm = LLMService(app.state.http_client)
+        asyncio.create_task(_pipeline_summarize_articles(article_ids, llm, async_session_maker))
+
     return {
         "ok": True,
         "sources_refreshed": refreshed,
         "refresh_errors": refresh_errors,
         "new_items_inserted": inserted_total,
-        "candidates_queued": queued,
+        "audio_video_queued": queued,
+        "articles_summarize_kicked": len(article_ids),
         "queue_started": started,
     }
+
+
+@app.post("/admin/articles/backfill")
+async def admin_articles_backfill(background_tasks: BackgroundTasks,
+                                  days: int = Query(14, le=90),
+                                  limit: int = Query(500, le=2000),
+                                  user=Depends(require_user)):
+    """Trigger background trafilatura-extractie voor articles zonder transcript."""
+    from core.db import async_session_maker
+    background_tasks.add_task(_pipeline_backfill_articles,
+                              app.state.http_client, async_session_maker, days, limit)
+    return {"ok": True, "started": True, "days": days, "limit": limit}
 
 
 class QueueItem(BaseModel):
