@@ -524,7 +524,19 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
         </details>
       )}
 
-      {item.transcript && (
+      {item.transcript && item.format === 'article' && (
+        <section className="mt-8 border-t border-brand-ink/10 pt-6">
+          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent mb-6">
+            Artikel · {item.transcript.length} chars
+          </div>
+          <div
+            className="prose-stroom font-serif text-[17px] leading-[1.7] text-brand-ink/90 max-w-none"
+            dangerouslySetInnerHTML={{ __html: marked.parse(item.transcript, { async: false, breaks: true }) as string }}
+          />
+        </section>
+      )}
+
+      {item.transcript && item.format !== 'article' && (
         <details className="mt-8 border-t border-brand-ink/10 pt-6">
           <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
             Transcript · {item.transcript.length} chars

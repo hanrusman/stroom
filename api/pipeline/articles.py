@@ -36,8 +36,13 @@ async def extract_article_body(client: httpx.AsyncClient, url: str) -> Optional[
     def _do_extract(html_str: str) -> Optional[str]:
         try:
             import trafilatura
-            text = trafilatura.extract(html_str, include_comments=False, include_tables=False,
-                                       favor_precision=True)
+            text = trafilatura.extract(
+                html_str,
+                include_comments=False, include_tables=False,
+                include_links=True, include_formatting=True, include_images=True,
+                favor_precision=True,
+                output_format="markdown",
+            )
             if not text or len(text.split()) < 100:
                 return None
             return text
