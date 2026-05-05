@@ -137,6 +137,9 @@ export interface Lesson {
   item_title: string;
   source_name: string;
   media_url: string | null;
+  expansion: string | null;
+  expansion_model: string | null;
+  expansion_generated_at: string | null;
 }
 
 export async function fetchLessons(itemId: string): Promise<Lesson[]> {
@@ -201,6 +204,48 @@ export type DigestModel = 'qwen' | 'sonnet' | 'opus';
 
 export async function regenerateTopicDigest(slug: string, model: DigestModel = 'opus', window: DigestWindow = 'daily'): Promise<TopicDigest> {
   const r = await apiFetch(`/api/huygens/${slug}/digest?model=${model}&window=${window}`, { method: 'POST' });
+  return r.json();
+}
+
+// --- Lessons: distill / expand / digest ---
+
+export async function distillMoreLessons(itemId: string, model: DigestModel = 'opus'): Promise<Lesson[]> {
+  const r = await apiFetch(`/api/huygens/items/${itemId}/lessons/distill?model=${model}`, { method: 'POST' });
+  return r.json();
+}
+
+export async function expandLesson(lessonId: string, model: DigestModel = 'opus', force = false): Promise<Lesson> {
+  const p = new URLSearchParams({ model });
+  if (force) p.set('force', 'true');
+  const r = await apiFetch(`/api/lessons/${lessonId}/expand?${p.toString()}`, { method: 'POST' });
+  return r.json();
+}
+
+export type LessonsDigestFilter = 'useful' | 'not-useful' | 'all';
+
+export interface LessonsDigest {
+  markdown: string | null;
+  lesson_count: number | null;
+  model: string | null;
+  window_hours: number;
+  rating: number;
+  generated_at: string | null;
+  is_generating: boolean;
+  error: string | null;
+}
+
+export async function fetchLessonsDigest(window: DigestWindow = 'weekly', filter: LessonsDigestFilter = 'useful'): Promise<LessonsDigest | null> {
+  try {
+    const r = await apiFetch(`/api/lessons/digest?window=${window}&filter=${filter}`);
+    return r.json();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+export async function regenerateLessonsDigest(model: DigestModel = 'opus', window: DigestWindow = 'weekly', filter: LessonsDigestFilter = 'useful'): Promise<LessonsDigest> {
+  const r = await apiFetch(`/api/lessons/digest?model=${model}&window=${window}&filter=${filter}`, { method: 'POST' });
   return r.json();
 }
 

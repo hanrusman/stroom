@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest,
+         distillMoreLessons, expandLesson, fetchLessonsDigest, regenerateLessonsDigest,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow } from './api';
+         Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
+         LessonsDigest, LessonsDigestFilter } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -290,8 +292,57 @@ const ActionButton = ({ icon: Icon, label, active, busy, onClick, disabled }: {
   </button>
 );
 
+const LessonExpansion = ({ lesson, onUpdate, showSource }: {
+  lesson: Lesson; onUpdate: (l: Lesson) => void; showSource?: boolean;
+}) => {
+  const [open, setOpen] = useState<boolean>(false);
+  const [busy, setBusy] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+  const hasExpansion = !!lesson.expansion;
+
+  const onClick = async () => {
+    if (hasExpansion) { setOpen(o => !o); return; }
+    setBusy(true); setError(null);
+    try {
+      const updated = await expandLesson(lesson.id, 'opus');
+      onUpdate(updated);
+      setOpen(true);
+    } catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mt-2">
+      <button
+        onClick={onClick}
+        disabled={busy}
+        className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 hover:text-brand-accent inline-flex items-center gap-1.5 disabled:opacity-50"
+      >
+        {busy ? <Loader2 size={11} className="animate-spin" /> :
+         hasExpansion ? (open ? <ChevronUp size={11} /> : <ChevronDown size={11} />) :
+         <Sparkles size={11} />}
+        {busy ? 'Verdiept…' : hasExpansion ? (open ? 'Inklappen' : 'Verdieping tonen') : 'Verdiep deze les'}
+      </button>
+      {error && <div className="mt-1 text-rose-600 text-[12px]">{error}</div>}
+      {open && lesson.expansion && (
+        <div className="mt-3 p-4 bg-brand-surface/60 rounded-lg border border-brand-ink/10">
+          <div className="font-serif text-[15px] leading-[1.65] text-brand-ink/85 prose prose-sm max-w-none"
+            dangerouslySetInnerHTML={{ __html: marked.parse(lesson.expansion) as string }} />
+          {showSource && (
+            <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40">
+              uit: {lesson.source_name} · {lesson.item_title}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const LessonsSection = ({ itemId }: { itemId: string }) => {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
+  const [distilling, setDistilling] = useState(false);
+  const [distillError, setDistillError] = useState<string | null>(null);
   useEffect(() => {
     setLessons(null);
     fetchLessons(itemId).then(setLessons).catch(() => setLessons([]));
@@ -307,12 +358,55 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
     }
   };
 
-  if (!lessons || lessons.length === 0) return null;
+  const onUpdateLesson = (updated: Lesson) =>
+    setLessons(prev => prev?.map(l => l.id === updated.id ? updated : l) ?? prev);
+
+  const onDistill = async () => {
+    setDistilling(true); setDistillError(null);
+    try {
+      const updated = await distillMoreLessons(itemId, 'opus');
+      const prevCount = lessons?.length ?? 0;
+      setLessons(updated);
+      if (updated.length === prevCount) setDistillError('Geen nieuwe lessen gevonden — alles stond er al.');
+    } catch (e) { setDistillError(String(e)); }
+    finally { setDistilling(false); }
+  };
+
+  if (!lessons) return null;
+  if (lessons.length === 0) {
+    return (
+      <details open className="mb-8 border-t border-brand-ink/10 pt-6">
+        <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
+          Kernlessen
+        </summary>
+        <div className="mt-4">
+          <button onClick={onDistill} disabled={distilling}
+            className="px-3 py-1.5 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-accent text-white hover:opacity-90 inline-flex items-center gap-2 disabled:opacity-50">
+            {distilling ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}
+            Destilleer kernlessen
+          </button>
+          {distillError && <div className="mt-2 text-rose-600 text-[12px]">{distillError}</div>}
+        </div>
+      </details>
+    );
+  }
   return (
     <details open className="mb-8 border-t border-brand-ink/10 pt-6">
-      <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
-        Kernlessen · {lessons.length}
+      <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer flex items-center justify-between gap-3">
+        <span>Kernlessen · {lessons.length}</span>
+        <span
+          role="button" tabIndex={0}
+          onClick={(e) => { e.preventDefault(); onDistill(); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); onDistill(); }}}
+          aria-disabled={distilling}
+          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-brand-surface text-brand-ink/70 hover:bg-brand-accent hover:text-white transition-all ${distilling ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+          title="Destilleer meer lessen uit de bron"
+        >
+          {distilling ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+          Meer
+        </span>
       </summary>
+      {distillError && <div className="mt-2 text-rose-600 text-[12px]">{distillError}</div>}
       <ul className="mt-6 space-y-4">
         {lessons.map(l => (
           <li key={l.id} className="flex items-start gap-4 group">
@@ -335,6 +429,7 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
             <div className={`flex-1 ${l.rating === -1 ? 'opacity-40' : ''}`}>
               <div className="font-serif font-semibold text-[17px] text-brand-ink mb-1">{l.title}</div>
               <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80">{l.body}</div>
+              <LessonExpansion lesson={l} onUpdate={onUpdateLesson} />
               <div className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40 flex items-center gap-2 flex-wrap">
                 <span>uit: {l.source_name} · {l.item_title}</span>
                 {l.media_url && (
@@ -816,6 +911,110 @@ const LESSON_FILTER_LABELS: Record<LessonFilter, string> = {
   all: 'Alles',
 };
 
+function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWindow; filter: LessonsDigestFilter }) {
+  const [digest, setDigest] = useState<LessonsDigest | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [model, setModel] = useState<DigestModel>(() =>
+    (localStorage.getItem('stroom-digest-model') as DigestModel) || 'opus'
+  );
+
+  const windowLabel = digestWindow === 'weekly' ? 'Weekdigest' : 'Dagdigest';
+
+  useEffect(() => {
+    setDigest(undefined); setErr(null); setOpen(false);
+    fetchLessonsDigest(digestWindow, filter).then(setDigest).catch(() => setDigest(null));
+  }, [digestWindow, filter]);
+
+  useEffect(() => { localStorage.setItem('stroom-digest-model', model); }, [model]);
+
+  useEffect(() => {
+    if (!digest?.is_generating) return;
+    const t = setInterval(() => {
+      fetchLessonsDigest(digestWindow, filter).then(d => {
+        setDigest(d);
+        if (d && !d.is_generating) {
+          setBusy(false);
+          if (d.error) setErr(d.error);
+          else if (d.markdown) setOpen(true);
+        }
+      }).catch(() => {});
+    }, 4000);
+    return () => clearInterval(t);
+  }, [digestWindow, filter, digest?.is_generating]);
+
+  const regen = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const fresh = await regenerateLessonsDigest(model, digestWindow, filter);
+      setDigest(fresh);
+      if (!fresh.is_generating) {
+        setBusy(false);
+        if (fresh.error) setErr(fresh.error);
+      }
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+      setBusy(false);
+    }
+  };
+
+  const ago = digest?.generated_at ? new Date(digest.generated_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
+
+  return (
+    <section className="border border-brand-ink/10 rounded-3xl bg-brand-surface/40 p-6">
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div className="flex items-center gap-3">
+          <BookOpen size={20} className="text-brand-accent" />
+          <div>
+            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">{windowLabel} · {LESSON_FILTER_LABELS[filter as LessonFilter]}</div>
+            {digest?.is_generating && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Bezig met genereren…</div>
+            )}
+            {digest && !digest.is_generating && digest.generated_at && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
+                {digest.lesson_count} lessen · {digest.window_hours}u · {ago}
+              </div>
+            )}
+            {digest === null && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {digest?.markdown && (
+            <button onClick={() => setOpen(o => !o)}
+              className="flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+              {open ? 'Verberg' : 'Toon'}
+            </button>
+          )}
+          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
+            className="px-3 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
+            {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
+              <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
+            ))}
+          </select>
+          <button onClick={regen} disabled={busy || !!digest?.is_generating}
+            className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] transition-all ${
+              busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
+                   : 'bg-brand-accent text-brand-cream hover:opacity-90'
+            }`}>
+            {busy || digest?.is_generating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {digest?.markdown ? 'Ververs' : 'Genereer'}
+          </button>
+        </div>
+      </div>
+      {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
+      {open && digest?.markdown && (
+        <div
+          className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
+          dangerouslySetInnerHTML={{ __html: marked.parse(digest.markdown, { async: false, breaks: true }) as string }}
+        />
+      )}
+    </section>
+  );
+}
+
 function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (id: string) => void }) {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -847,6 +1046,11 @@ function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (
               : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
             }`}>{LESSON_FILTER_LABELS[f]}</button>
         ))}
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-10">
+        <LessonsDigestPanel window="daily" filter={filter as LessonsDigestFilter} />
+        <LessonsDigestPanel window="weekly" filter={filter as LessonsDigestFilter} />
       </div>
 
       {error && <div className="text-red-600 text-sm mb-6">Fout: {error}</div>}
