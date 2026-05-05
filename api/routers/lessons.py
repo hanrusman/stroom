@@ -132,7 +132,7 @@ def _llm(request: Request) -> LLMService:
 
 
 def _next_idx(rows: list[tuple]) -> int:
-    return (max((r[1] for r in rows), default=0) + 1)
+    return (max((r[0] for r in rows), default=0) + 1)
 
 
 @router.post("/huygens/items/{item_id}/lessons/distill", response_model=List[LessonRead])
