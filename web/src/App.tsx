@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus } from 'lucide-react';
@@ -293,6 +293,24 @@ const ActionButton = ({ icon: Icon, label, active, busy, onClick, disabled }: {
   </button>
 );
 
+const QuietAction = ({ icon: Icon, label, active, busy, onClick, disabled }: {
+  icon: React.ComponentType<{ size?: number }>; label: string;
+  active?: boolean; busy?: boolean; disabled?: boolean; onClick: () => void;
+}) => (
+  <button
+    onClick={onClick} disabled={busy || disabled}
+    title={label}
+    className={`group flex items-center gap-2 px-3 py-2 rounded-full transition-all ${
+      busy || disabled ? 'opacity-40 cursor-not-allowed' :
+      active ? 'text-brand-accent bg-brand-accent/5' :
+      'text-brand-ink/55 hover:text-brand-accent hover:bg-brand-surface'
+    }`}
+  >
+    {busy ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
+    <span className="font-mono text-[10px] uppercase tracking-[0.2em] hidden sm:inline">{label}</span>
+  </button>
+);
+
 const LessonExpansion = ({ lesson, onUpdate, showSource }: {
   lesson: Lesson; onUpdate: (l: Lesson) => void; showSource?: boolean;
 }) => {
@@ -450,15 +468,551 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
   );
 };
 
+type SummaryBlock =
+  | { kind: 'p'; text: string }
+  | { kind: 'h'; lead: string; body: string }
+  | { kind: 'ul'; items: { term?: string; body: string }[] };
+
+const parseSummary = (summary: string): SummaryBlock[] => {
+  const blocks: SummaryBlock[] = [];
+  const paragraphs = summary.split(/\n\s*\n/);
+  for (const para of paragraphs) {
+    const lines = para.split('\n').map(l => l.trimEnd()).filter(Boolean);
+    let buffered: string[] = [];
+    let bullets: { term?: string; body: string }[] = [];
+    const flushBuffer = () => {
+      if (!buffered.length) return;
+      const joined = buffered.join(' ');
+      const m = joined.match(/^\*\*([^*]+)\*\*\s*(.*)$/);
+      if (m) blocks.push({ kind: 'h', lead: m[1], body: m[2] });
+      else blocks.push({ kind: 'p', text: joined });
+      buffered = [];
+    };
+    const flushBullets = () => {
+      if (!bullets.length) return;
+      blocks.push({ kind: 'ul', items: bullets });
+      bullets = [];
+    };
+    for (const line of lines) {
+      const bm = line.match(/^[-*]\s+(.*)$/);
+      if (bm) {
+        flushBuffer();
+        const inner = bm[1];
+        const tm = inner.match(/^\*\*([^*]+)\*\*\s*[—–-]?\s*(.*)$/);
+        if (tm) bullets.push({ term: tm[1], body: tm[2] });
+        else bullets.push({ body: inner });
+      } else {
+        flushBullets();
+        buffered.push(line);
+      }
+    }
+    flushBuffer();
+    flushBullets();
+  }
+  return blocks;
+};
+
+const renderInline = (text: string): React.ReactNode[] => {
+  const out: React.ReactNode[] = [];
+  let i = 0; let key = 0;
+  while (i < text.length) {
+    if (text.startsWith('**', i)) {
+      const end = text.indexOf('**', i + 2);
+      if (end !== -1) {
+        out.push(<strong key={key++} className="font-semibold">{text.slice(i + 2, end)}</strong>);
+        i = end + 2; continue;
+      }
+    }
+    if (text[i] === '*') {
+      const end = text.indexOf('*', i + 1);
+      if (end !== -1) {
+        out.push(<em key={key++} className="italic">{text.slice(i + 1, end)}</em>);
+        i = end + 1; continue;
+      }
+    }
+    let next = text.length;
+    const a = text.indexOf('**', i);
+    const b = text.indexOf('*', i);
+    if (a !== -1) next = Math.min(next, a);
+    if (b !== -1) next = Math.min(next, b);
+    out.push(text.slice(i, next));
+    i = next;
+  }
+  return out;
+};
+
+const initials = (name: string): string =>
+  name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '·';
+
+const firstParagraph = (item: ItemDetail): string | null => {
+  if (item.summary) {
+    const blocks = parseSummary(item.summary);
+    const first = blocks.find(b => b.kind === 'h' || b.kind === 'p');
+    if (first?.kind === 'h') return first.body || first.lead;
+    if (first?.kind === 'p') return first.text;
+  }
+  if (item.transcript && item.format === 'article') {
+    const para = item.transcript.split(/\n\s*\n/).find(p => p.trim().length > 40);
+    if (para) return stripHtml(para).slice(0, 300);
+  }
+  if (item.description) {
+    const para = stripHtml(item.description);
+    if (para.length > 40) return para.slice(0, 300);
+  }
+  return null;
+};
+
+const ArticleBody = ({ item }: { item: ItemDetail }) => {
+  const hero = item.thumbnail_url ?? item.source_image_url;
+  const html = item.format === 'article' && item.transcript
+    ? marked.parse(item.transcript, { async: false, breaks: true }) as string
+    : item.description ?? '';
+  const excerpt = firstParagraph(item);
+  return (
+    <div className="max-w-[680px] mx-auto">
+      {hero && (
+        <div className={`rounded-3xl overflow-hidden mb-10 bg-brand-surface ${item.format === 'video' ? 'aspect-video' : item.format === 'podcast' ? 'aspect-square max-w-sm mx-auto' : 'aspect-[16/9]'}`}>
+          <img src={hero} alt={item.title} className="w-full h-full object-cover" />
+        </div>
+      )}
+      {excerpt && (
+        <blockquote className="border-l-2 border-brand-accent/40 pl-6 mb-10 font-serif italic text-[20px] leading-[1.5] text-brand-ink/75">
+          {excerpt}
+        </blockquote>
+      )}
+      {!html ? (
+        <div className="text-brand-ink/40 italic text-center py-8">Geen tekst beschikbaar.</div>
+      ) : (
+        <div className="prose-stroom font-serif text-[19px] leading-[1.75] text-brand-ink/85 max-w-none"
+             dangerouslySetInnerHTML={{ __html: html }} />
+      )}
+    </div>
+  );
+};
+
+const SummaryTab = ({ item, onSummarize, busy }: {
+  item: ItemDetail; onSummarize: () => void; busy: boolean;
+}) => {
+  if (!item.summary) {
+    return (
+      <div className="text-center py-8">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen samenvatting</div>
+        <button onClick={onSummarize} disabled={busy || !(item.transcript || item.description)}
+          className="px-4 py-2 rounded-full bg-brand-accent text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+          Samenvatten
+        </button>
+      </div>
+    );
+  }
+  const blocks = parseSummary(item.summary);
+  return (
+    <div className="space-y-4">
+      {blocks.map((b, i) => {
+        if (b.kind === 'h') {
+          return (
+            <p key={i} className="font-serif text-[15px] leading-[1.6] text-brand-ink/85">
+              <strong className="font-semibold text-brand-ink">{b.lead}</strong>{b.body ? ' ' : ''}{renderInline(b.body)}
+            </p>
+          );
+        }
+        if (b.kind === 'ul') {
+          return (
+            <ul key={i} className="space-y-2.5">
+              {b.items.map((it, j) => (
+                <li key={j} className="pl-4 border-l-2 border-brand-accent/30 font-serif text-[15px] leading-[1.55] text-brand-ink/80">
+                  {it.term && <strong className="font-semibold text-brand-ink">{it.term}</strong>}
+                  {it.term && it.body ? ' — ' : ''}
+                  {renderInline(it.body || '')}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={i} className="font-serif text-[15px] leading-[1.6] text-brand-ink/80">{renderInline(b.text)}</p>;
+      })}
+    </div>
+  );
+};
+
+const fmtTime = (s: number): string => {
+  if (!isFinite(s) || s < 0) return '0:00';
+  const m = Math.floor(s / 60);
+  const sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, '0')}`;
+};
+
+const ListenMode = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabled }: {
+  item: ItemDetail; onTranscribe: () => void; busy: boolean;
+  transcribeLabel: string; transcribeDisabled: boolean;
+}) => {
+  const mediaRef = useRef<HTMLMediaElement | null>(null);
+  const [cur, setCur] = useState(0);
+  const [dur, setDur] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [rate, setRate] = useState(1);
+
+  useEffect(() => { setCur(0); setDur(0); setPlaying(false); setRate(1); }, [item.id]);
+
+  const onTime = () => { if (mediaRef.current) setCur(mediaRef.current.currentTime); };
+  const onMeta = () => { if (mediaRef.current) setDur(mediaRef.current.duration); };
+
+  const toggle = () => {
+    const m = mediaRef.current; if (!m) return;
+    if (m.paused) m.play(); else m.pause();
+  };
+  const seekDelta = (d: number) => {
+    const m = mediaRef.current; if (!m) return;
+    m.currentTime = Math.max(0, Math.min(dur || m.duration || 0, m.currentTime + d));
+  };
+  const seekTo = (e: React.MouseEvent<HTMLDivElement>) => {
+    const m = mediaRef.current; if (!m || !dur) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    m.currentTime = ((e.clientX - r.left) / r.width) * dur;
+  };
+  const cycleRate = () => {
+    const next = rate === 1 ? 1.25 : rate === 1.25 ? 1.5 : rate === 1.5 ? 2 : 1;
+    setRate(next);
+    if (mediaRef.current) mediaRef.current.playbackRate = next;
+  };
+
+  const transcript = item.transcript;
+  const pct = dur > 0 ? (cur / dur) * 100 : 0;
+  const remaining = Math.max(0, dur - cur);
+
+  return (
+    <div className="max-w-[1000px] mx-auto">
+      <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-8">
+        <div className="md:sticky md:top-32 md:self-start">
+          {item.thumbnail_url && (
+            <div className="rounded-3xl overflow-hidden bg-brand-surface aspect-square mb-4">
+              <img src={item.thumbnail_url} alt="" className="w-full h-full object-cover" />
+            </div>
+          )}
+          <div className="font-display font-medium text-[20px] leading-[1.2] tracking-[-0.01em] mb-1">{item.title}</div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-5">{item.author ?? item.source_name}</div>
+
+          {item.media_url && (
+            <>
+              {item.format === 'video' ? (
+                <video ref={mediaRef as React.Ref<HTMLVideoElement>} src={item.media_url}
+                  onTimeUpdate={onTime} onLoadedMetadata={onMeta}
+                  onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+                  className="w-full rounded-xl mb-3 bg-brand-ink" />
+              ) : (
+                <audio ref={mediaRef as React.Ref<HTMLAudioElement>} src={item.media_url}
+                  onTimeUpdate={onTime} onLoadedMetadata={onMeta}
+                  onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+              )}
+
+              <div className="mb-3">
+                <div onClick={seekTo}
+                  className="h-1 bg-brand-ink/10 rounded-full overflow-hidden cursor-pointer">
+                  <div className="h-full bg-brand-accent" style={{ width: `${pct}%` }} />
+                </div>
+                <div className="flex justify-between mt-2 font-mono text-[10px] tracking-[0.1em] text-brand-ink/50">
+                  <span>{fmtTime(cur)}</span>
+                  <span>−{fmtTime(remaining)}</span>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between mb-6">
+                <button onClick={() => seekDelta(-15)} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/60 font-mono text-[11px]">−15</button>
+                <button onClick={toggle} className="w-12 h-12 rounded-full bg-brand-accent text-brand-cream flex items-center justify-center text-lg">{playing ? '❚❚' : '▶'}</button>
+                <button onClick={() => seekDelta(30)} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/60 font-mono text-[11px]">+30</button>
+                <button onClick={cycleRate} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center font-mono text-[10px] text-brand-ink/60">{rate}×</button>
+              </div>
+            </>
+          )}
+
+          {item.summary && (
+            <div className="rounded-2xl bg-brand-accent text-brand-cream p-5">
+              <div className="font-mono text-[9px] uppercase tracking-[0.22em] text-brand-cream/60 mb-2">✦ samenvatting</div>
+              <div className="prose-stroom prose-stroom-dark font-serif text-[14px] leading-[1.55] text-brand-cream/90"
+                   dangerouslySetInnerHTML={{ __html: marked.parse(item.summary, { async: false, breaks: true }) as string }} />
+            </div>
+          )}
+        </div>
+        <div>
+          <div className="flex items-center justify-between mb-6 pb-4 border-b border-brand-ink/10 flex-wrap gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent font-medium">◉ Transcript</span>
+            {transcript && <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40">{transcript.length} chars</span>}
+          </div>
+          {transcript ? (
+            <div className="space-y-5">
+              {transcript.split(/\n\n+/).filter(p => p.trim()).map((para, i) => (
+                <div key={i} className="rounded-2xl p-5 hover:bg-brand-surface/60 transition">
+                  <p className="font-serif text-[16px] leading-[1.65] text-brand-ink/80 whitespace-pre-wrap">{para}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="py-8 text-center">
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen transcript</div>
+              <button onClick={onTranscribe} disabled={busy || transcribeDisabled}
+                className="px-4 py-2.5 rounded-full bg-brand-accent text-brand-cream font-mono text-[11px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
+                {busy ? <Loader2 size={12} className="animate-spin" /> : <Mic size={12} />}
+                {transcribeLabel}
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const LessonsTab = ({ itemId, lessons, setLessons }: {
+  itemId: string;
+  lessons: Lesson[] | null;
+  setLessons: (updater: (prev: Lesson[] | null) => Lesson[] | null) => void;
+}) => {
+  const [distilling, setDistilling] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const { getDefault } = useSettings();
+
+  const onDistill = async () => {
+    setDistilling(true); setError(null);
+    try {
+      const updated = await distillMoreLessons(itemId, getDefault('distill'));
+      setLessons(() => updated);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setDistilling(false);
+    }
+  };
+
+  const setRating = async (lid: string, r: 1 | -1 | null) => {
+    setLessons(prev => prev?.map(l => l.id === lid ? { ...l, rating: r } : l) ?? prev);
+    try {
+      const updated = await rateLesson(lid, r);
+      setLessons(prev => prev?.map(l => l.id === lid ? updated : l) ?? prev);
+    } catch {
+      fetchLessons(itemId).then(d => setLessons(() => d)).catch(() => {});
+    }
+  };
+
+  const onLessonUpdate = (updated: Lesson) =>
+    setLessons(prev => prev?.map(l => l.id === updated.id ? updated : l) ?? prev);
+
+  if (lessons === null) return <div className="text-brand-ink/40 italic text-center py-6 text-sm">Laden…</div>;
+  if (lessons.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen lessen</div>
+        <button onClick={onDistill} disabled={distilling}
+          className="px-4 py-2 rounded-full bg-brand-accent text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
+          {distilling ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+          Destilleer kernlessen
+        </button>
+        {error && <div className="text-rose-600 text-sm mt-3">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <ul className="space-y-5">
+      {lessons.map(l => (
+        <li key={l.id} className="group">
+          <div className="flex items-start gap-3">
+            <div className="flex flex-col gap-1 pt-1 shrink-0">
+              <button onClick={() => setRating(l.id, l.rating === 1 ? null : 1)} title="Nuttig"
+                className={`w-6 h-6 rounded-full flex items-center justify-center transition ${
+                  l.rating === 1 ? 'bg-emerald-500 text-white' : 'bg-brand-surface text-brand-ink/40 hover:text-emerald-600'
+                }`}><Check size={11} /></button>
+              <button onClick={() => setRating(l.id, l.rating === -1 ? null : -1)} title="Niet nuttig"
+                className={`w-6 h-6 rounded-full flex items-center justify-center transition ${
+                  l.rating === -1 ? 'bg-rose-500 text-white' : 'bg-brand-surface text-brand-ink/40 hover:text-rose-600'
+                }`}><X size={11} /></button>
+            </div>
+            <div className={`flex-1 min-w-0 ${l.rating === -1 ? 'opacity-50' : ''}`}>
+              <div className="font-serif font-semibold text-[15px] text-brand-ink leading-tight mb-1">{l.title}</div>
+              <div className="font-serif text-[14px] leading-[1.55] text-brand-ink/75">{l.body}</div>
+              <LessonExpansion lesson={l} onUpdate={onLessonUpdate} />
+            </div>
+          </div>
+        </li>
+      ))}
+      <li className="pt-2">
+        <button onClick={onDistill} disabled={distilling}
+          className="w-full py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] text-brand-accent border border-dashed border-brand-accent/30 hover:bg-brand-accent/5 inline-flex items-center justify-center gap-2 disabled:opacity-50">
+          {distilling ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+          Meer destilleren
+        </button>
+        {error && <div className="text-rose-600 text-xs mt-2 text-center">{error}</div>}
+      </li>
+    </ul>
+  );
+};
+
+const AskTab = () => {
+  const [q, setQ] = useState('');
+  const suggestions = [
+    'Wat zijn de kernargumenten?',
+    'Welk bewijs draagt de auteur aan?',
+    'Wat is hier de tegenovergestelde positie?',
+  ];
+  return (
+    <div className="space-y-4">
+      <div className="font-serif text-[14px] text-brand-ink/70 leading-relaxed">
+        Stel een vraag over dit artikel. <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-brand-ink/45 ml-1">binnenkort</span>
+      </div>
+      <div className="space-y-2">
+        {suggestions.map(s => (
+          <button key={s} onClick={() => setQ(s)}
+            className="w-full text-left px-3 py-2 rounded-lg bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-serif text-[13px] text-brand-ink/75 transition">
+            {s}
+          </button>
+        ))}
+      </div>
+      <div className="relative pt-2">
+        <textarea value={q} onChange={e => setQ(e.target.value)} rows={3} placeholder="Type je vraag…" disabled
+          className="w-full px-4 py-3 rounded-2xl bg-brand-surface border border-brand-ink/10 font-serif text-[14px] text-brand-ink placeholder:text-brand-ink/30 focus:outline-none resize-none disabled:opacity-60" />
+        <button disabled
+          className="absolute bottom-4 right-3 px-4 py-1.5 rounded-full bg-brand-accent/50 text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] cursor-not-allowed">
+          Vraag →
+        </button>
+      </div>
+    </div>
+  );
+};
+
+type AITab = 'summary' | 'lessons' | 'transcript' | 'ask';
+
+const PANEL_TABS: { id: AITab; label: string }[] = [
+  { id: 'summary',    label: 'Samenvatting' },
+  { id: 'lessons',    label: 'Lessen' },
+  { id: 'transcript', label: 'Transcript' },
+  { id: 'ask',        label: 'Vraag' },
+];
+
+const TranscriptTab = ({ item }: { item: ItemDetail }) => {
+  if (!item.transcript) {
+    return (
+      <div className="text-center py-8">
+        <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/40 mb-3">Geen transcript</div>
+        <div className="font-serif text-[14px] text-brand-ink/65 leading-relaxed">
+          Alleen beschikbaar voor podcasts en video&rsquo;s.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="font-serif text-[14px] leading-[1.6] text-brand-ink/80 whitespace-pre-wrap">{item.transcript}</div>
+  );
+};
+
+const AIPanelTabs = ({ tab, setTab, lessonCount, transcriptDisabled }: {
+  tab: AITab; setTab: (t: AITab) => void; lessonCount: number | null; transcriptDisabled: boolean;
+}) => (
+  <div className="flex gap-1">
+    {PANEL_TABS.map(t => {
+      const disabled = t.id === 'transcript' && transcriptDisabled;
+      return (
+        <button key={t.id} onClick={() => !disabled && setTab(t.id)} disabled={disabled}
+          className={`relative flex-1 px-2 py-2 rounded-lg font-mono text-[10px] uppercase tracking-[0.16em] transition-all ${
+            disabled ? 'text-brand-ink/25 cursor-not-allowed' :
+            tab === t.id ? 'bg-brand-accent text-brand-cream' : 'text-brand-ink/55 hover:text-brand-ink hover:bg-brand-surface'
+          }`}>
+          {t.label}
+          {t.id === 'lessons' && lessonCount != null && (
+            <span className={`ml-1.5 ${tab === t.id ? 'opacity-60' : 'opacity-40'}`}>{lessonCount}</span>
+          )}
+        </button>
+      );
+    })}
+  </div>
+);
+
+const AIPanelBody = ({ tab, item, lessons, setLessons, onSummarize, summarizeBusy }: {
+  tab: AITab; item: ItemDetail; lessons: Lesson[] | null;
+  setLessons: (updater: (prev: Lesson[] | null) => Lesson[] | null) => void;
+  onSummarize: () => void; summarizeBusy: boolean;
+}) => (
+  <>
+    {tab === 'summary' && <SummaryTab item={item} onSummarize={onSummarize} busy={summarizeBusy} />}
+    {tab === 'lessons' && <LessonsTab itemId={item.id} lessons={lessons} setLessons={setLessons} />}
+    {tab === 'transcript' && <TranscriptTab item={item} />}
+    {tab === 'ask' && <AskTab />}
+  </>
+);
+
+const AIPanel = ({ item, lessons, setLessons, onSummarize, summarizeBusy }: {
+  item: ItemDetail; lessons: Lesson[] | null;
+  setLessons: (updater: (prev: Lesson[] | null) => Lesson[] | null) => void;
+  onSummarize: () => void; summarizeBusy: boolean;
+}) => {
+  const [tab, setTab] = useState<AITab>('summary');
+  return (
+    <aside className="hidden lg:block sticky top-24 self-start w-[400px] shrink-0">
+      <div className="rounded-3xl bg-brand-cream border border-brand-ink/10 overflow-hidden">
+        <div className="px-6 pt-6 pb-4 border-b border-brand-ink/10">
+          <div className="flex items-center justify-between mb-4">
+            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent font-medium">✦ AI Companion</span>
+            {item.summary_model && (
+              <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40">{item.summary_model}</span>
+            )}
+          </div>
+          <AIPanelTabs tab={tab} setTab={setTab} lessonCount={lessons?.length ?? null}
+            transcriptDisabled={!item.transcript} />
+        </div>
+        <div className="p-6 max-h-[640px] overflow-y-auto hide-scrollbar">
+          <AIPanelBody tab={tab} item={item} lessons={lessons} setLessons={setLessons}
+            onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
+        </div>
+      </div>
+    </aside>
+  );
+};
+
+const MobileAISections = ({ item, lessons, setLessons, onSummarize, summarizeBusy }: {
+  item: ItemDetail; lessons: Lesson[] | null;
+  setLessons: (updater: (prev: Lesson[] | null) => Lesson[] | null) => void;
+  onSummarize: () => void; summarizeBusy: boolean;
+}) => {
+  const sections: { id: AITab; label: string; count?: number | null; disabled?: boolean }[] = [
+    { id: 'summary', label: 'Samenvatting' },
+    { id: 'lessons', label: 'Lessen', count: lessons?.length ?? null },
+    { id: 'transcript', label: 'Transcript', disabled: !item.transcript },
+    { id: 'ask',     label: 'Vraag' },
+  ];
+  return (
+    <div className="lg:hidden space-y-3 mb-10">
+      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent font-medium mb-3 flex items-center gap-2">
+        ✦ AI Companion
+        {item.summary_model && <span className="text-brand-ink/40">· {item.summary_model}</span>}
+      </div>
+      {sections.filter(s => !s.disabled).map(s => (
+        <details key={s.id} className="group rounded-2xl bg-brand-cream border border-brand-ink/10 overflow-hidden">
+          <summary className="cursor-pointer px-5 py-4 flex items-center justify-between font-mono text-[11px] uppercase tracking-[0.18em] text-brand-ink/70 hover:text-brand-ink list-none">
+            <span className="flex items-center gap-2">
+              {s.label}
+              {s.count != null && <span className="text-brand-ink/40">· {s.count}</span>}
+            </span>
+            <ChevronDown size={14} className="transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="px-5 pb-5">
+            <AIPanelBody tab={s.id} item={item} lessons={lessons} setLessons={setLessons}
+              onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+};
+
 const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [lessons, setLessons] = useState<Lesson[] | null>(null);
 
   useEffect(() => {
-    setItem(null); setError(null);
+    setItem(null); setError(null); setLessons(null);
     fetchItem(id).then(setItem).catch(e => setError(String(e)));
+    fetchLessons(id).then(setLessons).catch(() => setLessons([]));
   }, [id]);
 
   useEffect(() => {
@@ -483,25 +1037,43 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   if (error && !item) return <div className="text-red-600 text-sm py-12">Fout: {error}</div>;
   if (!item) return <div className="text-brand-ink/40 italic py-12">Loading…</div>;
 
-  const hero = item.thumbnail_url ?? item.source_image_url;
   const date = item.published_at
     ? new Date(item.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' })
     : null;
   const isMedia = item.format === 'podcast' || item.format === 'video';
   const proc = item.processing_status;
 
+  const hasTranscript = !!(item.transcript && item.transcript.trim());
+  const isQueued = proc === 'queued';
+  const isTranscribing = proc === 'transcribing';
+  const transcribeLabel = hasTranscript ? 'Transcribed'
+                        : isQueued ? (item.queue_position ? `Queued #${item.queue_position}` : 'Queued…')
+                        : isTranscribing ? 'Transcribing…'
+                        : 'Transcribe';
+  const summarizeBusy = busy === 'summarize' || proc === 'summarizing';
+  const onSummarize = () => wrap('summarize', () => summarizeItem(id));
+
   return (
     <motion.article initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-      className="max-w-3xl mx-auto pt-2">
-      <div className="flex items-center justify-between gap-4 mb-12 flex-wrap">
-        <button onClick={onBack}
-          className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-ink/50 hover:text-brand-accent flex items-center gap-2">
-          <ArrowLeft size={14} /> Back to Flow
-        </button>
-        <div className="flex items-center gap-2 flex-wrap">
-          <ActionButton icon={Bookmark} label="Save"    active={item.status === 'pinned'}   busy={busy === 'pinned'}   onClick={() => toggle('pinned')} />
+      className="max-w-5xl mx-auto pt-2">
+      <div className="flex items-center justify-between gap-4 mb-10 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap min-w-0">
+          <button onClick={onBack} title="Back to Flow"
+            className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/45 hover:text-brand-accent flex items-center gap-1.5">
+            <ArrowLeft size={12} /> Flow
+          </button>
+          <span className="text-brand-ink/15">·</span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/70">
+            {FORMAT_BADGE[item.format].label}
+          </span>
+          {item.topics.map(t => (
+            <span key={t} className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/40">{t}</span>
+          ))}
+        </div>
+        <div className="flex items-center gap-1 flex-wrap">
+          <QuietAction icon={Bookmark} label="Save" active={item.status === 'pinned'} busy={busy === 'pinned'} onClick={() => toggle('pinned')} />
           <div className="relative">
-            <ActionButton
+            <QuietAction
               icon={CalendarClock}
               label={item.scheduled_for ? new Date(item.scheduled_for).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short' }) : 'Later'}
               active={item.status === 'later' || !!item.scheduled_for}
@@ -534,28 +1106,7 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
               </div>
             )}
           </div>
-          <ActionButton icon={Archive}  label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={() => toggle('archived')} />
-          <span className="w-px h-5 bg-brand-ink/10 mx-1" />
-          <ActionButton icon={Sparkles} label="Summarize"
-            busy={busy === 'summarize' || proc === 'summarizing'}
-            disabled={!(item.transcript || item.description)}
-            onClick={() => wrap('summarize', () => summarizeItem(id))} />
-          {isMedia && (() => {
-            const hasTranscript = !!(item.transcript && item.transcript.trim());
-            const isQueued = proc === 'queued';
-            const isTranscribing = proc === 'transcribing';
-            const label = hasTranscript ? 'Transcribed'
-                        : isQueued ? (item.queue_position ? `Queued #${item.queue_position}` : 'Queued…')
-                        : isTranscribing ? 'Transcribing…'
-                        : 'Transcribe';
-            return (
-              <ActionButton icon={Mic} label={label}
-                busy={busy === 'transcribe' || isQueued || isTranscribing}
-                disabled={!item.media_url || hasTranscript || isQueued || isTranscribing}
-                active={hasTranscript}
-                onClick={() => wrap('transcribe', () => transcribeItem(id))} />
-            );
-          })()}
+          <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={() => toggle('archived')} />
         </div>
       </div>
 
@@ -566,88 +1117,75 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
         </div>
       )}
 
-      <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent mb-4 flex items-center gap-3">
-        <span className={`px-2.5 py-1 rounded-full ${FORMAT_BADGE[item.format].className}`}>
-          {FORMAT_BADGE[item.format].label}
-        </span>
-        {item.topics.map(t => <span key={t} className="text-brand-ink/40">{t}</span>)}
-      </div>
-
-      <h1 className="font-display font-medium text-4xl md:text-6xl text-brand-ink tracking-[-0.03em] leading-[1.05] mb-8">
-        {item.title}
-      </h1>
-
-      <div className="flex items-center gap-4 mb-12 pb-8 border-b border-brand-ink/10">
-        {item.source_image_url && (
-          <img src={item.source_image_url} alt={item.source_name}
-               className="w-12 h-12 rounded-lg object-cover" />
-        )}
-        <div className="flex flex-col gap-0.5">
-          <div className="font-serif font-semibold text-brand-ink">{item.author ?? item.source_name}</div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">
-            {item.author && <>{item.source_name} · </>}{date}
+      {isMedia ? (
+        <>
+          <h1 className="font-display font-medium text-[36px] md:text-[56px] text-brand-ink tracking-[-0.03em] leading-[1.05] mb-6 max-w-4xl">
+            {item.title}
+          </h1>
+          <div className="flex items-center gap-3 mb-10 pb-6 border-b border-brand-ink/10">
+            {item.source_image_url ? (
+              <img src={item.source_image_url} alt={item.source_name} className="w-9 h-9 rounded-full object-cover" />
+            ) : (
+              <div className="w-9 h-9 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-xs">
+                {initials(item.author ?? item.source_name)}
+              </div>
+            )}
+            <div className="flex flex-col gap-0.5">
+              <div className="font-serif font-semibold text-[14px] text-brand-ink">{item.author ?? item.source_name}</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50">
+                {item.author && <>{item.source_name} · </>}{date}
+              </div>
+            </div>
           </div>
+          <ListenMode item={item}
+            onTranscribe={() => wrap('transcribe', () => transcribeItem(id))}
+            busy={busy === 'transcribe' || isQueued || isTranscribing}
+            transcribeLabel={transcribeLabel}
+            transcribeDisabled={!item.media_url || hasTranscript || isQueued || isTranscribing} />
+          {item.media_url && (
+            <a href={item.media_url} target="_blank" rel="noreferrer"
+               className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
+              View original at {item.source_name} <ExternalLink size={12} />
+            </a>
+          )}
+        </>
+      ) : (
+        <div className="lg:flex lg:gap-12 xl:gap-16">
+          <article className="flex-1 min-w-0 lg:max-w-[680px]">
+            <h1 className="font-display font-medium text-[40px] md:text-[56px] lg:text-[64px] text-brand-ink tracking-[-0.03em] leading-[1.02] mb-8">
+              {item.title}
+            </h1>
+            <div className="flex items-center gap-3 mb-10 pb-6 border-b border-brand-ink/10">
+              {item.source_image_url ? (
+                <img src={item.source_image_url} alt={item.source_name} className="w-11 h-11 rounded-full object-cover" />
+              ) : (
+                <div className="w-11 h-11 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-sm">
+                  {initials(item.author ?? item.source_name)}
+                </div>
+              )}
+              <div>
+                <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
+                <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
+                  {item.author && <>{item.source_name} · </>}{date}
+                </div>
+              </div>
+            </div>
+
+            <MobileAISections item={item} lessons={lessons} setLessons={setLessons}
+              onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
+
+            <ArticleBody item={item} />
+
+            {item.media_url && (
+              <a href={item.media_url} target="_blank" rel="noreferrer"
+                 className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
+                View original at {item.source_name} ↗
+              </a>
+            )}
+          </article>
+          <AIPanel item={item} lessons={lessons} setLessons={setLessons}
+            onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
         </div>
-      </div>
-
-      {hero && item.format !== 'article' && (
-        <div className={`rounded-3xl overflow-hidden mb-12 bg-brand-surface ${item.format === 'video' ? 'aspect-video' : 'aspect-square max-w-md mx-auto'}`}>
-          <img src={hero} alt={item.title} className="w-full h-full object-cover" />
-        </div>
-      )}
-
-      <LessonsSection itemId={id} />
-
-      {item.summary && (
-        <details open className="mb-8 border-t border-brand-ink/10 pt-6">
-          <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
-            Samenvatting{item.summary_model ? ` · ${item.summary_model}` : ''} · {item.summary.length} chars
-          </summary>
-          <div
-            className="prose-stroom font-serif text-[17px] leading-[1.65] text-brand-ink/85 max-w-none mt-6"
-            dangerouslySetInnerHTML={{ __html: marked.parse(item.summary, { async: false, breaks: true }) as string }}
-          />
-        </details>
-      )}
-
-      {item.description && (
-        <details className="mb-8 border-t border-brand-ink/10 pt-6">
-          <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
-            Beschrijving (RSS)
-          </summary>
-          <div
-            className="prose-stroom font-sans text-[16px] leading-[1.7] text-brand-ink/85 max-w-none mt-6"
-            dangerouslySetInnerHTML={{ __html: item.description }}
-          />
-        </details>
-      )}
-
-      {item.transcript && item.format === 'article' && (
-        <section className="mt-8 border-t border-brand-ink/10 pt-6">
-          <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent mb-6">
-            Artikel · {item.transcript.length} chars
-          </div>
-          <div
-            className="prose-stroom font-serif text-[17px] leading-[1.7] text-brand-ink/90 max-w-none"
-            dangerouslySetInnerHTML={{ __html: marked.parse(item.transcript, { async: false, breaks: true }) as string }}
-          />
-        </section>
-      )}
-
-      {item.transcript && item.format !== 'article' && (
-        <details className="mt-8 border-t border-brand-ink/10 pt-6">
-          <summary className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent cursor-pointer">
-            Transcript · {item.transcript.length} chars
-          </summary>
-          <pre className="font-serif text-[15px] leading-[1.7] text-brand-ink/80 whitespace-pre-wrap mt-6">{item.transcript}</pre>
-        </details>
-      )}
-
-      {item.media_url && (
-        <a href={item.media_url} target="_blank" rel="noreferrer"
-           className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
-          View original at {item.source_name} <ExternalLink size={12} />
-        </a>
       )}
     </motion.article>
   );

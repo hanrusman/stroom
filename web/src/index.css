@@ -1,10 +1,10 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..700&family=Inter+Tight:ital,wght@0,100..900;1,100..900&family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* Google Fonts loaded via <link> in index.html — Tailwind v4 strips @import url() that follows @import "tailwindcss" */
 
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-display: "Fraunces", "Newsreader", serif;
+  --font-display: "Playfair Display", "Newsreader", serif;
   --font-serif: "Newsreader", serif;
   --font-sans: "Inter Tight", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
@@ -107,3 +107,8 @@
 .prose-stroom pre code { background: transparent; padding: 0; }
 .prose-stroom img { border-radius: 16px; margin: 1.5em 0; max-width: 100%; height: auto; }
 .prose-stroom hr { border: 0; border-top: 1px solid color-mix(in srgb, var(--color-brand-ink) 12%, transparent); margin: 2em 0; }
+
+/* Dark variant for summary cards on bg-brand-ink / bg-brand-accent */
+.prose-stroom-dark h2, .prose-stroom-dark h3 { color: var(--color-brand-cream); }
+.prose-stroom-dark blockquote { border-left-color: color-mix(in srgb, var(--color-brand-cream) 40%, transparent); color: color-mix(in srgb, var(--color-brand-cream) 75%, transparent); }
+.prose-stroom-dark a { color: color-mix(in srgb, var(--color-brand-cream) 90%, transparent); text-decoration: underline; }

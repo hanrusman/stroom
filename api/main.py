@@ -589,9 +589,10 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
     item = await _fetch_item_row(session, item_id)
     transcript = (item["transcript"] or "").strip()
 
-    # Geen transcript maar wel media_url → eerst transcriberen.
+    # Geen transcript maar wel media_url én een audio/video item → eerst transcriberen.
     # Samenvat-agent levert via callback zowel transcript als summary.
-    if not transcript and item["media_url"]:
+    # Voor articles is media_url de artikel-URL zelf, dus skip die path.
+    if not transcript and item["media_url"] and item["type"] in ("podcast", "youtube"):
         cur_status = item["processing_status"]
         if cur_status in ("queued", "transcribing", "summarizing"):
             return await huygens_item(item_id, session)
