@@ -1,6 +1,7 @@
 """Topic-digest pipeline. Vandaaruit groeit ook de weekly/monthly TTS-podcast."""
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Optional
 
@@ -9,7 +10,12 @@ from sqlalchemy import text as sa_text
 
 DIGEST_MAX_ITEMS = 40
 DIGEST_PER_ITEM_CHARS = 600
-DIGEST_GENERATION_STALE_MIN = 10  # bg-task is dood als hij na 10 min nog 'is_generating' is
+DIGEST_GENERATION_STALE_MIN = 30  # bg-task is dood als hij na N min nog 'is_generating' is
+DIGEST_LLM_TIMEOUT = 1200.0  # 20 min per digest — grote weekly + zware topic kan zo lang duren
+
+# Module-level semaphore: serialiseer digest-generaties zodat we lokale qwen niet
+# met 12 tegelijk overspoelen. Eén tegelijk = elke krijgt z'n eigen tijd, geen race.
+_DIGEST_SEM = asyncio.Semaphore(1)
 
 DIGEST_MODEL_MAP: dict[str, str] = {
     "qwen": "stroom-bulk",
@@ -61,7 +67,17 @@ def build_corpus(rows) -> list[str]:
 async def run_digest_generation(topic_id: str, topic_name: str, slug: str,
                                 model: str, window_hours: int,
                                 async_session_maker, llm_service):
-    """Background-task: leest items, roept LLM aan, schrijft naar topic_digests."""
+    """Background-task: leest items, roept LLM aan, schrijft naar topic_digests.
+    Geserialiseerd via module-level semaphore zodat parallelle calls niet timen out
+    op een lokale single-GPU LLM."""
+    async with _DIGEST_SEM:
+        await _run_digest_generation_inner(topic_id, topic_name, slug, model, window_hours,
+                                           async_session_maker, llm_service)
+
+
+async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str,
+                                       model: str, window_hours: int,
+                                       async_session_maker, llm_service):
     llm_alias = DIGEST_MODEL_MAP[model]
     try:
         async with async_session_maker() as bg:
@@ -99,10 +115,21 @@ async def run_digest_generation(topic_id: str, topic_name: str, slug: str,
 
             corpus = "\n\n---\n\n".join(blocks)
             system_prompt, user_prompt = build_digest_prompt(topic_name, window_hours, corpus)
-            markdown = await llm_service.call_llm(llm_alias, [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ], temperature=0.4, timeout=300.0)
+            markdown = ""
+            last_err: Optional[Exception] = None
+            for attempt in range(2):
+                try:
+                    markdown = await llm_service.call_llm(llm_alias, [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ], temperature=0.4 if attempt == 0 else 0.6, timeout=DIGEST_LLM_TIMEOUT)
+                    if markdown and markdown.strip():
+                        break
+                except Exception as e:
+                    last_err = e
+                    print(f"[digest bg] {slug} {window_hours}u poging {attempt+1} faalde: {e}", flush=True)
+            if not (markdown and markdown.strip()):
+                raise last_err or RuntimeError(f"LLM gaf 2x lege output (model {llm_alias})")
 
             await bg.exec(sa_text(
                 """
@@ -113,17 +140,26 @@ async def run_digest_generation(topic_id: str, topic_name: str, slug: str,
                 """
             ).bindparams(m=markdown.strip(), n=len(blocks), ml=llm_alias,
                          w=window_hours, tid=topic_id))
+            # Append run-history zodat user door de laatste 7 kan navigeren.
+            await bg.exec(sa_text(
+                """
+                INSERT INTO topic_digest_runs (topic_id, window_hours, model, item_count, markdown)
+                VALUES (CAST(:tid AS uuid), :w, :ml, :n, :m)
+                """
+            ).bindparams(tid=topic_id, w=window_hours, ml=llm_alias,
+                         n=len(blocks), m=markdown.strip()))
             await bg.commit()
             print(f"[digest bg] {slug} {window_hours}u klaar — {len(blocks)} items, {llm_alias}",
                   flush=True)
     except Exception as exc:
+        msg = (str(exc) or repr(exc) or type(exc).__name__).strip() or "onbekende fout"
         try:
             async with async_session_maker() as bg:
                 await bg.exec(sa_text(
                     "UPDATE topic_digests SET is_generating=false, error=:e "
                     "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(e=str(exc)[:500], tid=topic_id, w=window_hours))
+                ).bindparams(e=msg[:500], tid=topic_id, w=window_hours))
                 await bg.commit()
         except Exception:
             pass
-        print(f"[digest bg] {slug} {window_hours}u faalde: {exc}", flush=True)
+        print(f"[digest bg] {slug} {window_hours}u faalde: {msg}", flush=True)

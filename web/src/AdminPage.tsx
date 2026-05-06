@@ -1,10 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered, ChevronUp, ChevronDown, Mic, PlayCircle, Sparkles, BookOpen } from 'lucide-react';
 import {
   AdminSource, AdminSourceUpdate, AdminSourceCreate, SourceKind,
   fetchAdminSources, updateAdminSource, createAdminSource, deleteAdminSource,
   refreshAdminSource, refreshAllAdminSources, fetchAdminQueue, QueueItem,
   fetchTopics, Topic, ApiError, DigestModel, ModelAction,
+  AdminTopic, fetchAdminTopics, updateTopicOrder, deleteTopic,
+  CronResult, cronTranscribePodcasts, cronTranscribeVideos, cronSummarizeArticles, cronDigestTopics,
+  removeFromQueue, restartQueue, fetchDigestStatus, DigestStatus,
 } from './api';
 import { useSettings } from './settings';
 
@@ -13,6 +16,7 @@ const ACTION_LABELS: Record<ModelAction, string> = {
   expand: 'Verdiep deze les',
   distill: 'Meer lessen destilleren',
   digest: 'Digest genereren',
+  ask: 'Vraag beantwoorden',
 };
 
 const ModelDefaultsPanel = () => {
@@ -24,7 +28,7 @@ const ModelDefaultsPanel = () => {
 
   useEffect(() => { setDraft(settings.model_defaults); }, [settings]);
 
-  const dirty = (['expand','distill','digest'] as ModelAction[]).some(a => draft[a] !== settings.model_defaults[a]);
+  const dirty = (['expand','distill','digest','ask'] as ModelAction[]).some(a => draft[a] !== settings.model_defaults[a]);
 
   const onSave = async () => {
     setBusy(true); setErr(null);
@@ -42,8 +46,8 @@ const ModelDefaultsPanel = () => {
     <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
       <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Model-defaults</h2>
       <p className="text-[13px] text-brand-ink/60 mb-5">Welk model wordt gebruikt als je nergens een override hebt ingesteld.</p>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {(['expand','distill','digest'] as ModelAction[]).map(action => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {(['expand','distill','digest','ask'] as ModelAction[]).map(action => (
           <label key={action} className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">{ACTION_LABELS[action]}</span>
             <select value={draft[action]} disabled={busy}
@@ -500,29 +504,317 @@ const NewSourceForm = ({ topics, onCreated }: {
 };
 
 
+type CronJob = 'podcasts' | 'videos' | 'articles' | 'digest';
+
+const CronPanel = () => {
+  const { getDefault } = useSettings();
+  const [busy, setBusy] = useState<CronJob | null>(null);
+  const [last, setLast] = useState<{ job: CronJob; result: CronResult } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [digestStatus, setDigestStatus] = useState<DigestStatus | null>(null);
+  const digestPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    // Poll bij mount zodat de knop altijd de huidige status reflecteert,
+    // ook na een refresh terwijl er nog digests draaien.
+    startDigestPolling();
+    return () => { if (digestPollRef.current) clearInterval(digestPollRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const startDigestPolling = () => {
+    if (digestPollRef.current) clearInterval(digestPollRef.current);
+    const tick = async () => {
+      try {
+        const s = await fetchDigestStatus('daily');
+        setDigestStatus(s);
+        if (s.in_progress === 0 && digestPollRef.current) {
+          clearInterval(digestPollRef.current);
+          digestPollRef.current = null;
+        }
+      } catch { /* swallow */ }
+    };
+    tick();
+    digestPollRef.current = setInterval(tick, 4000);
+  };
+
+  const run = async (job: CronJob, fn: () => Promise<CronResult>) => {
+    if (busy) return;
+    setBusy(job); setErr(null);
+    try {
+      const result = await fn();
+      setLast({ job, result });
+      if (job === 'digest') startDigestPolling();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const buttons: { id: CronJob; label: string; icon: React.ComponentType<{ size?: number }>;
+                   action: () => Promise<CronResult>; sub: string }[] = [
+    { id: 'podcasts', label: 'Podcasts (24u)', icon: Mic,
+      action: () => cronTranscribePodcasts(24),
+      sub: 'transcribeer alle podcasts ≥ weight 5' },
+    { id: 'videos', label: 'Videos (24u)', icon: PlayCircle,
+      action: () => cronTranscribeVideos(24),
+      sub: 'transcribeer alle YouTube ≥ weight 5' },
+    { id: 'articles', label: 'Artikelen (24u)', icon: Sparkles,
+      action: () => cronSummarizeArticles(24),
+      sub: 'samenvatting voor articles ≥ weight 5' },
+    { id: 'digest', label: 'Topic-digests', icon: BookOpen,
+      action: () => cronDigestTopics('daily', getDefault('digest')),
+      sub: digestStatus && digestStatus.in_progress > 0
+        ? `bezig — ${digestStatus.in_progress} te gaan · ${digestStatus.done} klaar`
+        : `genereer dagelijkse digest per topic · ${getDefault('digest')}` },
+  ];
+
+  const digestRunning = (digestStatus?.in_progress ?? 0) > 0;
+
+  const summary = (job: CronJob, r: CronResult): string => {
+    if (job === 'podcasts' || job === 'videos') return `${r.queued} in queue gezet`;
+    if (job === 'articles') return `${r.articles_kicked} samenvattingen gestart`;
+    if (job === 'digest') return `${r.digests_started} digests gestart`;
+    return JSON.stringify(r);
+  };
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Nachtelijke taken</h2>
+      <p className="text-[13px] text-brand-ink/60 mb-5">Handmatig triggeren — anders draait dit allemaal automatisch in de nightly cron.</p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {buttons.map(b => {
+          const isBusy = busy === b.id;
+          const isDigestActive = b.id === 'digest' && digestRunning;
+          const disabled = !!busy || isDigestActive;
+          const Icon = b.icon;
+          const showSpinner = isBusy || isDigestActive;
+          return (
+            <button key={b.id} onClick={() => run(b.id, b.action)} disabled={disabled}
+              className="flex flex-col items-start gap-2 p-4 rounded-xl bg-brand-surface hover:bg-brand-accent hover:text-brand-cream text-brand-ink/80 transition disabled:opacity-50 disabled:cursor-not-allowed text-left">
+              <div className="flex items-center gap-2">
+                {showSpinner ? <Loader2 size={16} className="animate-spin" /> : <Icon size={16} />}
+                <span className="font-mono text-[11px] uppercase tracking-[0.18em] font-medium">
+                  {b.label}{isDigestActive ? ' · bezig' : ''}
+                </span>
+              </div>
+              <span className="font-mono text-[10px] uppercase tracking-[0.16em] opacity-60">{b.sub}</span>
+            </button>
+          );
+        })}
+      </div>
+      {last && (
+        <div className="mt-4 px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-mono">
+          {buttons.find(b => b.id === last.job)?.label}: {summary(last.job, last.result)}
+        </div>
+      )}
+      {digestStatus && (digestStatus.in_progress > 0 || (last?.job === 'digest')) && (
+        <div className="mt-3 px-4 py-3 rounded-xl bg-brand-surface border border-brand-ink/10 text-sm font-mono flex items-center gap-3">
+          {digestStatus.in_progress > 0 && <Loader2 size={14} className="animate-spin text-brand-accent" />}
+          <span className="text-brand-ink/70">
+            {digestStatus.in_progress > 0
+              ? `${digestStatus.in_progress} bezig · ${digestStatus.done} klaar · ${digestStatus.failed} mislukt`
+              : `Klaar — ${digestStatus.done} succesvol${digestStatus.failed ? `, ${digestStatus.failed} mislukt` : ''}`}
+          </span>
+        </div>
+      )}
+      {err && <div className="mt-4 text-rose-600 text-sm">{err}</div>}
+    </section>
+  );
+};
+
+const TopicsPanel = () => {
+  const [topics, setTopics] = useState<AdminTopic[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [reassignTo, setReassignTo] = useState<string>('');
+
+  const load = () => fetchAdminTopics().then(setTopics).catch(e => setErr(String(e)));
+  useEffect(() => { load(); }, []);
+
+  const move = async (slug: string, dir: -1 | 1) => {
+    if (!topics || busy) return;
+    const idx = topics.findIndex(t => t.slug === slug);
+    const j = idx + dir;
+    if (idx < 0 || j < 0 || j >= topics.length) return;
+    const next = topics.slice();
+    [next[idx], next[j]] = [next[j], next[idx]];
+    setTopics(next);
+    setBusy(true); setErr(null);
+    try {
+      await updateTopicOrder(next.map(t => t.slug));
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startDelete = (slug: string) => {
+    setPendingDelete(slug);
+    const others = (topics ?? []).filter(t => t.slug !== slug);
+    setReassignTo(others[0]?.slug ?? '');
+    setErr(null);
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete || !reassignTo || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      await deleteTopic(pendingDelete, reassignTo);
+      setPendingDelete(null);
+      await load();
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Topics</h2>
+      <p className="text-[13px] text-brand-ink/60 mb-5">Volgorde aanpassen met de pijlen, of een topic verwijderen — alle gekoppelde sources en items verhuizen dan naar het topic dat je kiest.</p>
+
+      {topics === null ? (
+        <div className="text-brand-ink/40 italic text-sm py-4">Laden…</div>
+      ) : (
+        <ul className="divide-y divide-brand-ink/5">
+          {topics.map((t, i) => {
+            const isDeleting = pendingDelete === t.slug;
+            return (
+              <li key={t.slug} className="py-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex flex-col">
+                    <button onClick={() => move(t.slug, -1)} disabled={busy || i === 0}
+                      className="w-6 h-5 flex items-center justify-center text-brand-ink/40 hover:text-brand-accent disabled:opacity-25 disabled:cursor-not-allowed">
+                      <ChevronUp size={14} />
+                    </button>
+                    <button onClick={() => move(t.slug, 1)} disabled={busy || i === topics.length - 1}
+                      className="w-6 h-5 flex items-center justify-center text-brand-ink/40 hover:text-brand-accent disabled:opacity-25 disabled:cursor-not-allowed">
+                      <ChevronDown size={14} />
+                    </button>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="font-serif font-semibold text-[15px] text-brand-ink">{t.name}</div>
+                    <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/45 mt-0.5">
+                      {t.slug} · {t.source_count} sources · {t.item_count} items
+                    </div>
+                  </div>
+                  {!isDeleting && (
+                    <button onClick={() => startDelete(t.slug)} disabled={busy}
+                      title="Verwijder topic"
+                      className="px-2 py-1.5 rounded-lg text-brand-ink/40 hover:text-rose-600 hover:bg-rose-50 transition disabled:opacity-50">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+                {isDeleting && (
+                  <div className="mt-3 ml-9 p-4 rounded-xl bg-rose-50/60 border border-rose-200/60">
+                    <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-rose-700 mb-2">
+                      Verplaats {t.source_count} sources + {t.item_count} items naar:
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <select value={reassignTo} onChange={e => setReassignTo(e.target.value)}
+                        className="flex-1 min-w-[160px] px-3 py-2 rounded-lg bg-white border border-brand-ink/10 text-sm">
+                        {topics.filter(o => o.slug !== t.slug).map(o => (
+                          <option key={o.slug} value={o.slug}>{o.name}</option>
+                        ))}
+                      </select>
+                      <button onClick={confirmDelete} disabled={busy || !reassignTo}
+                        className="px-3 py-2 rounded-lg bg-rose-600 text-white text-sm flex items-center gap-1.5 disabled:opacity-50 hover:bg-rose-700">
+                        {busy ? <Loader2 size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                        Verwijder
+                      </button>
+                      <button onClick={() => setPendingDelete(null)} disabled={busy}
+                        className="px-3 py-2 rounded-lg text-brand-ink/60 hover:bg-brand-surface text-sm">
+                        Annuleer
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {err && <div className="mt-3 text-rose-600 text-sm">{err}</div>}
+    </section>
+  );
+};
+
 const QueuePanel = ({ onClose }: { onClose: () => void }) => {
   const [items, setItems] = useState<QueueItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  const load = async () => {
+    try { setItems(await fetchAdminQueue()); }
+    catch (e) { setError(String(e)); }
+  };
 
   useEffect(() => {
     let cancelled = false;
-    const load = () => fetchAdminQueue()
+    const tick = () => fetchAdminQueue()
       .then(d => { if (!cancelled) setItems(d); })
       .catch(e => { if (!cancelled) setError(String(e)); });
-    load();
-    const t = setInterval(load, 5000);
+    tick();
+    const t = setInterval(tick, 5000);
     return () => { cancelled = true; clearInterval(t); };
   }, []);
+
+  const remove = async (id: string) => {
+    setBusyId(id); setError(null);
+    try { await removeFromQueue(id); await load(); }
+    catch (e) { setError(e instanceof ApiError ? e.detail : String(e)); }
+    finally { setBusyId(null); }
+  };
+
+  const restart = async () => {
+    if (restarting) return;
+    if (!confirm('Stuck items resetten en queue herstarten?')) return;
+    setRestarting(true); setError(null); setToast(null);
+    try {
+      const r = await restartQueue();
+      const stuck = typeof r.stuck_reset === 'number' ? r.stuck_reset : 0;
+      setToast(`${stuck} stuck-items gereset · queue ${r.queue_started ? 'gekickt' : 'niet gestart'}`);
+      setError(null);
+      await load();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setRestarting(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   return (
     <div className="fixed inset-0 z-50 bg-brand-ink/40 backdrop-blur-sm flex items-start justify-center pt-20 px-6"
          onClick={onClose}>
       <div className="bg-brand-cream rounded-2xl shadow-xl border border-brand-ink/10 max-w-2xl w-full max-h-[70vh] overflow-hidden flex flex-col"
            onClick={e => e.stopPropagation()}>
-        <div className="flex justify-between items-center px-6 py-4 border-b border-brand-ink/10">
+        <div className="flex justify-between items-center px-6 py-4 border-b border-brand-ink/10 gap-3">
           <h3 className="font-display text-2xl text-brand-ink tracking-[-0.01em]">Transcribe queue</h3>
-          <button onClick={onClose} className="text-brand-ink/40 hover:text-brand-ink/60 p-1"><X size={18} /></button>
+          <div className="flex items-center gap-2">
+            <button onClick={restart} disabled={restarting}
+              className="px-3 py-1.5 rounded-full bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] inline-flex items-center gap-1.5 disabled:opacity-50">
+              {restarting ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              Herstart queue
+            </button>
+            <button onClick={onClose} className="text-brand-ink/40 hover:text-brand-ink/60 p-1"><X size={18} /></button>
+          </div>
         </div>
+        {toast && <div className="px-6 py-2 bg-emerald-50 border-b border-emerald-200 text-emerald-800 text-[12px] font-mono">{toast}</div>}
         <div className="overflow-y-auto p-2">
           {error && <div className="text-red-600 text-sm m-4">{error}</div>}
           {items === null ? (
@@ -534,8 +826,8 @@ const QueuePanel = ({ onClose }: { onClose: () => void }) => {
               {items.map(it => (
                 <li key={it.id} className="px-4 py-3 flex items-center gap-3">
                   <div className="w-8 text-center font-mono text-xs">
-                    {it.processing_status === 'transcribing'
-                      ? <Loader2 size={14} className="animate-spin text-blue-600 mx-auto" />
+                    {it.processing_status === 'transcribing' || it.processing_status === 'summarizing'
+                      ? <Loader2 size={14} className={`animate-spin mx-auto ${it.processing_status === 'transcribing' ? 'text-blue-600' : 'text-amber-600'}`} />
                       : <span className="text-brand-ink/50">#{it.queue_position}</span>}
                   </div>
                   <div className="flex-1 min-w-0">
@@ -545,10 +837,15 @@ const QueuePanel = ({ onClose }: { onClose: () => void }) => {
                     </div>
                   </div>
                   <span className={`text-[10px] font-mono uppercase tracking-[0.1em] px-2 py-0.5 rounded-full ${
-                    it.processing_status === 'transcribing'
-                      ? 'bg-blue-50 text-blue-700'
-                      : 'bg-brand-surface text-brand-ink/50'
+                    it.processing_status === 'transcribing' ? 'bg-blue-50 text-blue-700' :
+                    it.processing_status === 'summarizing' ? 'bg-amber-50 text-amber-700' :
+                    'bg-brand-surface text-brand-ink/50'
                   }`}>{it.processing_status}</span>
+                  <button onClick={() => remove(it.id)} disabled={busyId === it.id}
+                    title="Uit queue halen"
+                    className="p-1.5 rounded text-brand-ink/40 hover:text-rose-600 hover:bg-rose-50 disabled:opacity-30">
+                    {busyId === it.id ? <Loader2 size={13} className="animate-spin" /> : <X size={13} />}
+                  </button>
                 </li>
               ))}
             </ul>
@@ -631,6 +928,10 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
       </div>
 
       <ModelDefaultsPanel />
+
+      <CronPanel />
+
+      <TopicsPanel />
 
       <div className="mb-6">
         <NewSourceForm topics={topics}

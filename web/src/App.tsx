@@ -1,13 +1,15 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { SettingsProvider, useSettings } from './settings';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
-         fetchTopicDigest, regenerateTopicDigest,
+         fetchTopicDigest, regenerateTopicDigest, fetchTopicDigestHistory, TopicDigestRun,
          distillMoreLessons, expandLesson, fetchLessonsDigest, regenerateLessonsDigest,
+         askItem, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
@@ -21,6 +23,13 @@ const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{
 
 const stripHtml = (s: string | null) =>
   (s ?? '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+
+// Security: sanitize markdown output before rendering with dangerouslySetInnerHTML
+const sanitizeMarkdown = (content: string | null | undefined, options?: { async?: boolean; breaks?: boolean }): string => {
+  if (!content) return '';
+  const html = marked.parse(content, { async: false, breaks: options?.breaks ?? true }) as string;
+  return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'blockquote', 'code', 'pre', 'span'], ALLOWED_ATTR: ['href', 'target', 'class'] });
+};
 
 const TopicChip = ({ topic, active, onClick }: {
   key?: React.Key; topic: Topic; active: boolean; onClick: () => void;
@@ -239,9 +248,21 @@ const ItemCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format:
   return <MediaCard item={item} format={format} onOpen={onOpen} onUpdate={onUpdate} />;
 };
 
-const Rail = ({ format, items, onOpen, onUpdate }: { key?: React.Key; format: ItemFormat; items: HuygensItem[]; onOpen: (id: string) => void; onUpdate?: (id: string, u: Partial<HuygensItem>) => void }) => {
+const Rail = ({ format, items, onOpen, onUpdate, onArchiveAll }: {
+  key?: React.Key; format: ItemFormat; items: HuygensItem[];
+  onOpen: (id: string) => void;
+  onUpdate?: (id: string, u: Partial<HuygensItem>) => void;
+  onArchiveAll?: (format: ItemFormat) => Promise<void>;
+}) => {
   const meta = RAIL_META[format];
   const Icon = meta.icon;
+  const [archiving, setArchiving] = useState(false);
+  const onArchive = async () => {
+    if (!onArchiveAll || archiving || items.length === 0) return;
+    if (!confirm(`Archiveer alle ${items.length} ${meta.label.toLowerCase()} en laad nieuwe?`)) return;
+    setArchiving(true);
+    try { await onArchiveAll(format); } finally { setArchiving(false); }
+  };
   return (
     <section className="mb-20">
       <div className="flex justify-between items-end mb-10 border-b border-brand-ink/10 pb-6">
@@ -262,6 +283,15 @@ const Rail = ({ format, items, onOpen, onUpdate }: { key?: React.Key; format: It
         <div className="flex overflow-x-auto hide-scrollbar gap-8 pb-12 -mx-6 px-6 md:-mx-12 md:px-12 snap-x">
           {items.map(item => <ItemCard key={item.id} item={item} format={format} onOpen={onOpen}
             onUpdate={u => onUpdate?.(item.id, u)} />)}
+          {onArchiveAll && (
+            <button onClick={onArchive} disabled={archiving}
+              className="snap-start shrink-0 w-[260px] rounded-3xl border border-dashed border-brand-ink/20 bg-brand-surface/40 hover:bg-brand-accent hover:text-brand-cream hover:border-brand-accent text-brand-ink/60 transition flex flex-col items-center justify-center gap-3 p-6 disabled:opacity-50 disabled:cursor-wait">
+              {archiving ? <Loader2 size={20} className="animate-spin" /> : <Archive size={20} />}
+              <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-center leading-relaxed">
+                {archiving ? 'Archiveren…' : <>Archiveer alle<br/>en laad nieuwe</>}
+              </span>
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -347,7 +377,7 @@ const LessonExpansion = ({ lesson, onUpdate, showSource }: {
       {open && lesson.expansion && (
         <div className="mt-3 p-4 bg-brand-surface/60 rounded-lg border border-brand-ink/10">
           <div className="font-serif text-[15px] leading-[1.65] text-brand-ink/85 prose prose-sm max-w-none"
-            dangerouslySetInnerHTML={{ __html: marked.parse(lesson.expansion) as string }} />
+            dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(lesson.expansion) }} />
           {showSource && (
             <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40">
               uit: {lesson.source_name} · {lesson.item_title}
@@ -565,8 +595,8 @@ const firstParagraph = (item: ItemDetail): string | null => {
 const ArticleBody = ({ item }: { item: ItemDetail }) => {
   const hero = item.thumbnail_url ?? item.source_image_url;
   const html = item.format === 'article' && item.transcript
-    ? marked.parse(item.transcript, { async: false, breaks: true }) as string
-    : item.description ?? '';
+    ? sanitizeMarkdown(item.transcript)
+    : DOMPurify.sanitize(item.description ?? '');
   const excerpt = firstParagraph(item);
   return (
     <div className="max-w-[680px] mx-auto">
@@ -596,43 +626,49 @@ const SummaryTab = ({ item, onSummarize, busy }: {
   if (!item.summary) {
     return (
       <div className="text-center py-8">
-        <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen samenvatting</div>
-        <button onClick={onSummarize} disabled={busy || !(item.transcript || item.description)}
-          className="px-4 py-2 rounded-full bg-brand-accent text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
-          {busy ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-          Samenvatten
-        </button>
+        {busy ? (
+          <>
+            <Loader2 size={20} className="animate-spin text-brand-accent mx-auto mb-3" />
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent">Bezig met samenvatten…</div>
+            <div className="font-serif text-[13px] text-brand-ink/55 mt-2 leading-[1.55]">Dit kan even duren — het model leest de hele bron.</div>
+          </>
+        ) : (
+          <>
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen samenvatting</div>
+            <button onClick={onSummarize} disabled={!(item.transcript || item.description)}
+              className="px-4 py-2 rounded-full bg-brand-accent text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
+              <Sparkles size={11} />
+              Samenvatten
+            </button>
+          </>
+        )}
       </div>
     );
   }
-  const blocks = parseSummary(item.summary);
   return (
-    <div className="space-y-4">
-      {blocks.map((b, i) => {
-        if (b.kind === 'h') {
-          return (
-            <p key={i} className="font-serif text-[15px] leading-[1.6] text-brand-ink/85">
-              <strong className="font-semibold text-brand-ink">{b.lead}</strong>{b.body ? ' ' : ''}{renderInline(b.body)}
-            </p>
-          );
-        }
-        if (b.kind === 'ul') {
-          return (
-            <ul key={i} className="space-y-2.5">
-              {b.items.map((it, j) => (
-                <li key={j} className="pl-4 border-l-2 border-brand-accent/30 font-serif text-[15px] leading-[1.55] text-brand-ink/80">
-                  {it.term && <strong className="font-semibold text-brand-ink">{it.term}</strong>}
-                  {it.term && it.body ? ' — ' : ''}
-                  {renderInline(it.body || '')}
-                </li>
-              ))}
-            </ul>
-          );
-        }
-        return <p key={i} className="font-serif text-[15px] leading-[1.6] text-brand-ink/80">{renderInline(b.text)}</p>;
-      })}
-    </div>
+    <>
+      <div className="flex items-center justify-end mb-3">
+        <button onClick={onSummarize} disabled={busy || !(item.transcript || item.description)}
+          title="Hersamenvatten"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/55 transition disabled:opacity-50">
+          {busy ? <Loader2 size={11} className="animate-spin" /> : <RefreshCw size={11} />}
+          {busy ? 'Bezig…' : 'Hersamenvatten'}
+        </button>
+      </div>
+      <div
+        className="prose-stroom font-serif text-[15px] leading-[1.6] text-brand-ink/85 max-w-none"
+        dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(item.summary) }}
+      />
+    </>
   );
+};
+
+const isoWeek = (d: Date): number => {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  return Math.ceil((((+t - +yearStart) / 86400000) + 1) / 7);
 };
 
 const fmtTime = (s: number): string => {
@@ -642,7 +678,13 @@ const fmtTime = (s: number): string => {
   return `${m}:${String(sec).padStart(2, '0')}`;
 };
 
-const ListenMode = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabled }: {
+const youtubeId = (url: string | null): string | null => {
+  if (!url) return null;
+  const m = url.match(/(?:youtube\.com\/(?:v|embed|watch\?v=)\/?|youtu\.be\/)([\w-]{11})/);
+  return m ? m[1] : null;
+};
+
+const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabled }: {
   item: ItemDetail; onTranscribe: () => void; busy: boolean;
   transcribeLabel: string; transcribeDisabled: boolean;
 }) => {
@@ -677,88 +719,137 @@ const ListenMode = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisab
   };
 
   const transcript = item.transcript;
+  const segments = item.transcript_segments ?? null;
   const pct = dur > 0 ? (cur / dur) * 100 : 0;
   const remaining = Math.max(0, dur - cur);
+  const isVideo = item.format === 'video';
+  const ytId = isVideo ? youtubeId(item.media_url) : null;
+
+  const seekToSec = (s: number) => {
+    const m = mediaRef.current;
+    if (!m) return;
+    m.currentTime = Math.max(0, s);
+    if (m.paused) m.play().catch(() => {});
+  };
+  const activeIdx = segments
+    ? segments.findIndex(s => cur >= s.start && cur < s.end)
+    : -1;
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (activeIdx < 0 || !transcriptRef.current) return;
+    const el = transcriptRef.current.querySelector<HTMLButtonElement>(`[data-seg-idx="${activeIdx}"]`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }, [activeIdx]);
 
   return (
-    <div className="max-w-[1000px] mx-auto">
-      <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] gap-8">
-        <div className="md:sticky md:top-32 md:self-start">
-          {item.thumbnail_url && (
-            <div className="rounded-3xl overflow-hidden bg-brand-surface aspect-square mb-4">
-              <img src={item.thumbnail_url} alt="" className="w-full h-full object-cover" />
-            </div>
-          )}
-          <div className="font-display font-medium text-[20px] leading-[1.2] tracking-[-0.01em] mb-1">{item.title}</div>
-          <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-5">{item.author ?? item.source_name}</div>
-
-          {item.media_url && (
-            <>
-              {item.format === 'video' ? (
-                <video ref={mediaRef as React.Ref<HTMLVideoElement>} src={item.media_url}
-                  onTimeUpdate={onTime} onLoadedMetadata={onMeta}
-                  onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
-                  className="w-full rounded-xl mb-3 bg-brand-ink" />
-              ) : (
-                <audio ref={mediaRef as React.Ref<HTMLAudioElement>} src={item.media_url}
-                  onTimeUpdate={onTime} onLoadedMetadata={onMeta}
-                  onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
-              )}
-
-              <div className="mb-3">
-                <div onClick={seekTo}
-                  className="h-1 bg-brand-ink/10 rounded-full overflow-hidden cursor-pointer">
-                  <div className="h-full bg-brand-accent" style={{ width: `${pct}%` }} />
-                </div>
-                <div className="flex justify-between mt-2 font-mono text-[10px] tracking-[0.1em] text-brand-ink/50">
-                  <span>{fmtTime(cur)}</span>
-                  <span>−{fmtTime(remaining)}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between mb-6">
-                <button onClick={() => seekDelta(-15)} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/60 font-mono text-[11px]">−15</button>
-                <button onClick={toggle} className="w-12 h-12 rounded-full bg-brand-accent text-brand-cream flex items-center justify-center text-lg">{playing ? '❚❚' : '▶'}</button>
-                <button onClick={() => seekDelta(30)} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/60 font-mono text-[11px]">+30</button>
-                <button onClick={cycleRate} className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center font-mono text-[10px] text-brand-ink/60">{rate}×</button>
-              </div>
-            </>
-          )}
-
-          {item.summary && (
-            <div className="rounded-2xl bg-brand-accent text-brand-cream p-5">
-              <div className="font-mono text-[9px] uppercase tracking-[0.22em] text-brand-cream/60 mb-2">✦ samenvatting</div>
-              <div className="prose-stroom prose-stroom-dark font-serif text-[14px] leading-[1.55] text-brand-cream/90"
-                   dangerouslySetInnerHTML={{ __html: marked.parse(item.summary, { async: false, breaks: true }) as string }} />
-            </div>
-          )}
-        </div>
-        <div>
-          <div className="flex items-center justify-between mb-6 pb-4 border-b border-brand-ink/10 flex-wrap gap-2">
-            <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent font-medium">◉ Transcript</span>
-            {transcript && <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40">{transcript.length} chars</span>}
+    <>
+      {/* Player */}
+      <div className="rounded-3xl bg-brand-surface overflow-hidden mb-10">
+        {ytId ? (
+          <div className="aspect-video bg-brand-ink">
+            <iframe
+              src={`https://www.youtube.com/embed/${ytId}`}
+              title={item.title}
+              className="w-full h-full"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              allowFullScreen
+            />
           </div>
-          {transcript ? (
-            <div className="space-y-5">
-              {transcript.split(/\n\n+/).filter(p => p.trim()).map((para, i) => (
-                <div key={i} className="rounded-2xl p-5 hover:bg-brand-surface/60 transition">
-                  <p className="font-serif text-[16px] leading-[1.65] text-brand-ink/80 whitespace-pre-wrap">{para}</p>
-                </div>
-              ))}
+        ) : isVideo && item.media_url ? (
+          <video ref={mediaRef as React.Ref<HTMLVideoElement>} src={item.media_url}
+            onTimeUpdate={onTime} onLoadedMetadata={onMeta}
+            onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)}
+            controls
+            className="w-full bg-brand-ink aspect-video" />
+        ) : item.thumbnail_url ? (
+          <div className="aspect-[16/9] overflow-hidden bg-brand-ink">
+            <img src={item.thumbnail_url} alt="" className="w-full h-full object-cover" />
+          </div>
+        ) : null}
+        {!isVideo && item.media_url && (
+          <audio ref={mediaRef as React.Ref<HTMLAudioElement>} src={item.media_url}
+            onTimeUpdate={onTime} onLoadedMetadata={onMeta}
+            onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
+        )}
+
+        {!isVideo && item.media_url && (
+          <div className="p-5 md:p-6">
+            <div className="mb-3">
+              <div onClick={seekTo}
+                className="h-1 bg-brand-ink/10 rounded-full overflow-hidden cursor-pointer">
+                <div className="h-full bg-brand-accent" style={{ width: `${pct}%` }} />
+              </div>
+              <div className="flex justify-between mt-2 font-mono text-[10px] tracking-[0.1em] text-brand-ink/50">
+                <span>{fmtTime(cur)}</span>
+                <span>−{fmtTime(remaining)}</span>
+              </div>
             </div>
-          ) : (
-            <div className="py-8 text-center">
-              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen transcript</div>
-              <button onClick={onTranscribe} disabled={busy || transcribeDisabled}
-                className="px-4 py-2.5 rounded-full bg-brand-accent text-brand-cream font-mono text-[11px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
-                {busy ? <Loader2 size={12} className="animate-spin" /> : <Mic size={12} />}
-                {transcribeLabel}
+            <div className="flex items-center justify-between">
+              <button onClick={() => seekDelta(-15)} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/65 font-mono text-[11px]">−15</button>
+              <button onClick={toggle}
+                className="w-14 h-14 rounded-full bg-brand-accent text-brand-cream flex items-center justify-center text-xl shadow-sm hover:opacity-90">
+                {playing ? '❚❚' : '▶'}
               </button>
+              <button onClick={() => seekDelta(30)} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/65 font-mono text-[11px]">+30</button>
+              <button onClick={cycleRate} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center font-mono text-[10px] text-brand-ink/65">{rate}×</button>
             </div>
-          )}
-        </div>
+          </div>
+        )}
+        {!item.media_url && (
+          <div className="p-6 text-center text-brand-ink/45 font-mono text-[10px] uppercase tracking-[0.18em]">
+            Geen media-URL
+          </div>
+        )}
       </div>
-    </div>
+
+      {/* Transcript */}
+      <div>
+        <div className="flex items-center justify-between mb-6 pb-4 border-b border-brand-ink/10 flex-wrap gap-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-accent font-medium">◉ Transcript</span>
+          {segments && <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40">{segments.length} segments · klik tijd om te springen</span>}
+          {!segments && transcript && <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40">{transcript.length} chars</span>}
+        </div>
+        {segments && segments.length > 0 ? (
+          <div ref={transcriptRef} className="space-y-3">
+            {segments.map((seg, i) => {
+              const active = i === activeIdx;
+              return (
+                <button key={i} onClick={() => seekToSec(seg.start)}
+                  data-seg-idx={i}
+                  className={`block w-full text-left rounded-2xl p-4 transition ${
+                    active ? 'bg-brand-accent/5 ring-1 ring-brand-accent/30' : 'hover:bg-brand-surface/60'
+                  }`}>
+                  <div className="flex items-baseline gap-3 mb-1">
+                    <span className={`font-mono text-[10px] tracking-[0.1em] ${active ? 'text-brand-accent font-semibold' : 'text-brand-ink/45'}`}>
+                      {fmtTime(seg.start)}
+                    </span>
+                    {seg.speaker && (
+                      <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/55 font-medium">{seg.speaker}</span>
+                    )}
+                  </div>
+                  <div className={`font-serif text-[16px] leading-[1.65] whitespace-pre-wrap ${active ? 'text-brand-ink' : 'text-brand-ink/80'}`}>{seg.text}</div>
+                </button>
+              );
+            })}
+          </div>
+        ) : transcript ? (
+          <div className="space-y-5">
+            {transcript.split(/\n\n+/).filter(p => p.trim()).map((para, i) => (
+              <p key={i} className="font-serif text-[17px] leading-[1.7] text-brand-ink/85 whitespace-pre-wrap">{para}</p>
+            ))}
+          </div>
+        ) : (
+          <div className="py-8 text-center">
+            <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40 mb-4">Nog geen transcript</div>
+            <button onClick={onTranscribe} disabled={busy || transcribeDisabled}
+              className="px-4 py-2.5 rounded-full bg-brand-accent text-brand-cream font-mono text-[11px] uppercase tracking-[0.18em] inline-flex items-center gap-2 disabled:opacity-50">
+              {busy ? <Loader2 size={12} className="animate-spin" /> : <Mic size={12} />}
+              {transcribeLabel}
+            </button>
+          </div>
+        )}
+      </div>
+    </>
   );
 };
 
@@ -812,6 +903,16 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
   }
 
   return (
+    <>
+      <div className="flex items-center justify-between mb-4 pb-3 border-b border-brand-ink/10">
+        <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/45">{lessons.length} lessen</span>
+        <button onClick={onDistill} disabled={distilling}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/70 transition disabled:opacity-50">
+          {distilling ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+          Meer
+        </button>
+      </div>
+      {error && <div className="text-rose-600 text-xs mb-3">{error}</div>}
     <ul className="space-y-5">
       {lessons.map(l => (
         <li key={l.id} className="group">
@@ -827,52 +928,103 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
                 }`}><X size={11} /></button>
             </div>
             <div className={`flex-1 min-w-0 ${l.rating === -1 ? 'opacity-50' : ''}`}>
-              <div className="font-serif font-semibold text-[15px] text-brand-ink leading-tight mb-1">{l.title}</div>
-              <div className="font-serif text-[14px] leading-[1.55] text-brand-ink/75">{l.body}</div>
+              <div className="font-serif font-semibold text-[15px] text-brand-ink leading-tight mb-1">{renderInline(l.title)}</div>
+              <div className="font-serif text-[14px] leading-[1.55] text-brand-ink/75">{renderInline(l.body)}</div>
               <LessonExpansion lesson={l} onUpdate={onLessonUpdate} />
             </div>
           </div>
         </li>
       ))}
-      <li className="pt-2">
-        <button onClick={onDistill} disabled={distilling}
-          className="w-full py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] text-brand-accent border border-dashed border-brand-accent/30 hover:bg-brand-accent/5 inline-flex items-center justify-center gap-2 disabled:opacity-50">
-          {distilling ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
-          Meer destilleren
-        </button>
-        {error && <div className="text-rose-600 text-xs mt-2 text-center">{error}</div>}
-      </li>
     </ul>
+    </>
   );
 };
 
-const AskTab = () => {
+const AskTab = ({ itemId }: { itemId: string }) => {
+  const { getDefault } = useSettings();
   const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [history, setHistory] = useState<AskAnswer[]>([]);
+
+  useEffect(() => { setHistory([]); setErr(null); setQ(''); }, [itemId]);
+
   const suggestions = [
     'Wat zijn de kernargumenten?',
     'Welk bewijs draagt de auteur aan?',
     'Wat is hier de tegenovergestelde positie?',
   ];
+
+  const submit = async () => {
+    const question = q.trim();
+    if (!question || busy) return;
+    setBusy(true); setErr(null);
+    try {
+      const ans = await askItem(itemId, question, getDefault('ask'));
+      setHistory(h => [...h, ans]);
+      setQ('');
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="font-serif text-[14px] text-brand-ink/70 leading-relaxed">
-        Stel een vraag over dit artikel. <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-brand-ink/45 ml-1">binnenkort</span>
-      </div>
-      <div className="space-y-2">
-        {suggestions.map(s => (
-          <button key={s} onClick={() => setQ(s)}
-            className="w-full text-left px-3 py-2 rounded-lg bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-serif text-[13px] text-brand-ink/75 transition">
-            {s}
-          </button>
-        ))}
-      </div>
+      {history.length === 0 && (
+        <div className="font-serif text-[14px] text-brand-ink/70 leading-relaxed">
+          Stel een vraag over dit item. De assistent gebruikt de samenvatting, lessen en eventueel het transcript.
+        </div>
+      )}
+
+      {history.length > 0 && (
+        <div className="space-y-5">
+          {history.map((a, i) => (
+            <div key={i} className="space-y-2">
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/45">
+                Jij <span className="text-brand-ink/30">· {a.model}</span>
+              </div>
+              <div className="font-serif text-[14px] text-brand-ink leading-[1.55]">{a.question}</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-accent mt-3">Antwoord</div>
+              <div className="prose-stroom font-serif text-[14px] leading-[1.6] text-brand-ink/85 max-w-none"
+                   dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(a.answer) }} />
+              {a.sources_used.length > 0 && (
+                <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/35">
+                  bron: {a.sources_used.join(' · ')}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {history.length === 0 && (
+        <div className="space-y-2">
+          {suggestions.map(s => (
+            <button key={s} onClick={() => setQ(s)} disabled={busy}
+              className="w-full text-left px-3 py-2 rounded-lg bg-brand-surface hover:bg-brand-accent hover:text-brand-cream font-serif text-[13px] text-brand-ink/75 transition disabled:opacity-50">
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="relative pt-2">
-        <textarea value={q} onChange={e => setQ(e.target.value)} rows={3} placeholder="Type je vraag…" disabled
-          className="w-full px-4 py-3 rounded-2xl bg-brand-surface border border-brand-ink/10 font-serif text-[14px] text-brand-ink placeholder:text-brand-ink/30 focus:outline-none resize-none disabled:opacity-60" />
-        <button disabled
-          className="absolute bottom-4 right-3 px-4 py-1.5 rounded-full bg-brand-accent/50 text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] cursor-not-allowed">
-          Vraag →
+        <textarea value={q} onChange={e => setQ(e.target.value)} rows={3}
+          placeholder="Type je vraag…"
+          disabled={busy}
+          onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') submit(); }}
+          className="w-full px-4 py-3 rounded-2xl bg-brand-surface border border-brand-ink/10 font-serif text-[14px] text-brand-ink placeholder:text-brand-ink/30 focus:outline-none focus:border-brand-accent/40 resize-none disabled:opacity-60" />
+        <button onClick={submit} disabled={busy || !q.trim()}
+          className="absolute bottom-4 right-3 px-4 py-1.5 rounded-full bg-brand-accent text-brand-cream font-mono text-[10px] uppercase tracking-[0.18em] hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5">
+          {busy ? <Loader2 size={11} className="animate-spin" /> : null}
+          {busy ? 'Bezig…' : 'Vraag →'}
         </button>
+      </div>
+      {err && <div className="text-rose-600 text-xs">{err}</div>}
+      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/30">
+        ⌘↵ verstuurt · model: {getDefault('ask')}
       </div>
     </div>
   );
@@ -934,7 +1086,7 @@ const AIPanelBody = ({ tab, item, lessons, setLessons, onSummarize, summarizeBus
     {tab === 'summary' && <SummaryTab item={item} onSummarize={onSummarize} busy={summarizeBusy} />}
     {tab === 'lessons' && <LessonsTab itemId={item.id} lessons={lessons} setLessons={setLessons} />}
     {tab === 'transcript' && <TranscriptTab item={item} />}
-    {tab === 'ask' && <AskTab />}
+    {tab === 'ask' && <AskTab itemId={item.id} />}
   </>
 );
 
@@ -957,7 +1109,7 @@ const AIPanel = ({ item, lessons, setLessons, onSummarize, summarizeBusy }: {
           <AIPanelTabs tab={tab} setTab={setTab} lessonCount={lessons?.length ?? null}
             transcriptDisabled={!item.transcript} />
         </div>
-        <div className="p-6 max-h-[640px] overflow-y-auto hide-scrollbar">
+        <div className="p-6 max-h-[calc(100vh-12rem)] overflow-y-auto hide-scrollbar">
           <AIPanelBody tab={tab} item={item} lessons={lessons} setLessons={setLessons}
             onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
         </div>
@@ -1117,76 +1269,50 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
         </div>
       )}
 
-      {isMedia ? (
-        <>
-          <h1 className="font-display font-medium text-[36px] md:text-[56px] text-brand-ink tracking-[-0.03em] leading-[1.05] mb-6 max-w-4xl">
+      <div className="lg:flex lg:gap-12 xl:gap-16">
+        <article className="flex-1 min-w-0 lg:max-w-[680px]">
+          <h1 className="font-display font-medium text-[40px] md:text-[56px] lg:text-[64px] text-brand-ink tracking-[-0.03em] leading-[1.02] mb-8">
             {item.title}
           </h1>
           <div className="flex items-center gap-3 mb-10 pb-6 border-b border-brand-ink/10">
             {item.source_image_url ? (
-              <img src={item.source_image_url} alt={item.source_name} className="w-9 h-9 rounded-full object-cover" />
+              <img src={item.source_image_url} alt={item.source_name} className="w-11 h-11 rounded-full object-cover" />
             ) : (
-              <div className="w-9 h-9 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-xs">
+              <div className="w-11 h-11 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-sm">
                 {initials(item.author ?? item.source_name)}
               </div>
             )}
-            <div className="flex flex-col gap-0.5">
-              <div className="font-serif font-semibold text-[14px] text-brand-ink">{item.author ?? item.source_name}</div>
-              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50">
+            <div>
+              <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
+              <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
                 {item.author && <>{item.source_name} · </>}{date}
               </div>
             </div>
           </div>
-          <ListenMode item={item}
-            onTranscribe={() => wrap('transcribe', () => transcribeItem(id))}
-            busy={busy === 'transcribe' || isQueued || isTranscribing}
-            transcribeLabel={transcribeLabel}
-            transcribeDisabled={!item.media_url || hasTranscript || isQueued || isTranscribing} />
+
+          <MobileAISections item={item} lessons={lessons} setLessons={setLessons}
+            onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
+
+          {isMedia ? (
+            <MediaBody item={item}
+              onTranscribe={() => wrap('transcribe', () => transcribeItem(id))}
+              busy={busy === 'transcribe' || isQueued || isTranscribing}
+              transcribeLabel={transcribeLabel}
+              transcribeDisabled={!item.media_url || hasTranscript || isQueued || isTranscribing} />
+          ) : (
+            <ArticleBody item={item} />
+          )}
+
           {item.media_url && (
             <a href={item.media_url} target="_blank" rel="noreferrer"
-               className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
-              View original at {item.source_name} <ExternalLink size={12} />
+               className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
+              View original at {item.source_name} ↗
             </a>
           )}
-        </>
-      ) : (
-        <div className="lg:flex lg:gap-12 xl:gap-16">
-          <article className="flex-1 min-w-0 lg:max-w-[680px]">
-            <h1 className="font-display font-medium text-[40px] md:text-[56px] lg:text-[64px] text-brand-ink tracking-[-0.03em] leading-[1.02] mb-8">
-              {item.title}
-            </h1>
-            <div className="flex items-center gap-3 mb-10 pb-6 border-b border-brand-ink/10">
-              {item.source_image_url ? (
-                <img src={item.source_image_url} alt={item.source_name} className="w-11 h-11 rounded-full object-cover" />
-              ) : (
-                <div className="w-11 h-11 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-sm">
-                  {initials(item.author ?? item.source_name)}
-                </div>
-              )}
-              <div>
-                <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
-                <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
-                  {item.author && <>{item.source_name} · </>}{date}
-                </div>
-              </div>
-            </div>
-
-            <MobileAISections item={item} lessons={lessons} setLessons={setLessons}
-              onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
-
-            <ArticleBody item={item} />
-
-            {item.media_url && (
-              <a href={item.media_url} target="_blank" rel="noreferrer"
-                 className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
-                View original at {item.source_name} ↗
-              </a>
-            )}
-          </article>
-          <AIPanel item={item} lessons={lessons} setLessons={setLessons}
-            onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
-        </div>
-      )}
+        </article>
+        <AIPanel item={item} lessons={lessons} setLessons={setLessons}
+          onSummarize={onSummarize} summarizeBusy={summarizeBusy} />
+      </div>
     </motion.article>
   );
 };
@@ -1282,6 +1408,8 @@ const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
 function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; topicName: string; window: DigestWindow }) {
   const { getDefault } = useSettings();
   const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
+  const [history, setHistory] = useState<TopicDigestRun[]>([]);
+  const [historyIdx, setHistoryIdx] = useState(0);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1290,8 +1418,9 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
   const windowLabel = digestWindow === 'weekly' ? 'Weekdigest' : 'Dagdigest';
 
   useEffect(() => {
-    setDigest(undefined); setErr(null); setOpen(false);
+    setDigest(undefined); setErr(null); setOpen(false); setHistoryIdx(0);
     fetchTopicDigest(slug, digestWindow).then(setDigest).catch(() => setDigest(null));
+    fetchTopicDigestHistory(slug, digestWindow, 7).then(setHistory).catch(() => setHistory([]));
   }, [slug, digestWindow]);
 
   useEffect(() => { localStorage.setItem('stroom-model-digest', model); }, [model]);
@@ -1342,7 +1471,7 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
             )}
             {digest && !digest.is_generating && digest.generated_at && (
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
-                {digest.item_count} items · {digest.window_hours}u · {ago}
+                {digest.item_count} items · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
               </div>
             )}
             {digest === null && (
@@ -1374,12 +1503,39 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
         </div>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
-      {open && digest?.markdown && (
-        <div
-          className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
-          dangerouslySetInnerHTML={{ __html: marked.parse(digest.markdown, { async: false, breaks: true }) as string }}
-        />
+      {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
+        <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
+          {digest.error
+            ? (digest.error.length > 120 ? digest.error.slice(0, 120) + '…' : digest.error)
+            : 'Generatie liep, maar geen output. Probeer opnieuw.'}
+        </div>
       )}
+      {open && (digest?.markdown || history.length > 0) && (() => {
+        const showingHistory = historyIdx > 0 && history[historyIdx];
+        const md = showingHistory ? history[historyIdx].markdown : (digest?.markdown ?? '');
+        const stamp = showingHistory ? history[historyIdx].generated_at : digest?.generated_at;
+        const stampStr = stamp ? new Date(stamp).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+        const wkStr = digestWindow === 'weekly' && stamp ? ` · wk ${isoWeek(new Date(stamp))}` : '';
+        return (
+          <div className="mt-6 pt-6 border-t border-brand-ink/10">
+            {history.length > 1 && (
+              <div className="flex items-center justify-between mb-4 font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/55">
+                <button onClick={() => setHistoryIdx(i => Math.min(history.length - 1, i + 1))}
+                  disabled={historyIdx >= history.length - 1}
+                  className="px-3 py-1.5 rounded-full bg-brand-surface hover:bg-brand-surface-low disabled:opacity-30">← ouder</button>
+                <span>{historyIdx === 0 ? 'nieuwste' : `${historyIdx + 1} terug`} · {stampStr}{wkStr}</span>
+                <button onClick={() => setHistoryIdx(i => Math.max(0, i - 1))}
+                  disabled={historyIdx === 0}
+                  className="px-3 py-1.5 rounded-full bg-brand-surface hover:bg-brand-surface-low disabled:opacity-30">nieuwer →</button>
+              </div>
+            )}
+            <div
+              className="prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
+              dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(md) }}
+            />
+          </div>
+        );
+      })()}
     </section>
   );
 }
@@ -1516,7 +1672,7 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
             )}
             {digest && !digest.is_generating && digest.generated_at && (
               <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
-                {digest.lesson_count} lessen · {digest.window_hours}u · {ago}
+                {digest.lesson_count} lessen · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
               </div>
             )}
             {digest === null && (
@@ -1548,10 +1704,17 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
         </div>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
+      {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
+        <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
+          {digest.error
+            ? (digest.error.length > 120 ? digest.error.slice(0, 120) + '…' : digest.error)
+            : 'Generatie liep, maar geen output. Probeer opnieuw.'}
+        </div>
+      )}
       {open && digest?.markdown && (
         <div
           className="mt-6 pt-6 border-t border-brand-ink/10 prose-stroom font-serif text-[16px] leading-[1.65] text-brand-ink/85 max-w-none"
-          dangerouslySetInnerHTML={{ __html: marked.parse(digest.markdown, { async: false, breaks: true }) as string }}
+          dangerouslySetInnerHTML={{ __html: sanitizeMarkdown(digest.markdown) }}
         />
       )}
     </section>
@@ -1614,8 +1777,8 @@ function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (
                   {l.rating === 1 ? <Check size={12} /> : l.rating === -1 ? <X size={12} /> : null}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <div className="font-serif font-semibold text-[18px] text-brand-ink mb-1">{l.title}</div>
-                  <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80 mb-2">{l.body}</div>
+                  <div className="font-serif font-semibold text-[18px] text-brand-ink mb-1">{renderInline(l.title)}</div>
+                  <div className="font-serif text-[16px] leading-[1.55] text-brand-ink/80 mb-2">{renderInline(l.body)}</div>
                   <LessonExpansion lesson={l} onUpdate={(u) => setLessons(prev => prev?.map(x => x.id === u.id ? u : x) ?? prev)} />
                   <div className="mt-2 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 flex items-center gap-3 flex-wrap">
                     <button onClick={() => onOpenItem(l.item_id)}
@@ -1855,7 +2018,16 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   onUpdate={(id, u) => setData(d => d ? {
                     ...d,
                     rails: d.rails.map(r => ({ ...r, items: r.items.map(it => it.id === id ? { ...it, ...u } : it) })),
-                  } : d)} />)}
+                  } : d)}
+                  onArchiveAll={async (format) => {
+                    const targetRail = data.rails.find(r => r.format === format);
+                    if (!targetRail) return;
+                    await Promise.all(targetRail.items.map(it => setItemStatus(it.id, 'archived').catch(() => null)));
+                    if (activeSlug) {
+                      const fresh = await fetchHuygens(activeSlug);
+                      setData(fresh);
+                    }
+                  }} />)}
               </>
             ) : (
               !error && <div className="text-brand-ink/40 italic">Loading…</div>

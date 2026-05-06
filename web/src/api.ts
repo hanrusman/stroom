@@ -84,6 +84,13 @@ export async function fetchHuygens(slug: string): Promise<HuygensTopic> {
 export type ItemStatus = 'new' | 'pinned' | 'later' | 'archived';
 export type ProcessingStatus = 'pending' | 'queued' | 'transcribing' | 'summarizing' | 'ready' | 'failed';
 
+export interface TranscriptSegment {
+  start: number;
+  end: number;
+  text: string;
+  speaker?: string | null;
+}
+
 export interface ItemDetail {
   id: string;
   format: ItemFormat;
@@ -92,6 +99,7 @@ export interface ItemDetail {
   summary: string | null;
   summary_model: string | null;
   transcript: string | null;
+  transcript_segments: TranscriptSegment[] | null;
   author: string | null;
   media_url: string | null;
   thumbnail_url: string | null;
@@ -333,12 +341,86 @@ export async function fetchAdminQueue(): Promise<QueueItem[]> {
   return r.json();
 }
 
-export type ModelAction = 'expand' | 'distill' | 'digest';
+export interface CronResult {
+  ok: boolean;
+  [key: string]: unknown;
+}
+
+export async function cronTranscribePodcasts(hours = 24): Promise<CronResult> {
+  const r = await apiFetch(`/api/admin/cron/transcribe-podcasts?hours=${hours}`, { method: 'POST' });
+  return r.json();
+}
+export async function cronTranscribeVideos(hours = 24): Promise<CronResult> {
+  const r = await apiFetch(`/api/admin/cron/transcribe-videos?hours=${hours}`, { method: 'POST' });
+  return r.json();
+}
+export async function cronSummarizeArticles(hours = 24): Promise<CronResult> {
+  const r = await apiFetch(`/api/admin/cron/summarize-articles?hours=${hours}`, { method: 'POST' });
+  return r.json();
+}
+export async function cronDigestTopics(window: 'daily' | 'weekly' = 'daily',
+                                       model?: DigestModel): Promise<CronResult> {
+  const q = `window=${window}` + (model ? `&model=${model}` : '');
+  const r = await apiFetch(`/api/admin/cron/digest-topics?${q}`, { method: 'POST' });
+  return r.json();
+}
+
+export async function removeFromQueue(itemId: string): Promise<void> {
+  await apiFetch(`/api/admin/queue/${itemId}`, { method: 'DELETE' });
+}
+
+export async function restartQueue(): Promise<CronResult> {
+  const r = await apiFetch('/api/admin/queue/restart', { method: 'POST' });
+  return r.json();
+}
+
+export interface DigestStatus {
+  window: string;
+  in_progress: number;
+  done: number;
+  failed: number;
+}
+export async function fetchDigestStatus(window: 'daily' | 'weekly' = 'daily'): Promise<DigestStatus> {
+  const r = await apiFetch(`/api/admin/cron/digest-status?window=${window}`);
+  return r.json();
+}
+
+export interface TopicDigestRun {
+  id: string;
+  generated_at: string;
+  model: string | null;
+  item_count: number | null;
+  markdown: string;
+}
+export async function fetchTopicDigestHistory(slug: string, window: 'daily' | 'weekly' = 'daily',
+                                              limit = 7): Promise<TopicDigestRun[]> {
+  const r = await apiFetch(`/api/huygens/${slug}/digest/history?window=${window}&limit=${limit}`);
+  return r.json();
+}
+
+export type ModelAction = 'expand' | 'distill' | 'digest' | 'ask';
 
 export interface ModelDefaults {
   expand: DigestModel;
   distill: DigestModel;
   digest: DigestModel;
+  ask: DigestModel;
+}
+
+export interface AskAnswer {
+  question: string;
+  answer: string;
+  model: DigestModel;
+  sources_used: string[];
+}
+
+export async function askItem(itemId: string, question: string, model: DigestModel = 'qwen'): Promise<AskAnswer> {
+  const r = await apiFetch(`/api/huygens/items/${itemId}/ask?model=${model}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question }),
+  });
+  return r.json();
 }
 
 export interface AppSettings {
@@ -348,6 +430,35 @@ export interface AppSettings {
 export async function fetchSettings(): Promise<AppSettings> {
   const r = await apiFetch('/api/admin/settings');
   return r.json();
+}
+
+export interface AdminTopic {
+  slug: string;
+  name: string;
+  sort_order: number;
+  item_count: number;
+  source_count: number;
+}
+
+export async function fetchAdminTopics(): Promise<AdminTopic[]> {
+  const r = await apiFetch('/api/admin/topics');
+  return r.json();
+}
+
+export async function updateTopicOrder(slugs: string[]): Promise<void> {
+  await apiFetch('/api/admin/topics/order', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ slugs }),
+  });
+}
+
+export async function deleteTopic(slug: string, reassignTo: string): Promise<void> {
+  await apiFetch(`/api/admin/topics/${encodeURIComponent(slug)}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reassign_to: reassignTo }),
+  });
 }
 
 export async function updateSettings(s: AppSettings): Promise<AppSettings> {

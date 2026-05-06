@@ -16,13 +16,14 @@ class ModelDefaults(BaseModel):
     expand: DigestModel
     distill: DigestModel
     digest: DigestModel
+    ask: DigestModel = "qwen"
 
 
 class Settings(BaseModel):
     model_defaults: ModelDefaults
 
 
-DEFAULTS = ModelDefaults(expand="qwen", distill="qwen", digest="opus")
+DEFAULTS = ModelDefaults(expand="qwen", distill="qwen", digest="opus", ask="qwen")
 
 
 async def _load(session) -> ModelDefaults:
@@ -32,7 +33,9 @@ async def _load(session) -> ModelDefaults:
     if not row:
         return DEFAULTS
     try:
-        return ModelDefaults(**row[0])
+        # Tolerate missing keys (older rows) by merging onto DEFAULTS.
+        merged = {**DEFAULTS.model_dump(), **(row[0] or {})}
+        return ModelDefaults(**merged)
     except Exception:
         return DEFAULTS
 

@@ -123,19 +123,27 @@ async def summarize_articles(item_ids: list[str], llm_service, async_session_mak
             try:
                 async with async_session_maker() as bg:
                     r = await bg.exec(sa_text(
-                        "SELECT title, transcript FROM items WHERE id = CAST(:i AS uuid)"
+                        "SELECT title, transcript, description FROM items WHERE id = CAST(:i AS uuid)"
                     ).bindparams(i=item_id))
                     row = r.first()
-                    if not row or not row[1]:
+                    if not row:
                         return
-                    title, transcript = row[0], row[1]
+                    title = row[0]
+                    raw = (row[1] or "").strip() or re.sub(r"<[^>]+>", " ", row[2] or "").strip()
+                    if not raw:
+                        await bg.exec(sa_text(
+                            "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL "
+                            "WHERE id = CAST(:i AS uuid)"
+                        ).bindparams(i=item_id))
+                        await bg.commit()
+                        return
                     await bg.exec(sa_text(
                         "UPDATE items SET processing_status='summarizing'::processing_status, "
-                        "processing_error=NULL WHERE id = CAST(:i AS uuid)"
+                        "queued_at=now(), processing_error=NULL WHERE id = CAST(:i AS uuid)"
                     ).bindparams(i=item_id))
                     await bg.commit()
 
-                cleaned = re.sub(r"\s+", " ", transcript)[:12000]
+                cleaned = re.sub(r"\s+", " ", raw)[:12000]
                 summary = await llm_service.call_llm("stroom-bulk", [
                     {"role": "system", "content": (
                         "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "

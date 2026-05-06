@@ -27,6 +27,8 @@ from core.auth import (
 from routers import legacy as legacy_router
 from routers import lessons as lessons_router
 from routers import settings as settings_router
+from routers import admin_topics as admin_topics_router
+from routers import ask as ask_router
 
 
 @asynccontextmanager
@@ -61,7 +63,14 @@ app.add_middleware(
 
 _PUBLIC_PATHS = {"/", "/health", "/openapi.json", "/docs", "/redoc",
                  "/auth/login", "/auth/me", "/auth/logout"}
-_INTERNAL_TOKEN_PATH_SUFFIXES = ("/transcribe-callback", "/admin/cron/nightly")
+_INTERNAL_TOKEN_PATH_SUFFIXES = (
+    "/transcribe-callback",
+    "/admin/cron/nightly",
+    "/admin/cron/transcribe-podcasts",
+    "/admin/cron/transcribe-videos",
+    "/admin/cron/summarize-articles",
+    "/admin/cron/digest-topics",
+)
 INTERNAL_TOKEN = os.environ.get("STROOM_INTERNAL_TOKEN", "")
 
 
@@ -111,6 +120,8 @@ app.add_middleware(AuthMiddleware)
 app.include_router(legacy_router.router)
 app.include_router(lessons_router.router)
 app.include_router(settings_router.router)
+app.include_router(admin_topics_router.router)
+app.include_router(ask_router.router)
 
 
 # --- Auth routes ---
@@ -219,6 +230,7 @@ class HuygensItemDetail(BaseModel):
     summary: Optional[str]
     summary_model: Optional[str]
     transcript: Optional[str]
+    transcript_segments: Optional[List[dict]] = None
     author: Optional[str]
     media_url: Optional[str]
     thumbnail_url: Optional[str]
@@ -295,7 +307,8 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
                    i.transcript, i.author, i.media_url, i.thumbnail_url,
                    s.name, s.url, s.image_url, i.published_at,
                    COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), '{}') AS topic_names,
-                   i.status::text, i.processing_status::text, i.scheduled_for
+                   i.status::text, i.processing_status::text, i.scheduled_for,
+                   i.transcript_segments
             FROM items i
             JOIN sources s ON s.id = i.source_id
             LEFT JOIN item_topics it ON it.item_id = i.id
@@ -324,7 +337,8 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
     return HuygensItemDetail(
         id=row[0], format=ItemFormat(row[1]), title=row[2],
         description=row[3], summary=row[4], summary_model=row[5],
-        transcript=row[6], author=row[7],
+        transcript=row[6], transcript_segments=row[18],
+        author=row[7],
         media_url=row[8], thumbnail_url=row[9],
         source_name=row[10], source_url=row[11], source_image_url=row[12],
         published_at=str(row[13]) if row[13] else None,
@@ -544,6 +558,49 @@ async def _run_digest_generation(topic_id: str, topic_name: str, slug: str,
                                           async_session_maker, llm)
 
 
+class TopicDigestRun(BaseModel):
+    id: str
+    generated_at: str
+    model: Optional[str]
+    item_count: Optional[int]
+    markdown: str
+
+
+@app.get("/huygens/{slug}/digest/history", response_model=List[TopicDigestRun])
+async def get_topic_digest_history(slug: str,
+                                   window: DigestWindow = Query("daily"),
+                                   limit: int = Query(7, ge=1, le=30),
+                                   session=Depends(get_async_session)):
+    topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+    rows = (await session.execute(sa_text("""
+        SELECT id::text, generated_at, model, item_count, markdown
+        FROM topic_digest_runs
+        WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w
+        ORDER BY generated_at DESC
+        LIMIT :lim
+    """), {"tid": str(topic.id), "w": DIGEST_WINDOWS[window], "lim": limit})).all()
+    return [TopicDigestRun(
+        id=r[0], generated_at=str(r[1]), model=r[2], item_count=r[3], markdown=r[4]
+    ) for r in rows]
+
+
+@app.get("/admin/cron/digest-status")
+async def admin_cron_digest_status(window: DigestWindow = Query("daily"),
+                                   session=Depends(get_async_session)):
+    """Snel overzicht hoeveel digests in_progress zijn — voor de UI om voortgang te tonen."""
+    w = DIGEST_WINDOWS[window]
+    r = (await session.execute(sa_text("""
+        SELECT
+          COUNT(*) FILTER (WHERE is_generating) AS in_progress,
+          COUNT(*) FILTER (WHERE NOT is_generating AND markdown IS NOT NULL AND markdown <> '') AS done,
+          COUNT(*) FILTER (WHERE NOT is_generating AND error IS NOT NULL) AS failed
+        FROM topic_digests WHERE window_hours = :w
+    """), {"w": w})).first()
+    return {"window": window, "in_progress": r[0], "done": r[1], "failed": r[2]}
+
+
 @app.post("/huygens/{slug}/digest", response_model=TopicDigest)
 async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
                                   model: DigestModel = Query("opus"),
@@ -629,7 +686,7 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
     cleaned = re.sub(r"\s+", " ", cleaned).strip()[:12000]
 
     await session.exec(sa_text(
-        "UPDATE items SET processing_status='summarizing'::processing_status, processing_error=NULL "
+        "UPDATE items SET processing_status='summarizing'::processing_status, queued_at=now(), processing_error=NULL "
         "WHERE id = CAST(:i AS uuid)"
     ).bindparams(i=item_id))
     await session.commit()
@@ -809,6 +866,7 @@ async def _replace_lessons(session, item_id: str, summary_text: str) -> None:
 
 class TranscribeCallback(BaseModel):
     transcript: Optional[str] = None
+    transcript_segments: Optional[List[dict]] = None
     summary: Optional[str] = None
     error: Optional[str] = None
 
@@ -835,10 +893,16 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
     if not transcript and not summary:
         raise HTTPException(status_code=400, detail="empty callback payload")
 
+    import json as _json
+    segments_json: Optional[str] = None
+    if body.transcript_segments:
+        segments_json = _json.dumps(body.transcript_segments)
+
     await session.exec(sa_text(
         """
         UPDATE items SET
           transcript = COALESCE(NULLIF(:t, ''), transcript),
+          transcript_segments = COALESCE(CAST(:segs AS jsonb), transcript_segments),
           summary = COALESCE(NULLIF(:s, ''), summary),
           summary_model = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN 'samenvat-agent' ELSE summary_model END,
           summary_generated_at = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN now() ELSE summary_generated_at END,
@@ -846,7 +910,7 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
           processing_error = NULL
         WHERE id = CAST(:i AS uuid)
         """
-    ).bindparams(t=transcript, s=summary, i=item_id))
+    ).bindparams(t=transcript, segs=segments_json, s=summary, i=item_id))
     await session.commit()
 
     if summary:
@@ -1298,27 +1362,164 @@ async def admin_refresh_all(background_tasks: BackgroundTasks,
     }
 
 
+CRON_WEIGHT_MIN = 5
+CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
+CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
+CRON_STUCK_MIN = 30  # items in queued/transcribing/summarizing > N min → reset to failed
+CRON_NIGHTLY_HOURS = 24 * 7  # nightly + backlog kijkt 7 dagen terug
+
+
+async def _cron_unstuck(session) -> int:
+    """Reset items that have been stuck in queued/transcribing/summarizing too long."""
+    r = await session.exec(sa_text(f"""
+        UPDATE items SET
+          processing_status = 'failed'::processing_status,
+          processing_error = 'stuck > {CRON_STUCK_MIN} min — auto-reset by cron'
+        WHERE processing_status IN
+              ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status)
+          AND queued_at IS NOT NULL
+          AND queued_at < now() - interval '{CRON_STUCK_MIN} minutes'
+        RETURNING id
+    """))
+    n = len(r.all())
+    await session.commit()
+    return n
+
+
+async def _cron_queue_transcribes(session, *, content_kind: str,
+                                  hours: Optional[int] = None,
+                                  weight_min: int = CRON_WEIGHT_MIN,
+                                  limit: Optional[int] = None) -> int:
+    """Mark items as queued for transcription. Increments transcribe_attempts.
+
+    `content_kind`: 'podcast' or 'youtube'.
+    `hours`: only items published in last N hours, or None for all-time backlog.
+    """
+    where_age = "AND i.published_at >= now() - (:hrs * interval '1 hour')" if hours is not None else ""
+    sql = f"""
+        WITH picks AS (
+          SELECT i.id
+          FROM items i
+          JOIN sources s ON s.id = i.source_id
+          WHERE i.type = CAST(:kind AS content_kind)
+            AND s.weight >= :wmin
+            AND s.active
+            AND (i.transcript IS NULL OR i.transcript = '')
+            AND i.media_url IS NOT NULL AND i.media_url <> ''
+            AND i.processing_status NOT IN
+                ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status)
+            AND i.transcribe_attempts < :max_att
+            {where_age}
+          ORDER BY s.weight DESC, i.published_at DESC
+          {f'LIMIT {int(limit)}' if limit else ''}
+        )
+        UPDATE items SET
+          processing_status = 'queued'::processing_status,
+          queued_at = now(),
+          processing_error = NULL,
+          transcribe_attempts = transcribe_attempts + 1
+        WHERE id IN (SELECT id FROM picks)
+        RETURNING id
+    """
+    params: dict = {"kind": content_kind, "wmin": weight_min, "max_att": CRON_MAX_TRANSCRIBE_ATTEMPTS}
+    if hours is not None:
+        params["hrs"] = hours
+    r = await session.exec(sa_text(sql).bindparams(**params))
+    n = len(r.all())
+    await session.commit()
+    return n
+
+
+async def _cron_pick_articles_for_summary(session, *,
+                                          hours: Optional[int] = None,
+                                          weight_min: int = CRON_WEIGHT_MIN,
+                                          limit: int = 200) -> list[str]:
+    """Pick articles needing summary, pre-mark als 'queued' zodat ze direct zichtbaar zijn
+    in het queue-paneel. Pipeline flipt ze daarna naar 'summarizing' → 'ready'."""
+    where_age = "AND i.published_at >= now() - (:hrs * interval '1 hour')" if hours is not None else ""
+    sql = f"""
+        WITH picks AS (
+          SELECT i.id
+          FROM items i
+          JOIN sources s ON s.id = i.source_id
+          WHERE i.format = 'article'::item_format
+            AND s.weight >= :wmin
+            AND s.active
+            AND COALESCE(NULLIF(i.transcript, ''), NULLIF(i.description, '')) IS NOT NULL
+            AND length(COALESCE(NULLIF(i.transcript, ''), NULLIF(i.description, ''))) >= 200
+            AND (i.summary IS NULL OR i.summary = '')
+            AND i.processing_status NOT IN
+                ('summarizing'::processing_status, 'queued'::processing_status, 'transcribing'::processing_status)
+            {where_age}
+          ORDER BY s.weight DESC, i.published_at DESC
+          LIMIT :lim
+        )
+        UPDATE items SET
+          processing_status = 'queued'::processing_status,
+          queued_at = now(),
+          processing_error = NULL
+        WHERE id IN (SELECT id FROM picks)
+        RETURNING id::text
+    """
+    params: dict = {"wmin": weight_min, "lim": limit}
+    if hours is not None:
+        params["hrs"] = hours
+    r = await session.exec(sa_text(sql).bindparams(**params))
+    ids = [row[0] for row in r.all()]
+    await session.commit()
+    return ids
+
+
+async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
+                                   window: str = "daily") -> int:
+    """For every topic, mark its daily digest as is_generating and kick a bg task."""
+    window_hours = DIGEST_WINDOWS[window]
+    rows = (await session.exec(sa_text(
+        "SELECT id::text, slug, name FROM topics ORDER BY sort_order, name"
+    ))).all()
+    started = 0
+    for tid, slug, name in rows:
+        existing = (await session.exec(sa_text(
+            "SELECT is_generating, generation_started_at FROM topic_digests "
+            "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
+        ).bindparams(tid=tid, w=window_hours))).first()
+        if existing and existing[0] and existing[1] and \
+           (datetime.now(existing[1].tzinfo) - existing[1]).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
+            continue
+        if existing:
+            await session.exec(sa_text(
+                "UPDATE topic_digests SET is_generating=true, generation_started_at=now(), error=NULL "
+                "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
+            ).bindparams(tid=tid, w=window_hours))
+        else:
+            await session.exec(sa_text(
+                "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at) "
+                "VALUES (CAST(:tid AS uuid), :w, true, now())"
+            ).bindparams(tid=tid, w=window_hours))
+        await session.commit()
+        asyncio.create_task(_run_digest_generation(tid, name, slug, model, window_hours))
+        started += 1
+    return started
+
+
 @app.post("/admin/cron/nightly")
 async def admin_cron_nightly(session=Depends(get_async_session)):
-    """Nightly job: refresh all sources, then queue every transcribe-able item
-    from the last 48h that doesn't have a transcript yet. Auth via internal token.
-
-    Steps:
-      1. Refresh all active sources (same as admin_refresh_all).
-      2. SELECT items where published_at >= now()-'2 days', no transcript,
-         media_url present, not already queued/transcribing/summarizing.
-      3. Mark each as queued + queued_at=now().
-      4. Kick the queue (`_process_next_queued`); transcribe-callback will
-         self-drain the rest.
+    """Nightly job: refresh sources, then in this order:
+      1. Reset stuck items.
+      2. Refresh all active sources.
+      3. Queue podcasts (no time limit, weight >= 5, attempts < 3).
+      4. Pick articles for summary (no time limit).
+      5. Queue YouTube videos.
+      6. Kick GPU-queue + start article-summarize bg + topic-digest generation.
+    Auth: internal token or admin session cookie.
     """
-    # 1. refresh sources
-    r = await session.exec(sa_text(
+    unstuck = await _cron_unstuck(session)
+
+    # Refresh sources
+    rows = (await session.exec(sa_text(
         "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
-    ))
-    rows = r.all()
-    refreshed = 0
-    refresh_errors = 0
-    inserted_total = 0
+    ))).all()
+    refreshed = 0; refresh_errors = 0; inserted_total = 0
     for row in rows:
         src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
         try:
@@ -1333,49 +1534,10 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
             refresh_errors += 1
             print(f"[cron] refresh {row[1]} faalde: {exc}")
 
-    # 2a. audio/video → GPU-queue
-    r = await session.exec(sa_text(
-        """
-        SELECT id::text FROM items
-        WHERE published_at >= now() - interval '2 days'
-          AND type IN ('podcast'::content_kind, 'youtube'::content_kind)
-          AND (transcript IS NULL OR transcript = '')
-          AND media_url IS NOT NULL AND media_url <> ''
-          AND processing_status NOT IN
-              ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status)
-        ORDER BY published_at DESC
-        """
-    ))
-    candidate_ids = [row[0] for row in r.all()]
+    podcasts_queued = await _cron_queue_transcribes(session, content_kind="podcast", hours=CRON_NIGHTLY_HOURS)
+    videos_queued = await _cron_queue_transcribes(session, content_kind="youtube", hours=CRON_NIGHTLY_HOURS)
+    article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
 
-    queued = 0
-    for item_id in candidate_ids:
-        await session.exec(sa_text(
-            "UPDATE items SET processing_status='queued'::processing_status, "
-            "queued_at=now(), processing_error=NULL "
-            "WHERE id = CAST(:i AS uuid)"
-        ).bindparams(i=item_id))
-        queued += 1
-    await session.commit()
-
-    # 2b. articles met transcript zonder summary → losse LLM-flow (geen GPU)
-    r = await session.exec(sa_text(
-        """
-        SELECT id::text FROM items
-        WHERE published_at >= now() - interval '2 days'
-          AND format = 'article'::item_format
-          AND transcript IS NOT NULL AND length(transcript) >= 200
-          AND (summary IS NULL OR summary = '')
-          AND processing_status NOT IN
-              ('summarizing'::processing_status, 'queued'::processing_status, 'transcribing'::processing_status)
-        ORDER BY published_at DESC
-        LIMIT 200
-        """
-    ))
-    article_ids = [row[0] for row in r.all()]
-    await session.commit()
-
-    # 3. kick GPU-queue + start article-summarize background
     started = False
     try:
         await _process_next_queued(session)
@@ -1383,21 +1545,100 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     except Exception as exc:
         print(f"[cron] _process_next_queued faalde: {exc}")
 
-    # Article-summarize draait async, parallel aan GPU-queue
     if article_ids:
         from core.db import async_session_maker
         llm = LLMService(app.state.http_client)
         asyncio.create_task(_pipeline_summarize_articles(article_ids, llm, async_session_maker))
 
+    from routers.settings import _load as _load_settings
+    digest_default = (await _load_settings(session)).digest
+    digests_started = await _cron_kick_topic_digests(session, model=digest_default, window="daily")
+
     return {
         "ok": True,
+        "stuck_reset": unstuck,
         "sources_refreshed": refreshed,
         "refresh_errors": refresh_errors,
         "new_items_inserted": inserted_total,
-        "audio_video_queued": queued,
+        "podcasts_queued": podcasts_queued,
+        "videos_queued": videos_queued,
         "articles_summarize_kicked": len(article_ids),
+        "digests_started": digests_started,
         "queue_started": started,
     }
+
+
+@app.post("/admin/cron/transcribe-podcasts")
+async def admin_cron_transcribe_podcasts(hours: int = Query(24, ge=1, le=720),
+                                         session=Depends(get_async_session)):
+    await _cron_unstuck(session)
+    n = await _cron_queue_transcribes(session, content_kind="podcast", hours=hours)
+    started = False
+    try: await _process_next_queued(session); started = True
+    except Exception as exc: print(f"[admin] queue kick faalde: {exc}")
+    return {"ok": True, "queued": n, "queue_started": started, "hours": hours}
+
+
+@app.post("/admin/cron/transcribe-videos")
+async def admin_cron_transcribe_videos(hours: int = Query(24, ge=1, le=720),
+                                       session=Depends(get_async_session)):
+    await _cron_unstuck(session)
+    n = await _cron_queue_transcribes(session, content_kind="youtube", hours=hours)
+    started = False
+    try: await _process_next_queued(session); started = True
+    except Exception as exc: print(f"[admin] queue kick faalde: {exc}")
+    return {"ok": True, "queued": n, "queue_started": started, "hours": hours}
+
+
+@app.post("/admin/cron/summarize-articles")
+async def admin_cron_summarize_articles(hours: int = Query(24, ge=1, le=720),
+                                        session=Depends(get_async_session)):
+    await _cron_unstuck(session)
+    article_ids = await _cron_pick_articles_for_summary(session, hours=hours)
+    if article_ids:
+        from core.db import async_session_maker
+        llm = LLMService(app.state.http_client)
+        asyncio.create_task(_pipeline_summarize_articles(article_ids, llm, async_session_maker))
+    return {"ok": True, "articles_kicked": len(article_ids), "hours": hours}
+
+
+@app.delete("/admin/queue/{item_id}")
+async def admin_queue_remove(item_id: str, session=Depends(get_async_session),
+                             user=Depends(require_user)):
+    """Haal een item uit de queue: reset processing_status naar 'ready'."""
+    r = await session.exec(sa_text(
+        "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL, "
+        "processing_error='handmatig uit queue gehaald' "
+        "WHERE id = CAST(:i AS uuid) "
+        "AND processing_status IN ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status) "
+        "RETURNING id"
+    ).bindparams(i=item_id))
+    found = bool(r.first())
+    await session.commit()
+    if not found:
+        raise HTTPException(status_code=404, detail="Item niet in queue")
+    return {"ok": True, "id": item_id}
+
+
+@app.post("/admin/queue/restart")
+async def admin_queue_restart(session=Depends(get_async_session), user=Depends(require_user)):
+    """Onstuck-pas + kick van de eerstvolgende in de queue. Gebruik bij vastlopers."""
+    unstuck = await _cron_unstuck(session)
+    started = False
+    try:
+        await _process_next_queued(session)
+        started = True
+    except Exception as exc:
+        print(f"[admin] queue restart kick faalde: {exc}")
+    return {"ok": True, "stuck_reset": unstuck, "queue_started": started}
+
+
+@app.post("/admin/cron/digest-topics")
+async def admin_cron_digest_topics(window: DigestWindow = Query("daily"),
+                                   model: DigestModel = Query("opus"),
+                                   session=Depends(get_async_session)):
+    started = await _cron_kick_topic_digests(session, model=model, window=window)
+    return {"ok": True, "digests_started": started, "window": window, "model": model}
 
 
 @app.post("/admin/articles/backfill")
@@ -1431,9 +1672,14 @@ async def admin_queue(session=Depends(get_async_session),
                i.processing_status::text, i.queued_at
         FROM items i
         JOIN sources s ON s.id = i.source_id
-        WHERE i.processing_status IN ('transcribing','queued')
+        WHERE i.processing_status IN ('transcribing','queued','summarizing')
         ORDER BY
-          (i.processing_status = 'transcribing') DESC,
+          CASE i.processing_status::text
+            WHEN 'transcribing' THEN 1
+            WHEN 'summarizing' THEN 2
+            WHEN 'queued' THEN 3
+            ELSE 4
+          END,
           i.queued_at ASC NULLS LAST
         """
     ))
@@ -1474,8 +1720,8 @@ async def list_topics(session=Depends(get_async_session)):
             SELECT t.slug, t.name, COUNT(it.item_id) AS item_count
             FROM topics t
             LEFT JOIN item_topics it ON it.topic_id = t.id
-            GROUP BY t.id, t.slug, t.name
-            ORDER BY t.name
+            GROUP BY t.id, t.slug, t.name, t.sort_order
+            ORDER BY t.sort_order, t.name
             """
         )
     )
