@@ -408,10 +408,12 @@ export interface ModelDefaults {
 }
 
 export interface AskAnswer {
+  id?: string;
   question: string;
   answer: string;
   model: DigestModel;
   sources_used: string[];
+  created_at?: string;
 }
 
 export async function askItem(itemId: string, question: string, model: DigestModel = 'qwen'): Promise<AskAnswer> {
@@ -421,6 +423,17 @@ export async function askItem(itemId: string, question: string, model: DigestMod
     body: JSON.stringify({ question }),
   });
   return r.json();
+}
+
+export async function fetchItemQuestions(itemId: string, limit: number = 20): Promise<AskAnswer[]> {
+  const r = await apiFetch(`/api/huygens/items/${itemId}/questions?limit=${limit}`);
+  return r.json();
+}
+
+export async function deleteQuestion(itemId: string, questionId: string): Promise<void> {
+  await apiFetch(`/api/huygens/items/${itemId}/questions/${questionId}`, {
+    method: 'DELETE',
+  });
 }
 
 export interface AppSettings {

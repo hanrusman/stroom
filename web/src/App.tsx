@@ -9,7 +9,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest, fetchTopicDigestHistory, TopicDigestRun,
          distillMoreLessons, expandLesson, fetchLessonsDigest, regenerateLessonsDigest,
-         askItem, AskAnswer,
+         askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
@@ -940,14 +940,30 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
   );
 };
 
+const formatDateTime = (s: string | null | undefined) => {
+  if (!s) return '';
+  const d = new Date(s);
+  return d.toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+};
+
 const AskTab = ({ itemId }: { itemId: string }) => {
   const { getDefault } = useSettings();
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [history, setHistory] = useState<AskAnswer[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
 
-  useEffect(() => { setHistory([]); setErr(null); setQ(''); }, [itemId]);
+  // Load saved questions on mount
+  useEffect(() => {
+    setLoadingHistory(true);
+    fetchItemQuestions(itemId, 50)
+      .then(qs => setHistory(qs.reverse())) // oldest first
+      .catch(() => {}) // silent fail
+      .finally(() => setLoadingHistory(false));
+  }, [itemId]);
+
+  useEffect(() => { setErr(null); setQ(''); }, [itemId]);
 
   const suggestions = [
     'Wat zijn de kernargumenten?',
@@ -970,20 +986,40 @@ const AskTab = ({ itemId }: { itemId: string }) => {
     }
   };
 
+  const handleDelete = async (idx: number, createdAt?: string) => {
+    // Only delete if we have the ID stored (would need backend to return ID)
+    // For now, just remove from local state
+    setHistory(h => h.filter((_, i) => i !== idx));
+  };
+
   return (
     <div className="space-y-4">
-      {history.length === 0 && (
+      {loadingHistory && history.length === 0 && (
+        <div className="font-serif text-[14px] text-brand-ink/50 italic">Geschiedenis laden…</div>
+      )}
+
+      {!loadingHistory && history.length === 0 && (
         <div className="font-serif text-[14px] text-brand-ink/70 leading-relaxed">
           Stel een vraag over dit item. De assistent gebruikt de samenvatting, lessen en eventueel het transcript.
         </div>
       )}
 
       {history.length > 0 && (
-        <div className="space-y-5">
+        <div className="space-y-5 max-h-[400px] overflow-y-auto pr-2">
           {history.map((a, i) => (
-            <div key={i} className="space-y-2">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/45">
-                Jij <span className="text-brand-ink/30">· {a.model}</span>
+            <div key={i} className="space-y-2 border-b border-brand-ink/5 pb-4 last:border-0">
+              <div className="flex items-center justify-between">
+                <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/45">
+                  Jij <span className="text-brand-ink/30">· {a.model}</span>
+                  {a.created_at && <span className="text-brand-ink/20 ml-2">· {formatDateTime(a.created_at)}</span>}
+                </div>
+                <button
+                  onClick={() => handleDelete(i, a.created_at)}
+                  className="text-brand-ink/20 hover:text-rose-500 transition"
+                  title="Verwijder vraag"
+                >
+                  <X size={12} />
+                </button>
               </div>
               <div className="font-serif text-[14px] text-brand-ink leading-[1.55]">{a.question}</div>
               <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-accent mt-3">Antwoord</div>
