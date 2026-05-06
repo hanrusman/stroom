@@ -209,6 +209,7 @@ class HuygensItem(BaseModel):
     has_summary: bool = False
     has_transcript: bool = False
     scheduled_for: Optional[str] = None
+    quality_score: Optional[int] = None
 
 
 class HuygensRail(BaseModel):
@@ -243,6 +244,7 @@ class HuygensItemDetail(BaseModel):
     processing_status: ProcessingStatus
     queue_position: Optional[int] = None
     scheduled_for: Optional[str] = None
+    quality_score: Optional[int] = None
 
 
 class StatusUpdate(BaseModel):
@@ -308,7 +310,8 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
                    s.name, s.url, s.image_url, i.published_at,
                    COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), '{}') AS topic_names,
                    i.status::text, i.processing_status::text, i.scheduled_for,
-                   i.transcript_segments
+                   i.transcript_segments,
+                   i.quality_score
             FROM items i
             JOIN sources s ON s.id = i.source_id
             LEFT JOIN item_topics it ON it.item_id = i.id
@@ -347,6 +350,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
         processing_status=ProcessingStatus(row[16]),
         queue_position=queue_pos,
         scheduled_for=str(row[17]) if row[17] else None,
+        quality_score=row[19],
     )
 
 
@@ -476,7 +480,8 @@ async def list_filtered_items(
                s.name, s.image_url, i.published_at, i.scheduled_for,
                i.format::text, i.status::text, i.processing_status::text,
                (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
-               (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript
+               (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript,
+               i.quality_score
         FROM items i
         JOIN sources s ON s.id = i.source_id
         {join_topic}
@@ -496,6 +501,7 @@ async def list_filtered_items(
             scheduled_for=str(r[9]) if r[9] else None,
             format=r[10], status=r[11], processing_status=r[12],
             has_summary=bool(r[13]), has_transcript=bool(r[14]),
+            quality_score=r[15],
         )
         for r in rows
     ]
@@ -1748,6 +1754,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
                      i.status::text AS istatus, i.processing_status::text AS pstatus,
                      (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
                      (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript,
+                     i.quality_score,
                      s.max_per_rail,
                      ROW_NUMBER() OVER (
                        PARTITION BY i.source_id, i.format
@@ -1764,7 +1771,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             )
             SELECT fmt, id, title, description, author, thumbnail_url, media_url,
                    sname, simg, published_at, scheduled_for,
-                   istatus, pstatus, has_summary, has_transcript
+                   istatus, pstatus, has_summary, has_transcript, quality_score
             FROM ranked
             WHERE max_per_rail IS NULL OR rn <= max_per_rail
             ORDER BY score DESC NULLS LAST
@@ -1775,7 +1782,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
 
     rails: dict[str, List[HuygensItem]] = {f.value: [] for f in ItemFormat}
     for (fmt, iid, title, desc, author, thumb, media, sname, simg, pub, sched,
-         istatus, pstatus, has_summary, has_transcript) in rows:
+         istatus, pstatus, has_summary, has_transcript, quality_score) in rows:
         if len(rails[fmt]) >= per_rail:
             continue
         rails[fmt].append(HuygensItem(
@@ -1786,6 +1793,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             scheduled_for=str(sched) if sched else None,
             format=fmt, status=istatus, processing_status=pstatus,
             has_summary=bool(has_summary), has_transcript=bool(has_transcript),
+            quality_score=quality_score,
         ))
 
     return HuygensTopic(

@@ -22,6 +22,7 @@ export interface HuygensItem {
   has_summary?: boolean;
   has_transcript?: boolean;
   scheduled_for?: string | null;
+  quality_score?: number | null;
 }
 
 export interface Rail {
@@ -112,6 +113,7 @@ export interface ItemDetail {
   processing_status: ProcessingStatus;
   queue_position: number | null;
   scheduled_for: string | null;
+  quality_score: number | null;
 }
 
 export async function fetchItem(id: string): Promise<ItemDetail> {

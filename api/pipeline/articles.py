@@ -144,21 +144,36 @@ async def summarize_articles(item_ids: list[str], llm_service, async_session_mak
                     await bg.commit()
 
                 cleaned = re.sub(r"\s+", " ", raw)[:12000]
-                summary = await llm_service.call_llm("stroom-bulk", [
+                response = await llm_service.call_llm("stroom-bulk", [
                     {"role": "system", "content": (
                         "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
-                        "Nederlands, zakelijk maar warm, max 3 zinnen. Geef alleen de samenvatting "
-                        "terug, geen inleiding."
+                        "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
+                        "Beoordeel ook de kwaliteit (1-10) op:\n"
+                        "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
+                        "- Diepgang: gaat het verder dan het oppervlakte?\n"
+                        "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
+                        "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
                     )},
                     {"role": "user", "content": f"Titel: {title}\n\nTekst: {cleaned}"},
-                ], temperature=0.3)
+                ], temperature=0.3, response_format="json_object")
+
+                import json as _json
+                try:
+                    data = _json.loads(response)
+                    summary = data.get("summary", "").strip()
+                    quality_score = data.get("quality_score", 5)
+                    # Clamp score 1-10
+                    quality_score = max(1, min(10, int(quality_score)))
+                except Exception:
+                    summary = response.strip() if response else ""
+                    quality_score = 5
 
                 async with async_session_maker() as bg:
                     await bg.exec(sa_text(
                         "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
-                        "summary_generated_at=now(), processing_status='ready'::processing_status "
-                        "WHERE id = CAST(:i AS uuid)"
-                    ).bindparams(s=summary.strip(), i=item_id))
+                        "summary_generated_at=now(), processing_status='ready'::processing_status, "
+                        "quality_score=:q WHERE id = CAST(:i AS uuid)"
+                    ).bindparams(s=summary, i=item_id, q=quality_score))
                     await bg.commit()
                 success += 1
             except Exception as exc:

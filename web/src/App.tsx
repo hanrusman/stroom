@@ -48,15 +48,23 @@ const TopicChip = ({ topic, active, onClick }: {
   </button>
 );
 
-const Meta = ({ item }: { item: HuygensItem }) => (
-  <div className="text-brand-ink/40 mt-3 text-[10px] font-mono uppercase tracking-[0.18em] flex items-center gap-2">
-    <span className="font-medium">{item.source_name}</span>
-    {item.published_at && (<>
-      <span className="opacity-30">·</span>
-      <span>{new Date(item.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
-    </>)}
-  </div>
-);
+const Meta = ({ item }: { item: HuygensItem }) => {
+  const score = item.quality_score;
+  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : '';
+  return (
+    <div className="text-brand-ink/40 mt-3 text-[10px] font-mono uppercase tracking-[0.18em] flex items-center gap-2">
+      <span className="font-medium">{item.source_name}</span>
+      {item.published_at && (<>
+        <span className="opacity-30">·</span>
+        <span>{new Date(item.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
+      </>)}
+      {score ? (<>
+        <span className="opacity-30">·</span>
+        <span className={`font-bold ${scoreColor}`} title="Kwaliteitsscore (1-10)">{score}/10</span>
+      </>) : null}
+    </div>
+  );
+};
 
 type CardAction = 'archived' | 'later' | 'summarize' | 'transcribe';
 
@@ -1322,6 +1330,11 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
               <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
                 {item.author && <>{item.source_name} · </>}{date}
+                {item.quality_score && (
+                  <> · <span className={`font-bold ${item.quality_score >= 8 ? 'text-green-600' : item.quality_score >= 6 ? 'text-amber-600' : 'text-rose-600'}`} >
+                    {item.quality_score}/10
+                  </span></>
+                )}
               </div>
             </div>
           </div>
