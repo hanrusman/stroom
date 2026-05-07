@@ -132,7 +132,7 @@ async def ask_item(item_id: str,
         VALUES (CAST(:iid AS uuid), CAST(:uid AS uuid), :q, :a, :m, :src)
     """), {
         "iid": item_id,
-        "uid": str(user.id),
+        "uid": str(user["id"]),
         "q": q,
         "a": answer_text,
         "m": model,
@@ -160,7 +160,7 @@ async def get_item_questions(item_id: str,
         WHERE item_id = CAST(:iid AS uuid) AND user_id = CAST(:uid AS uuid)
         ORDER BY created_at DESC
         LIMIT :lim
-    """), {"iid": item_id, "uid": str(user.id), "lim": limit})).all()
+    """), {"iid": item_id, "uid": str(user["id"]), "lim": limit})).all()
 
     return [AskAnswer(
         question=r[0],
@@ -184,7 +184,7 @@ async def get_user_questions(limit: int = Query(50, ge=1, le=200),
         WHERE q.user_id = CAST(:uid AS uuid)
         ORDER BY q.created_at DESC
         LIMIT :lim OFFSET :off
-    """), {"uid": str(user.id), "lim": limit, "off": offset})).all()
+    """), {"uid": str(user["id"]), "lim": limit, "off": offset})).all()
 
     return [QuestionHistoryItem(
         id=r[0],
