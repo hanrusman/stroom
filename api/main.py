@@ -1618,7 +1618,7 @@ CRON_WEIGHT_MIN = 5
 CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
 CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
 CRON_STUCK_MIN = 30  # items in queued/transcribing/summarizing > N min → reset to failed
-CRON_NIGHTLY_HOURS = 24 * 7  # nightly + backlog kijkt 7 dagen terug
+CRON_NIGHTLY_HOURS = 24  # nightly kijkt 24u terug (niet meer)
 
 
 async def _cron_unstuck(session) -> int:
