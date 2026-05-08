@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
 from core.auth import require_user
-from core.db import get_async_session
+from core.db import get_async_session, async_session_maker
 
 router = APIRouter()
 
@@ -51,9 +51,38 @@ class InboxFetchResponse(BaseModel):
 INBOX_SOURCE_NAME = "Inbox (handmatig)"
 
 
+async def _extract_article_body(client, url: str) -> Optional[str]:
+    """Best-effort full-article extractie via trafilatura."""
+    try:
+        import trafilatura
+        r = await client.get(
+            url,
+            headers={"User-Agent": "StroomBot/1.0 (+article-ingest)"},
+            timeout=12.0, follow_redirects=True,
+        )
+        if r.status_code != 200:
+            return None
+        ct = r.headers.get("content-type", "").lower()
+        if "html" not in ct and "xml" not in ct:
+            return None
+
+        text = trafilatura.extract(
+            r.text,
+            include_comments=False, include_tables=False,
+            include_links=True, include_formatting=True, include_images=True,
+            output_format="markdown",
+        )
+        if not text or len(text.split()) < 100:
+            return None
+        return text
+    except Exception:
+        return None
+
+
 @router.post("/inbox/submit", response_model=InboxSubmitResponse)
 async def inbox_submit(
     body: InboxSubmitRequest,
+    request: Request,
     session=Depends(get_async_session),
     user=Depends(require_user),
 ):
@@ -63,6 +92,7 @@ async def inbox_submit(
     - Created with processing_status='pending' (articles) or 'queued' (audio/video)
     - Linked to the selected topic
     - Processed by the normal pipeline (summarize/transcribe → distill lessons)
+    - For articles: full content extracted via trafilatura and stored in transcript
     """
     # Validate URL
     url = (body.url or "").strip()
@@ -110,28 +140,35 @@ async def inbox_submit(
     else:
         processing_status = "queued"
 
+    # For articles: extract full content via trafilatura
+    article_body: Optional[str] = None
+    if body.format == "article":
+        article_body = await _extract_article_body(request.app.state.http_client, url)
+
     # Insert item
     r = await session.exec(sa_text(
         """
         INSERT INTO items
             (source_id, external_id, type, format, title, description,
              author, media_url, published_at,
-             processing_status, status)
+             processing_status, status, transcript)
         VALUES (CAST(:sid AS uuid), :eid, CAST(:kind AS content_kind), CAST(:fmt AS item_format),
                 :title, :desc, :author, :url, :pub,
-                CAST(:pstatus AS processing_status), 'new')
+                CAST(:pstatus AS processing_status), 'new', :transcript)
         ON CONFLICT (source_id, external_id) DO UPDATE
             SET title = EXCLUDED.title,
                 description = EXCLUDED.description,
                 author = EXCLUDED.author,
-                format = EXCLUDED.format
+                format = EXCLUDED.format,
+                transcript = EXCLUDED.transcript
         RETURNING id::text
         """
     ).bindparams(
         sid=source_id, eid=ext_id, kind=content_kind, fmt=body.format,
         title=title, desc=body.description or None, author=body.author or None,
         url=url, pub=datetime.now(timezone.utc),
-        pstatus=processing_status
+        pstatus=processing_status,
+        transcript=article_body
     ))
     row = r.first()
     if not row:
@@ -145,11 +182,63 @@ async def inbox_submit(
 
     await session.commit()
 
+    # After commit, trigger summarize for articles with transcript
+    if body.format == "article" and article_body:
+        try:
+            from services.llm_service import LLMService
+            llm = LLMService(request.app.state.http_client)
+            asyncio.create_task(_summarize_inbox_article(item_id, article_body, llm))
+        except Exception as e:
+            print(f"[inbox] Failed to trigger summarize: {e}", flush=True)
+
     return InboxSubmitResponse(
         id=item_id,
         title=title,
         message=f"Item aangemaakt en gekoppeld aan topic '{body.topic_slug}'"
     )
+
+
+async def _summarize_inbox_article(item_id: str, article_body: str, llm_service):
+    """Background task to summarize an inbox article."""
+    try:
+        # Truncate if too long
+        cleaned = re.sub(r"\s+", " ", article_body)[:12000]
+
+        response = await llm_service.call_llm("stroom-bulk", [
+            {"role": "system", "content": (
+                "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
+                "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
+                "Beoordeel ook de kwaliteit (1-10) op:\n"
+                "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
+                "- Diepgang: gaat het verder dan het oppervlakte?\n"
+                "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
+                "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
+            )},
+            {"role": "user", "content": f"Tekst: {cleaned}"},
+        ], temperature=0.3, response_format="json_object")
+
+        import json as _json
+        try:
+            data = _json.loads(response)
+            summary = data.get("summary", "").strip()
+            quality_score = data.get("quality_score", 5)
+            quality_score = max(1, min(10, int(quality_score)))
+        except Exception:
+            summary = response.strip() if response else ""
+            quality_score = 5
+
+        # Update item in database
+        async with async_session_maker() as bg:
+            await bg.exec(sa_text(
+                "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
+                "summary_generated_at=now(), processing_status='ready'::processing_status, "
+                "quality_score=:q WHERE id = CAST(:i AS uuid)"
+            ).bindparams(s=summary, i=item_id, q=quality_score))
+            await bg.commit()
+
+        print(f"[inbox] Article {item_id} summarized", flush=True)
+    except Exception as exc:
+        print(f"[inbox] Summarize failed for {item_id}: {exc}", flush=True)
 
 
 def _detect_format_from_url(url: str) -> InboxFormat:
