@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { SettingsProvider, useSettings } from './settings';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
@@ -11,6 +11,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          distillMoreLessons, expandLesson, fetchLessonsDigest, regenerateLessonsDigest,
          askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
+         submitToInbox, fetchInboxTopics,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
 
@@ -1770,6 +1771,116 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
   );
 }
 
+// --- Inbox Modal ---
+
+function InboxModal({ onClose }: { onClose: () => void }) {
+  const [url, setUrl] = useState('');
+  const [title, setTitle] = useState('');
+  const [format, setFormat] = useState<'article' | 'podcast' | 'video'>('article');
+  const [topicSlug, setTopicSlug] = useState('vandaag');
+  const [description, setDescription] = useState('');
+  const [author, setAuthor] = useState('');
+  const [topics, setTopics] = useState<{ slug: string; name: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchInboxTopics().then(setTopics).catch(() => setTopics([]));
+  }, []);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const res = await submitToInbox({ url, title, format, topic_slug: topicSlug, description: description || null, author: author || null });
+      setSuccess(`${res.title} is toegevoegd aan de inbox.`);
+      setUrl('');
+      setTitle('');
+      setDescription('');
+      setAuthor('');
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-lg bg-brand-cream rounded-lg shadow-xl p-6">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <InboxIcon size={20} />
+            Inbox — Content insturen
+          </h2>
+          <button onClick={onClose} className="p-1 hover:bg-brand-surface rounded"><X size={20} /></button>
+        </div>
+
+        {success && (
+          <div className="mb-4 p-3 bg-green-100 text-green-800 rounded text-sm">{success}</div>
+        )}
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 text-red-800 rounded text-sm">{error}</div>
+        )}
+
+        <form onSubmit={submit} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium mb-1">URL</label>
+            <input type="url" required value={url} onChange={e => setUrl(e.target.value)}
+              placeholder="https://..." className="w-full px-3 py-2 border rounded bg-white" />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Titel</label>
+            <input type="text" required value={title} onChange={e => setTitle(e.target.value)}
+              placeholder="Titel van het item" className="w-full px-3 py-2 border rounded bg-white" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium mb-1">Type</label>
+              <select value={format} onChange={e => setFormat(e.target.value as any)} className="w-full px-3 py-2 border rounded bg-white">
+                <option value="article">Artikel</option>
+                <option value="podcast">Podcast</option>
+                <option value="video">Video</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Topic</label>
+              <select value={topicSlug} onChange={e => setTopicSlug(e.target.value)} className="w-full px-3 py-2 border rounded bg-white">
+                {topics.map(t => <option key={t.slug} value={t.slug}>{t.name}</option>)}
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Auteur (optioneel)</label>
+            <input type="text" value={author} onChange={e => setAuthor(e.target.value)}
+              placeholder="Naam van de auteur" className="w-full px-3 py-2 border rounded bg-white" />
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium mb-1">Beschrijving (optioneel)</label>
+            <textarea value={description} onChange={e => setDescription(e.target.value)}
+              placeholder="Korte beschrijving..." rows={3} className="w-full px-3 py-2 border rounded bg-white" />
+          </div>
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={onClose} className="px-4 py-2 text-sm hover:bg-brand-surface rounded">Annuleren</button>
+            <button type="submit" disabled={busy} className="px-4 py-2 text-sm bg-brand-accent text-white rounded hover:bg-brand-accent/90 disabled:opacity-50 flex items-center gap-2">
+              {busy && <Loader2 size={14} className="animate-spin" />}
+              Toevoegen aan inbox
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (id: string) => void }) {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1868,6 +1979,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
+  const [inboxOpen, setInboxOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const onPop = () => {
@@ -1989,6 +2101,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                     className="hover:text-brand-accent transition-colors">
               <BookOpen size={20} strokeWidth={2.5} />
             </button>
+            <button onClick={() => setInboxOpen(true)} title="Inbox — Content insturen"
+                    className="hover:text-brand-accent transition-colors">
+              <InboxIcon size={20} strokeWidth={2.5} />
+            </button>
             <button onClick={toggleDark} title={dark ? 'Lichtmodus' : 'Donkermodus'}
                     className="hover:text-brand-accent transition-colors">
               {dark ? <Sun size={20} strokeWidth={2.5} /> : <Moon size={20} strokeWidth={2.5} />}
@@ -2084,6 +2200,8 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           </>
         )}
       </main>
+
+      {inboxOpen && <InboxModal onClose={() => setInboxOpen(false)} />}
     </div>
   );
 }

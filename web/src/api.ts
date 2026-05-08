@@ -484,3 +484,34 @@ export async function updateSettings(s: AppSettings): Promise<AppSettings> {
   });
   return r.json();
 }
+
+// --- Inbox ---
+
+export interface InboxSubmitRequest {
+  url: string;
+  title: string;
+  format: 'article' | 'podcast' | 'video';
+  topic_slug: string;
+  description?: string | null;
+  author?: string | null;
+}
+
+export interface InboxSubmitResponse {
+  id: string;
+  title: string;
+  message: string;
+}
+
+export async function submitToInbox(body: InboxSubmitRequest): Promise<InboxSubmitResponse> {
+  const r = await apiFetch('/api/inbox/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
+export async function fetchInboxTopics(): Promise<{ slug: string; name: string }[]> {
+  const r = await apiFetch('/api/inbox/topics');
+  return r.json();
+}

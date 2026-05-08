@@ -97,11 +97,14 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
             ).bindparams(tid=topic_id))).all()
 
             if not rows:
+                msg = f"Geen nieuwe items voor dit topic in de afgelopen {window_hours // 24} dag(en)."
                 await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=:e "
+                    "UPDATE topic_digests SET is_generating=false, error=NULL, "
+                    "markdown=:m, item_count=0, model=NULL, generated_at=now() "
                     "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(e=f"Geen items van laatste {window_hours}u", tid=topic_id, w=window_hours))
+                ).bindparams(m=msg, tid=topic_id, w=window_hours))
                 await bg.commit()
+                print(f"[digest bg] {slug} {window_hours}u klaar — 0 items (geen content)", flush=True)
                 return
 
             blocks = build_corpus(rows)

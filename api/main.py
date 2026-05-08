@@ -29,6 +29,7 @@ from routers import lessons as lessons_router
 from routers import settings as settings_router
 from routers import admin_topics as admin_topics_router
 from routers import ask as ask_router
+from routers import inbox as inbox_router
 
 
 @asynccontextmanager
@@ -122,6 +123,7 @@ app.include_router(lessons_router.router)
 app.include_router(settings_router.router)
 app.include_router(admin_topics_router.router)
 app.include_router(ask_router.router)
+app.include_router(inbox_router.router)
 
 
 # --- Auth routes ---
