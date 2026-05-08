@@ -35,8 +35,45 @@ from routers import inbox as inbox_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=300.0)
+
+    # Start background queue worker
+    from core.db import async_session_maker
+    queue_worker_task = asyncio.create_task(_queue_worker_loop(async_session_maker))
+
     yield
+
+    # Cleanup
+    queue_worker_task.cancel()
+    try:
+        await queue_worker_task
+    except asyncio.CancelledError:
+        pass
     await app.state.http_client.aclose()
+
+
+async def _queue_worker_loop(async_session_maker, interval_seconds: int = 30):
+    """Background worker that periodically checks and processes queues.
+
+    Runs every 30 seconds (configurable via QUEUE_WORKER_INTERVAL_SEC env var).
+    Processes both transcription (A2 GPU) and summarization (external LLM) queues.
+    """
+    interval = int(os.environ.get('QUEUE_WORKER_INTERVAL_SEC', interval_seconds))
+    print(f"[queue-worker] Started, checking queues every {interval}s")
+
+    while True:
+        try:
+            await asyncio.sleep(interval)
+
+            async with async_session_maker() as session:
+                # Process next item from queues
+                await _process_next_queued(session)
+
+        except asyncio.CancelledError:
+            print("[queue-worker] Shutting down")
+            break
+        except Exception as exc:
+            print(f"[queue-worker] Error: {exc}")
+            # Continue running despite errors
 
 
 app = FastAPI(title="Stroom API", lifespan=lifespan)
