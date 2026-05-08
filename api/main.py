@@ -946,7 +946,7 @@ class AddItemTopicRequest(BaseModel):
     topic_slug: str
 
 
-@app.post("/huygens/items/{item_id}/topics", response_model=ItemDetail)
+@app.post("/huygens/items/{item_id}/topics", response_model=HuygensItemDetail)
 async def add_item_topic(item_id: str, body: AddItemTopicRequest,
                          session=Depends(get_async_session),
                          user=Depends(require_user)):
@@ -973,7 +973,7 @@ async def add_item_topic(item_id: str, body: AddItemTopicRequest,
     return await huygens_item(item_id, session)
 
 
-@app.delete("/huygens/items/{item_id}/topics/{topic_slug}", response_model=ItemDetail)
+@app.delete("/huygens/items/{item_id}/topics/{topic_slug}", response_model=HuygensItemDetail)
 async def remove_item_topic(item_id: str, topic_slug: str,
                             session=Depends(get_async_session),
                             user=Depends(require_user)):
