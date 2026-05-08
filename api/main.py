@@ -1973,6 +1973,52 @@ async def admin_delete_source(source_id: str,
     return {"ok": True}
 
 
+class BulkArchiveRequest(BaseModel):
+    topic_slugs: List[str]
+    older_than_days: int
+    weight_max: int = 10
+    formats: List[str]  # article, podcast, video, short
+
+
+class BulkArchiveResponse(BaseModel):
+    archived: int
+
+
+@app.post("/admin/items/bulk-archive", response_model=BulkArchiveResponse)
+async def admin_bulk_archive(body: BulkArchiveRequest,
+                              session=Depends(get_async_session),
+                              user=Depends(require_user)):
+    """Archiveer items in bulk op basis van filters (topic, datum, weight, format)."""
+    if not body.topic_slugs:
+        raise HTTPException(status_code=400, detail="Minstens 1 topic vereist")
+    if not body.formats:
+        raise HTTPException(status_code=400, detail="Minstens 1 format vereist")
+    if body.older_than_days < 1:
+        raise HTTPException(status_code=400, detail="older_than_days moet >= 1 zijn")
+
+    # Format values als literals voor SQL
+    format_literals = ", ".join([f"'{f}'::item_format" for f in body.formats])
+    topic_literals = ", ".join([f"'{s}'" for s in body.topic_slugs])
+
+    result = await session.exec(sa_text(f"""
+        UPDATE items i
+        SET status = 'archived'::item_status
+        FROM sources s
+        JOIN source_topics st ON st.source_id = s.id
+        JOIN topics t ON t.id = st.topic_id
+        WHERE i.source_id = s.id
+          AND t.slug IN ({topic_literals})
+          AND i.format IN ({format_literals})
+          AND i.status != 'archived'::item_status
+          AND i.created_at < now() - interval '{body.older_than_days} days'
+          AND s.weight <= {body.weight_max}
+        RETURNING i.id
+    """))
+    archived_ids = result.all()
+    await session.commit()
+    return BulkArchiveResponse(archived=len(archived_ids))
+
+
 @app.get("/topics", response_model=List[TopicRead])
 async def list_topics(session=Depends(get_async_session)):
     result = await session.exec(

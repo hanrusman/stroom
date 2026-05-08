@@ -385,6 +385,26 @@ export async function restartQueue(): Promise<CronResult> {
   return r.json();
 }
 
+export interface BulkArchiveRequest {
+  topic_slugs: string[];
+  older_than_days: number;
+  weight_max: number;
+  formats: string[];
+}
+
+export interface BulkArchiveResponse {
+  archived: number;
+}
+
+export async function bulkArchive(body: BulkArchiveRequest): Promise<BulkArchiveResponse> {
+  const r = await apiFetch('/api/admin/items/bulk-archive', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
 export interface DigestStatus {
   window: string;
   in_progress: number;

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered, ChevronUp, ChevronDown, Mic, PlayCircle, Sparkles, BookOpen } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered, ChevronUp, ChevronDown, Mic, PlayCircle, Sparkles, BookOpen, Archive } from 'lucide-react';
 import {
   AdminSource, AdminSourceUpdate, AdminSourceCreate, SourceKind,
   fetchAdminSources, updateAdminSource, createAdminSource, deleteAdminSource,
@@ -8,6 +8,7 @@ import {
   AdminTopic, fetchAdminTopics, updateTopicOrder, deleteTopic,
   CronResult, cronTranscribePodcasts, cronTranscribeVideos, cronSummarizeArticles, cronDigestTopics,
   removeFromQueue, restartQueue, fetchDigestStatus, DigestStatus,
+  bulkArchive, BulkArchiveResponse,
 } from './api';
 import { useSettings } from './settings';
 
@@ -746,6 +747,166 @@ const TopicsPanel = () => {
   );
 };
 
+const FORMATS: { key: string; label: string }[] = [
+  { key: 'article', label: 'Artikelen' },
+  { key: 'podcast', label: 'Podcasts' },
+  { key: 'video', label: 'Videos' },
+  { key: 'short', label: 'Shorts' },
+];
+
+const BulkArchivePanel = ({ topics }: { topics: Topic[] }) => {
+  const [selectedTopics, setSelectedTopics] = useState<string[]>([]);
+  const [olderThanDays, setOlderThanDays] = useState<number>(30);
+  const [weightMax, setWeightMax] = useState<number>(5);
+  const [selectedFormats, setSelectedFormats] = useState<string[]>(['article']);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<BulkArchiveResponse | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const toggleTopic = (slug: string) => {
+    setSelectedTopics(prev =>
+      prev.includes(slug) ? prev.filter(s => s !== slug) : [...prev, slug]
+    );
+  };
+
+  const toggleAllTopics = () => {
+    if (selectedTopics.length === topics.length) {
+      setSelectedTopics([]);
+    } else {
+      setSelectedTopics(topics.map(t => t.slug));
+    }
+  };
+
+  const toggleFormat = (key: string) => {
+    setSelectedFormats(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    );
+  };
+
+  const toggleAllFormats = () => {
+    if (selectedFormats.length === FORMATS.length) {
+      setSelectedFormats([]);
+    } else {
+      setSelectedFormats(FORMATS.map(f => f.key));
+    }
+  };
+
+  const submit = async () => {
+    if (selectedTopics.length === 0) {
+      setErr('Selecteer minstens 1 topic');
+      return;
+    }
+    if (selectedFormats.length === 0) {
+      setErr('Selecteer minstens 1 format');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await bulkArchive({
+        topic_slugs: selectedTopics,
+        older_than_days: olderThanDays,
+        weight_max: weightMax,
+        formats: selectedFormats,
+      });
+      setResult(r);
+    } catch (e) {
+      setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Bulk archiveren</h2>
+      <p className="text-[13px] text-brand-ink/60 mb-5">Archiveer oude items automatisch op basis van filters.</p>
+
+      <div className="space-y-5">
+        {/* Topics */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">Topics</span>
+            <button onClick={toggleAllTopics} className="text-[11px] text-brand-blue hover:underline">
+              {selectedTopics.length === topics.length ? 'Deselecteer alles' : 'Selecteer alles'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {topics.map(t => {
+              const on = selectedTopics.includes(t.slug);
+              return (
+                <button key={t.slug} onClick={() => toggleTopic(t.slug)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-mono uppercase tracking-[0.1em] transition ${
+                    on ? 'bg-brand-blue text-brand-cream' : 'bg-brand-surface text-brand-ink/50 hover:bg-brand-surface-low'
+                  }`}>
+                  {t.slug}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Formats */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">Format</span>
+            <button onClick={toggleAllFormats} className="text-[11px] text-brand-blue hover:underline">
+              {selectedFormats.length === FORMATS.length ? 'Deselecteer alles' : 'Selecteer alles'}
+            </button>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {FORMATS.map(f => {
+              const on = selectedFormats.includes(f.key);
+              return (
+                <button key={f.key} onClick={() => toggleFormat(f.key)}
+                  className={`px-2.5 py-1 rounded-full text-[11px] font-mono uppercase tracking-[0.1em] transition ${
+                    on ? 'bg-brand-blue text-brand-cream' : 'bg-brand-surface text-brand-ink/50 hover:bg-brand-surface-low'
+                  }`}>
+                  {f.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Date and Weight */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-1.5 font-mono">Ouder dan (dagen)</span>
+            <input type="number" min={1} max={365} value={olderThanDays}
+              onChange={e => setOlderThanDays(Number(e.target.value))}
+              className="w-full px-3 py-2 rounded-lg border border-brand-ink/20 text-sm bg-brand-cream" />
+          </label>
+          <label className="block">
+            <span className="block text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-1.5 font-mono">Max source weight</span>
+            <input type="number" min={1} max={10} value={weightMax}
+              onChange={e => setWeightMax(Number(e.target.value))}
+              className="w-full px-3 py-2 rounded-lg border border-brand-ink/20 text-sm bg-brand-cream" />
+          </label>
+        </div>
+
+        {/* Submit */}
+        <div className="pt-2">
+          <button onClick={submit} disabled={busy}
+            className="px-5 py-2.5 rounded-xl bg-rose-600 text-brand-cream text-sm flex items-center gap-2 hover:bg-rose-700 disabled:opacity-50 transition">
+            {busy ? <Loader2 size={14} className="animate-spin" /> : <Archive size={14} />}
+            Archiveer {selectedTopics.length > 0 ? selectedTopics.length : ''} topic(s)
+          </button>
+        </div>
+
+        {/* Result */}
+        {result && (
+          <div className="px-4 py-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm font-mono">
+            {result.archived} items gearchiveerd
+          </div>
+        )}
+        {err && <div className="text-rose-600 text-sm">{err}</div>}
+      </div>
+    </section>
+  );
+};
+
 const QueuePanel = ({ onClose }: { onClose: () => void }) => {
   const [items, setItems] = useState<QueueItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -932,6 +1093,8 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
       <CronPanel />
 
       <TopicsPanel />
+
+      <BulkArchivePanel topics={topics} />
 
       <div className="mb-6">
         <NewSourceForm topics={topics}
