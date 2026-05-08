@@ -15,9 +15,11 @@ class ContentKind(str, Enum):
 
 class ProcessingStatus(str, Enum):
     PENDING = "pending"
-    QUEUED = "queued"
-    TRANSCRIBING = "transcribing"
-    SUMMARIZING = "summarizing"
+    QUEUED = "queued"                    # Generic queue (legacy/compatibility)
+    TRANSCRIBE_QUEUED = "transcribe_queued"  # Await A2 GPU (WhisperX)
+    TRANSCRIBING = "transcribing"          # A2 GPU busy
+    SUMMARIZE_QUEUED = "summarize_queued"  # Await external LLM (Qwen)
+    SUMMARIZING = "summarizing"            # External LLM busy
     READY = "ready"
     FAILED = "failed"
 

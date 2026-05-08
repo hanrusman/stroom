@@ -83,7 +83,7 @@ export async function fetchHuygens(slug: string): Promise<HuygensTopic> {
 }
 
 export type ItemStatus = 'new' | 'pinned' | 'later' | 'archived';
-export type ProcessingStatus = 'pending' | 'queued' | 'transcribing' | 'summarizing' | 'ready' | 'failed';
+export type ProcessingStatus = 'pending' | 'queued' | 'transcribe_queued' | 'summarize_queued' | 'transcribing' | 'summarizing' | 'ready' | 'failed';
 
 export interface TranscriptSegment {
   start: number;
@@ -135,6 +135,15 @@ export const summarizeItem  = (id: string) => postAction(id, 'summarize');
 export const transcribeItem = (id: string) => postAction(id, 'transcribe');
 export const scheduleItem   = (id: string, scheduled_for: string | null) =>
   postAction(id, 'schedule', { scheduled_for });
+
+export async function updateItemQualityScore(id: string, quality_score: number | null): Promise<ItemDetail> {
+  const r = await apiFetch(`/api/huygens/items/${id}/quality-score`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ quality_score }),
+  });
+  return r.json();
+}
 
 export interface Lesson {
   id: string;

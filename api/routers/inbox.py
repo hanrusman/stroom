@@ -199,7 +199,7 @@ async def inbox_submit(
 
 
 async def _summarize_inbox_article(item_id: str, article_body: str, llm_service):
-    """Background task to summarize an inbox article."""
+    """Background task to summarize an inbox article and distill lessons."""
     try:
         # Truncate if too long
         cleaned = re.sub(r"\s+", " ", article_body)[:12000]
@@ -208,10 +208,12 @@ async def _summarize_inbox_article(item_id: str, article_body: str, llm_service)
             {"role": "system", "content": (
                 "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
                 "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
-                "Beoordeel ook de kwaliteit (1-10) op:\n"
+                "Beoordeel daarna de kwaliteit (1-10) op:\n"
                 "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
                 "- Diepgang: gaat het verder dan het oppervlakte?\n"
                 "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
+                "VERPLICHT: geef ALTIJD een quality_score terug als integer 1-10. "
+                "Als je echt niet kunt beoordelen, gebruik dan null.\n\n"
                 "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
             )},
             {"role": "user", "content": f"Tekst: {cleaned}"},
@@ -221,11 +223,18 @@ async def _summarize_inbox_article(item_id: str, article_body: str, llm_service)
         try:
             data = _json.loads(response)
             summary = data.get("summary", "").strip()
-            quality_score = data.get("quality_score", 5)
-            quality_score = max(1, min(10, int(quality_score)))
+            # Only set quality_score if LLM actually provides one; otherwise None (neutral)
+            raw_score = data.get("quality_score")
+            if raw_score is not None:
+                try:
+                    quality_score = max(1, min(10, int(raw_score)))
+                except (TypeError, ValueError):
+                    quality_score = None
+            else:
+                quality_score = None
         except Exception:
             summary = response.strip() if response else ""
-            quality_score = 5
+            quality_score = None
 
         # Update item in database
         async with async_session_maker() as bg:
@@ -237,8 +246,61 @@ async def _summarize_inbox_article(item_id: str, article_body: str, llm_service)
             await bg.commit()
 
         print(f"[inbox] Article {item_id} summarized", flush=True)
+
+        # Now distill lessons from the summary
+        await _distill_inbox_lessons(item_id, summary, article_body, llm_service)
     except Exception as exc:
         print(f"[inbox] Summarize failed for {item_id}: {exc}", flush=True)
+
+
+async def _distill_inbox_lessons(item_id: str, summary: str, article_body: str, llm_service):
+    """Distill lessons from article summary."""
+    try:
+        body_text = article_body.strip()[:18000]
+        if not body_text:
+            return
+
+        system = (
+            "Je destilleert kernlessen uit een bron (artikel). "
+            "Lever concrete, bruikbare lessen die de kern van het artikel vangen.\n\n"
+            "Output: strikt JSON, vorm: {\"lessons\": [{\"title\": \"…\", \"body\": \"…\"}]}\n"
+            "- title: korte kop (4-8 woorden)\n"
+            "- body: 1-3 zinnen, concreet en bruikbaar\n"
+            "Maximaal 5 lessen. Liever 0 dan oppervlakkig."
+        )
+        user_prompt = f"Samenvatting: {summary}\n\nArtikel tekst:\n{body_text}"
+
+        raw = await llm_service.call_llm(
+            "stroom-bulk",
+            [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
+            temperature=0.4, response_format="json_object", timeout=240.0,
+        )
+
+        import json
+        try:
+            data = json.loads(raw)
+            new_lessons = data.get("lessons", []) or []
+        except json.JSONDecodeError:
+            print(f"[inbox] Invalid JSON for lessons {item_id}", flush=True)
+            return
+
+        async with async_session_maker() as bg:
+            inserted = 0
+            for idx, entry in enumerate(new_lessons, start=1):
+                t = (entry.get("title") or "").strip()
+                b = (entry.get("body") or "").strip()
+                if not t or not b:
+                    continue
+                await bg.exec(sa_text(
+                    "INSERT INTO lessons (item_id, idx, title, body) "
+                    "VALUES (CAST(:i AS uuid), :idx, :t, :b)"
+                ).bindparams(i=item_id, idx=idx, t=t, b=b))
+                inserted += 1
+            if inserted:
+                await bg.commit()
+                print(f"[inbox] Article {item_id} distilled {inserted} lessons", flush=True)
+    except Exception as exc:
+        print(f"[inbox] Distill lessons failed for {item_id}: {exc}", flush=True)
 
 
 def _detect_format_from_url(url: str) -> InboxFormat:

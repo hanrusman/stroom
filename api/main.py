@@ -771,25 +771,63 @@ async def _start_transcribe(session, item_id: str, media_url: str, item_type: st
         raise
 
 
+async def _start_summarize(session, item_id: str) -> None:
+    """Mark item as summarizing and kick off background summarization via LLM."""
+    await session.exec(sa_text(
+        "UPDATE items SET processing_status='summarizing'::processing_status, "
+        "processing_error=NULL WHERE id = CAST(:i AS uuid)"
+    ).bindparams(i=item_id))
+    await session.commit()
+
+    try:
+        from core.db import async_session_maker
+        llm = LLMService(app.state.http_client)
+        asyncio.create_task(_summarize_single_item(item_id, llm, async_session_maker))
+    except Exception as exc:
+        await session.exec(sa_text(
+            "UPDATE items SET processing_status='failed'::processing_status, processing_error=:e "
+            "WHERE id = CAST(:i AS uuid)"
+        ).bindparams(e=f"summarize trigger failed: {exc}"[:500], i=item_id))
+        await session.commit()
+        raise
+
+
 async def _process_next_queued(session) -> None:
-    """If GPU is free and queue has items, kick off the next one (FIFO)."""
+    """Process next item from queues:
+    1. Transcription queue (A2 GPU) - checked first, limited to 1 concurrent
+    2. Summarization queue (external LLM) - no limit, processed in background
+    """
+    # Check transcription queue first (A2 GPU, limited capacity)
     r = await session.exec(sa_text(
         "SELECT COUNT(*) FROM items WHERE processing_status='transcribing'::processing_status"
     ))
-    if r.first()[0] >= 1:
-        return
+    if r.first()[0] < 1:
+        # GPU is free, pick from transcribe queue
+        r = await session.exec(sa_text(
+            "SELECT id::text, media_url, type::text FROM items "
+            "WHERE processing_status='transcribe_queued'::processing_status "
+            "ORDER BY queued_at ASC LIMIT 1"
+        ))
+        nxt = r.first()
+        if nxt:
+            try:
+                await _start_transcribe(session, nxt[0], nxt[1], nxt[2])
+                return  # Started transcription, done for this cycle
+            except Exception as exc:
+                print(f"[queue] kon transcribe niet starten: {exc}")
+
+    # Process summarization queue (external LLM, can be parallel)
     r = await session.exec(sa_text(
-        "SELECT id::text, media_url, type::text FROM items "
-        "WHERE processing_status='queued'::processing_status "
+        "SELECT id::text FROM items "
+        "WHERE processing_status='summarize_queued'::processing_status "
         "ORDER BY queued_at ASC LIMIT 1"
     ))
     nxt = r.first()
-    if not nxt:
-        return
-    try:
-        await _start_transcribe(session, nxt[0], nxt[1], nxt[2])
-    except Exception as exc:
-        print(f"[queue] kon volgend item niet starten: {exc}")
+    if nxt:
+        try:
+            await _start_summarize(session, nxt[0])
+        except Exception as exc:
+            print(f"[queue] kon summarize niet starten: {exc}")
 
 
 @app.post("/huygens/items/{item_id}/transcribe", response_model=HuygensItemDetail)
@@ -909,6 +947,9 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
     if body.transcript_segments:
         segments_json = _json.dumps(body.transcript_segments)
 
+    # Determine next status: ready if summary present, else queue for summarization
+    next_status = 'ready' if summary else 'summarize_queued'
+
     await session.exec(sa_text(
         """
         UPDATE items SET
@@ -917,11 +958,11 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
           summary = COALESCE(NULLIF(:s, ''), summary),
           summary_model = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN 'samenvat-agent' ELSE summary_model END,
           summary_generated_at = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN now() ELSE summary_generated_at END,
-          processing_status = 'ready'::processing_status,
+          processing_status = CAST(:ns AS processing_status),
           processing_error = NULL
         WHERE id = CAST(:i AS uuid)
         """
-    ).bindparams(t=transcript, segs=segments_json, s=summary, i=item_id))
+    ).bindparams(t=transcript, segs=segments_json, s=summary, ns=next_status, i=item_id))
     await session.commit()
 
     if summary:
@@ -995,6 +1036,43 @@ async def remove_item_topic(item_id: str, topic_slug: str,
     await session.exec(sa_text(
         "DELETE FROM item_topics WHERE item_id = CAST(:iid AS uuid) AND topic_id = :tid"
     ).bindparams(iid=item_id, tid=topic_id))
+    await session.commit()
+
+    return await huygens_item(item_id, session)
+
+
+# --- User: quality score feedback ---
+
+class QualityScoreUpdate(BaseModel):
+    quality_score: Optional[int] = None  # 1-10 or null for neutral
+
+
+@app.patch("/huygens/items/{item_id}/quality-score", response_model=HuygensItemDetail)
+async def update_item_quality_score(
+    item_id: str,
+    update: QualityScoreUpdate,
+    session=Depends(get_async_session),
+    user=Depends(require_user),
+):
+    """Update the quality score of an item (user feedback).
+
+    Allows users to correct the auto-generated quality score.
+    Set to null to remove the score (neutral).
+    """
+    # Verify item exists
+    item = await _fetch_item_row(session, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Validate score range if provided
+    if update.quality_score is not None:
+        if not (1 <= update.quality_score <= 10):
+            raise HTTPException(status_code=400, detail="Quality score must be between 1 and 10")
+
+    # Update the score
+    await session.exec(sa_text(
+        "UPDATE items SET quality_score = :score WHERE id = CAST(:id AS uuid)"
+    ).bindparams(score=update.quality_score, id=item_id))
     await session.commit()
 
     return await huygens_item(item_id, session)
@@ -1234,6 +1312,72 @@ from pipeline.articles import (
 )
 
 
+async def _summarize_single_item(item_id: str, llm_service, async_session_maker) -> bool:
+    """Summarize a single item (article/podcast/video with transcript)."""
+    try:
+        async with async_session_maker() as bg:
+            r = await bg.exec(sa_text(
+                "SELECT title, transcript, description, type::text FROM items WHERE id = CAST(:i AS uuid)"
+            ).bindparams(i=item_id))
+            row = r.first()
+            if not row:
+                return False
+            title = row[0]
+            raw = (row[1] or "").strip() or re.sub(r"<[^>]+>", " ", row[2] or "").strip()
+            if not raw:
+                await bg.exec(sa_text(
+                    "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL "
+                    "WHERE id = CAST(:i AS uuid)"
+                ).bindparams(i=item_id))
+                await bg.commit()
+                return True
+
+        cleaned = re.sub(r"\s+", " ", raw)[:12000]
+        response = await llm_service.call_llm("stroom-bulk", [
+            {"role": "system", "content": (
+                "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
+                "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
+                "Beoordeel ook de kwaliteit (1-10) op:\n"
+                "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
+                "- Diepgang: gaat het verder dan het oppervlakte?\n"
+                "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
+                "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
+            )},
+            {"role": "user", "content": f"Titel: {title}\n\nTekst: {cleaned}"},
+        ], temperature=0.3, response_format="json_object")
+
+        import json as _json
+        try:
+            data = _json.loads(response)
+            summary = data.get("summary", "").strip()
+            quality_score = data.get("quality_score")
+            if quality_score is not None:
+                quality_score = max(1, min(10, int(quality_score)))
+        except Exception:
+            summary = response.strip() if response else ""
+            quality_score = None
+
+        async with async_session_maker() as bg:
+            await bg.exec(sa_text(
+                "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
+                "summary_generated_at=now(), processing_status='ready'::processing_status, "
+                "quality_score=:q, queued_at=NULL WHERE id = CAST(:i AS uuid)"
+            ).bindparams(s=summary, i=item_id, q=quality_score))
+            await bg.commit()
+        return True
+    except Exception as exc:
+        try:
+            async with async_session_maker() as bg:
+                await bg.exec(sa_text(
+                    "UPDATE items SET processing_status='failed'::processing_status, "
+                    "processing_error=:e, queued_at=NULL WHERE id = CAST(:i AS uuid)"
+                ).bindparams(e=f"summarize: {exc}"[:500], i=item_id))
+                await bg.commit()
+        except Exception:
+            pass
+        return False
+
+
 async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Fetch URL, return og:image / twitter:image. Best-effort: returns None on any failure."""
     if not url:
@@ -1441,13 +1585,15 @@ CRON_NIGHTLY_HOURS = 24 * 7  # nightly + backlog kijkt 7 dagen terug
 
 
 async def _cron_unstuck(session) -> int:
-    """Reset items that have been stuck in queued/transcribing/summarizing too long."""
+    """Reset items that have been stuck in queues/processing too long."""
     r = await session.exec(sa_text(f"""
         UPDATE items SET
           processing_status = 'failed'::processing_status,
           processing_error = 'stuck > {CRON_STUCK_MIN} min — auto-reset by cron'
         WHERE processing_status IN
-              ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status)
+              ('queued'::processing_status, 'transcribe_queued'::processing_status,
+               'summarize_queued'::processing_status, 'transcribing'::processing_status,
+               'summarizing'::processing_status)
           AND queued_at IS NOT NULL
           AND queued_at < now() - interval '{CRON_STUCK_MIN} minutes'
         RETURNING id
@@ -1461,7 +1607,7 @@ async def _cron_queue_transcribes(session, *, content_kind: str,
                                   hours: Optional[int] = None,
                                   weight_min: int = CRON_WEIGHT_MIN,
                                   limit: Optional[int] = None) -> int:
-    """Mark items as queued for transcription. Increments transcribe_attempts.
+    """Mark items as queued for transcription (A2 GPU). Increments transcribe_attempts.
 
     `content_kind`: 'podcast' or 'youtube'.
     `hours`: only items published in last N hours, or None for all-time backlog.
@@ -1478,14 +1624,15 @@ async def _cron_queue_transcribes(session, *, content_kind: str,
             AND (i.transcript IS NULL OR i.transcript = '')
             AND i.media_url IS NOT NULL AND i.media_url <> ''
             AND i.processing_status NOT IN
-                ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status)
+                ('transcribe_queued'::processing_status, 'transcribing'::processing_status,
+                 'queued'::processing_status, 'summarizing'::processing_status)
             AND i.transcribe_attempts < :max_att
             {where_age}
           ORDER BY s.weight DESC, i.published_at DESC
           {f'LIMIT {int(limit)}' if limit else ''}
         )
         UPDATE items SET
-          processing_status = 'queued'::processing_status,
+          processing_status = 'transcribe_queued'::processing_status,
           queued_at = now(),
           processing_error = NULL,
           transcribe_attempts = transcribe_attempts + 1
@@ -1505,8 +1652,8 @@ async def _cron_pick_articles_for_summary(session, *,
                                           hours: Optional[int] = None,
                                           weight_min: int = CRON_WEIGHT_MIN,
                                           limit: int = 200) -> list[str]:
-    """Pick articles needing summary, pre-mark als 'queued' zodat ze direct zichtbaar zijn
-    in het queue-paneel. Pipeline flipt ze daarna naar 'summarizing' → 'ready'."""
+    """Pick articles needing summary, pre-mark als 'summarize_queued' zodat ze direct zichtbaar zijn
+    in het queue-paneel (awaiting external LLM). Pipeline flipt ze daarna naar 'summarizing' → 'ready'."""
     where_age = "AND i.published_at >= now() - (:hrs * interval '1 hour')" if hours is not None else ""
     sql = f"""
         WITH picks AS (
@@ -1520,13 +1667,14 @@ async def _cron_pick_articles_for_summary(session, *,
             AND length(COALESCE(NULLIF(i.transcript, ''), NULLIF(i.description, ''))) >= 200
             AND (i.summary IS NULL OR i.summary = '')
             AND i.processing_status NOT IN
-                ('summarizing'::processing_status, 'queued'::processing_status, 'transcribing'::processing_status)
+                ('summarize_queued'::processing_status, 'summarizing'::processing_status,
+                 'queued'::processing_status, 'transcribing'::processing_status)
             {where_age}
           ORDER BY s.weight DESC, i.published_at DESC
           LIMIT :lim
         )
         UPDATE items SET
-          processing_status = 'queued'::processing_status,
+          processing_status = 'summarize_queued'::processing_status,
           queued_at = now(),
           processing_error = NULL
         WHERE id IN (SELECT id FROM picks)
@@ -1681,7 +1829,8 @@ async def admin_queue_remove(item_id: str, session=Depends(get_async_session),
         "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL, "
         "processing_error='handmatig uit queue gehaald' "
         "WHERE id = CAST(:i AS uuid) "
-        "AND processing_status IN ('queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status) "
+        "AND processing_status IN ('queued'::processing_status, 'transcribe_queued'::processing_status, "
+        "'summarize_queued'::processing_status, 'transcribing'::processing_status, 'summarizing'::processing_status) "
         "RETURNING id"
     ).bindparams(i=item_id))
     found = bool(r.first())
@@ -1743,13 +1892,17 @@ async def admin_queue(session=Depends(get_async_session),
                i.processing_status::text, i.queued_at
         FROM items i
         JOIN sources s ON s.id = i.source_id
-        WHERE i.processing_status IN ('transcribing','queued','summarizing')
+        WHERE i.processing_status IN (
+            'transcribe_queued', 'transcribing',
+            'summarize_queued', 'summarizing'
+        )
         ORDER BY
           CASE i.processing_status::text
             WHEN 'transcribing' THEN 1
             WHEN 'summarizing' THEN 2
-            WHEN 'queued' THEN 3
-            ELSE 4
+            WHEN 'transcribe_queued' THEN 3
+            WHEN 'summarize_queued' THEN 4
+            ELSE 5
           END,
           i.queued_at ASC NULLS LAST
         """
@@ -1758,7 +1911,7 @@ async def admin_queue(session=Depends(get_async_session),
     out = []
     pos = 0
     for row in rows:
-        if row[4] == "queued":
+        if row[4] in ("transcribe_queued", "summarize_queued"):
             pos += 1
         out.append(QueueItem(
             id=row[0], title=row[1], source_name=row[2], format=row[3],

@@ -12,7 +12,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
-         addItemToTopic, removeItemTopic,
+         addItemToTopic, removeItemTopic, updateItemQualityScore,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
 
@@ -68,6 +68,60 @@ const Meta = ({ item }: { item: HuygensItem }) => {
   );
 };
 
+const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void }) => {
+  const [isEditing, setIsEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : 'text-brand-ink/40';
+
+  const handleSelect = async (newScore: number | null) => {
+    setBusy(true);
+    try {
+      const updated = await updateItemQualityScore(itemId, newScore);
+      onUpdate(updated.quality_score);
+    } catch (e) {
+      console.error('Failed to update quality score:', e);
+    } finally {
+      setBusy(false);
+      setIsEditing(false);
+    }
+  };
+
+  if (isEditing) {
+    return (
+      <span className="relative inline-flex items-center gap-1">
+        <select
+          autoFocus
+          disabled={busy}
+          onChange={(e) => {
+            const val = e.target.value;
+            handleSelect(val === '' ? null : parseInt(val, 10));
+          }}
+          onBlur={() => setIsEditing(false)}
+          className="font-mono text-[10px] uppercase tracking-[0.2em] bg-brand-surface border border-brand-ink/20 rounded px-1 py-0.5 w-16"
+          defaultValue={score ?? ''}
+        >
+          <option value="">—</option>
+          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+            <option key={n} value={n}>{n}/10</option>
+          ))}
+        </select>
+        {busy && <Loader2 size={12} className="animate-spin" />}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setIsEditing(true)}
+      title="Klik om kwaliteitsscore aan te passen"
+      className={`font-bold ${scoreColor} hover:opacity-70 cursor-pointer`}
+    >
+      {score ? `${score}/10` : '—'}
+    </button>
+  );
+};
+
 type CardAction = 'archived' | 'later' | 'summarize' | 'transcribe';
 
 const IconBtn = ({ icon: Icon, title, active, busy, disabled, onClick }: {
@@ -113,8 +167,8 @@ const CardActions = ({ item, onUpdate }: {
   const isLater = item.status === 'later' || !!item.scheduled_for;
   const proc = item.processing_status;
   const isMedia = item.format === 'podcast' || item.format === 'video';
-  const transcribing = proc === 'queued' || proc === 'transcribing';
-  const summarizing = proc === 'summarizing';
+  const transcribing = proc === 'queued' || proc === 'transcribe_queued' || proc === 'transcribing';
+  const summarizing = proc === 'summarize_queued' || proc === 'summarizing';
 
   return (
     <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-brand-ink/5"
@@ -1283,7 +1337,9 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   useEffect(() => {
     if (!item) return;
     const proc = item.processing_status;
-    if (proc !== 'queued' && proc !== 'transcribing' && proc !== 'summarizing') return;
+    // Poll while item is in any queue or processing state
+    const activeStates = ['queued', 'transcribe_queued', 'summarize_queued', 'transcribing', 'summarizing'];
+    if (!activeStates.includes(proc)) return;
     const t = setInterval(() => {
       fetchItem(id).then(setItem).catch(() => {});
     }, 8000);
@@ -1309,13 +1365,13 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   const proc = item.processing_status;
 
   const hasTranscript = !!(item.transcript && item.transcript.trim());
-  const isQueued = proc === 'queued';
+  const isQueued = proc === 'queued' || proc === 'transcribe_queued' || proc === 'summarize_queued';
   const isTranscribing = proc === 'transcribing';
   const transcribeLabel = hasTranscript ? 'Transcribed'
                         : isQueued ? (item.queue_position ? `Queued #${item.queue_position}` : 'Queued…')
                         : isTranscribing ? 'Transcribing…'
                         : 'Transcribe';
-  const summarizeBusy = busy === 'summarize' || proc === 'summarizing';
+  const summarizeBusy = busy === 'summarize' || proc === 'summarizing' || proc === 'summarize_queued';
   const onSummarize = () => wrap('summarize', () => summarizeItem(id));
 
   return (
@@ -1400,11 +1456,11 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
               <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
                 {item.author && <>{item.source_name} · </>}{date}
-                {item.quality_score && (
-                  <> · <span className={`font-bold ${item.quality_score >= 8 ? 'text-green-600' : item.quality_score >= 6 ? 'text-amber-600' : 'text-rose-600'}`} >
-                    {item.quality_score}/10
-                  </span></>
-                )}
+                <> · <QualityScoreEditor
+                  itemId={item.id}
+                  score={item.quality_score}
+                  onUpdate={(newScore) => setItem(prev => prev ? { ...prev, quality_score: newScore } : prev)}
+                /></>
               </div>
             </div>
           </div>
