@@ -511,6 +511,28 @@ export async function submitToInbox(body: InboxSubmitRequest): Promise<InboxSubm
   return r.json();
 }
 
+export interface InboxFetchRequest {
+  url: string;
+}
+
+export interface InboxFetchResponse {
+  url: string;
+  title: string | null;
+  description: string | null;
+  author: string | null;
+  format: 'article' | 'podcast' | 'video';
+  thumbnail_url: string | null;
+}
+
+export async function fetchInboxMetadata(body: InboxFetchRequest): Promise<InboxFetchResponse> {
+  const r = await apiFetch('/api/inbox/fetch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.json();
+}
+
 export async function fetchInboxTopics(): Promise<{ slug: string; name: string }[]> {
   const r = await apiFetch('/api/inbox/topics');
   return r.json();

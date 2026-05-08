@@ -1,10 +1,13 @@
 """Inbox router - handmatig content insturen voor verwerking."""
 from __future__ import annotations
 
+import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Literal, Optional
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
@@ -29,6 +32,19 @@ class InboxSubmitResponse(BaseModel):
     id: str
     title: str
     message: str
+
+
+class InboxFetchRequest(BaseModel):
+    url: str
+
+
+class InboxFetchResponse(BaseModel):
+    url: str
+    title: Optional[str] = None
+    description: Optional[str] = None
+    author: Optional[str] = None
+    format: InboxFormat
+    thumbnail_url: Optional[str] = None
 
 
 # Inbox source ID (created manually in DB)
@@ -131,6 +147,196 @@ async def inbox_submit(
         title=title,
         message=f"Item aangemaakt en gekoppeld aan topic '{body.topic_slug}'"
     )
+
+
+def _detect_format_from_url(url: str) -> InboxFormat:
+    """Detect format based on URL patterns."""
+    parsed = urlparse(url)
+    hostname = parsed.hostname or ""
+    path = parsed.path or ""
+
+    # YouTube
+    if "youtube.com" in hostname or "youtu.be" in hostname:
+        return "video"
+    # Spotify, Apple Podcasts
+    if "spotify.com" in hostname or "podcasts.apple.com" in hostname:
+        return "podcast"
+    # SoundCloud (often podcasts)
+    if "soundcloud.com" in hostname:
+        return "podcast"
+    # Vimeo
+    if "vimeo.com" in hostname:
+        return "video"
+    # Default to article
+    return "article"
+
+
+async def _fetch_url_metadata(client, url: str) -> InboxFetchResponse:
+    """Fetch metadata from URL using trafilatura for articles or page scraping."""
+    fmt = _detect_format_from_url(url)
+
+    # For YouTube videos, extract info from URL/oEmbed
+    if fmt == "video" and ("youtube.com" in url or "youtu.be" in url):
+        return await _fetch_youtube_metadata(client, url)
+
+    # For articles and other content, use trafilatura
+    try:
+        r = await client.get(
+            url,
+            headers={"User-Agent": "StroomBot/1.0 (+inbox-fetch)"},
+            timeout=10.0, follow_redirects=True,
+        )
+        if r.status_code != 200:
+            return InboxFetchResponse(url=url, format=fmt)
+
+        html = r.text
+
+        # Extract title from various sources
+        title = None
+        # Try og:title first
+        og_title_match = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_title_match:
+            title = og_title_match.group(1).strip()
+        # Try twitter:title
+        if not title:
+            tw_title_match = re.search(r'<meta[^>]+name=["\']twitter:title["\'][^>]+content=["\']([^"\']+)', html, re.I)
+            if tw_title_match:
+                title = tw_title_match.group(1).strip()
+        # Fallback to title tag
+        if not title:
+            title_match = re.search(r'<title[^>]*>([^<]+)</title>', html, re.I)
+            if title_match:
+                title = title_match.group(1).strip()
+
+        # Extract description
+        desc = None
+        og_desc_match = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_desc_match:
+            desc = og_desc_match.group(1).strip()
+        if not desc:
+            meta_desc_match = re.search(r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)', html, re.I)
+            if meta_desc_match:
+                desc = meta_desc_match.group(1).strip()
+
+        # Extract author
+        author = None
+        og_author_match = re.search(r'<meta[^>]+name=["\']author["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_author_match:
+            author = og_author_match.group(1).strip()
+
+        # Extract thumbnail
+        thumb = None
+        og_image_match = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_image_match:
+            thumb = og_image_match.group(1).strip()
+
+        # For articles, try trafilatura for better content
+        if fmt == "article":
+            try:
+                import trafilatura
+                extracted = trafilatura.extract(
+                    html,
+                    include_comments=False, include_tables=False,
+                    include_links=False, include_formatting=False,
+                    target_language="nl",
+                )
+                if extracted and not desc:
+                    # Use first paragraph as description
+                    first_para = extracted.strip().split('\n')[0][:500]
+                    if first_para:
+                        desc = first_para
+            except Exception:
+                pass
+
+        return InboxFetchResponse(
+            url=url,
+            title=title,
+            description=desc,
+            author=author,
+            format=fmt,
+            thumbnail_url=thumb,
+        )
+    except Exception:
+        return InboxFetchResponse(url=url, format=fmt)
+
+
+async def _fetch_youtube_metadata(client, url: str) -> InboxFetchResponse:
+    """Extract metadata from YouTube page."""
+    try:
+        # Try to get video ID from URL
+        video_id = None
+        if "youtu.be" in url:
+            video_id = url.split('/')[-1].split('?')[0]
+        else:
+            match = re.search(r'[?&]v=([^&]+)', url)
+            if match:
+                video_id = match.group(1)
+
+        r = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; StroomBot/1.0)"},
+            timeout=10.0, follow_redirects=True,
+        )
+        if r.status_code != 200:
+            return InboxFetchResponse(url=url, format="video")
+
+        html = r.text
+
+        # Extract title
+        title = None
+        og_title = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_title:
+            title = og_title.group(1).strip()
+
+        # Extract description
+        desc = None
+        og_desc = re.search(r'<meta[^>]+property=["\']og:description["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_desc:
+            desc = og_desc.group(1).strip()
+
+        # Extract author/channel
+        author = None
+        # Try to find channel name
+        channel_match = re.search(r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\'][^"\']*channel/([^"\'\']+)', html, re.I)
+        if channel_match:
+            author = channel_match.group(1)
+
+        # Extract thumbnail
+        thumb = None
+        if video_id:
+            thumb = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
+        og_image = re.search(r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', html, re.I)
+        if og_image:
+            thumb = og_image.group(1).strip()
+
+        return InboxFetchResponse(
+            url=url,
+            title=title,
+            description=desc,
+            author=author,
+            format="video",
+            thumbnail_url=thumb,
+        )
+    except Exception:
+        return InboxFetchResponse(url=url, format="video")
+
+
+@router.post("/inbox/fetch", response_model=InboxFetchResponse)
+async def inbox_fetch(
+    body: InboxFetchRequest,
+    request: Request,
+    user=Depends(require_user),
+):
+    """Fetch metadata from a URL to pre-fill inbox form.
+
+    Returns title, description, author, detected format, and thumbnail.
+    """
+    url = (body.url or "").strip()
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="Ongeldige URL (moet http:// of https:// zijn)")
+
+    http_client = request.app.state.http_client
+    return await _fetch_url_metadata(http_client, url)
 
 
 @router.get("/inbox/topics")

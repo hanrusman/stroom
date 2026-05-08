@@ -11,7 +11,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          distillMoreLessons, expandLesson, fetchLessonsDigest, regenerateLessonsDigest,
          askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
-         submitToInbox, fetchInboxTopics,
+         submitToInbox, fetchInboxMetadata, fetchInboxTopics,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
 
@@ -1782,12 +1782,41 @@ function InboxModal({ onClose }: { onClose: () => void }) {
   const [author, setAuthor] = useState('');
   const [topics, setTopics] = useState<{ slug: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [fetching, setFetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [fetchedThumb, setFetchedThumb] = useState<string | null>(null);
 
   useEffect(() => {
     fetchInboxTopics().then(setTopics).catch(() => setTopics([]));
   }, []);
+
+  // Debounced URL fetch
+  useEffect(() => {
+    const trimmed = url.trim();
+    if (!trimmed || !trimmed.startsWith('http')) return;
+
+    const timer = setTimeout(async () => {
+      setFetching(true);
+      setError(null);
+      try {
+        const meta = await fetchInboxMetadata({ url: trimmed });
+        if (meta.title) setTitle(meta.title);
+        if (meta.description) setDescription(meta.description);
+        if (meta.author) setAuthor(meta.author);
+        if (meta.thumbnail_url) setFetchedThumb(meta.thumbnail_url);
+        // Auto-detected format from backend
+        if (meta.format) setFormat(meta.format);
+      } catch (e) {
+        // Silent fail - user can fill manually
+        console.log('Failed to fetch metadata:', e);
+      } finally {
+        setFetching(false);
+      }
+    }, 800); // Wait 800ms after typing stops
+
+    return () => clearTimeout(timer);
+  }, [url]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1801,11 +1830,18 @@ function InboxModal({ onClose }: { onClose: () => void }) {
       setTitle('');
       setDescription('');
       setAuthor('');
+      setFetchedThumb(null);
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
+  };
+
+  const formatLabel: Record<string, string> = {
+    article: '📄 Artikel',
+    podcast: '🎙️ Podcast',
+    video: '📹 Video',
   };
 
   return (
@@ -1829,9 +1865,20 @@ function InboxModal({ onClose }: { onClose: () => void }) {
         <form onSubmit={submit} className="space-y-4">
           <div>
             <label className="block text-sm font-medium mb-1">URL</label>
-            <input type="url" required value={url} onChange={e => setUrl(e.target.value)}
-              placeholder="https://..." className="w-full px-3 py-2 border rounded bg-white" />
+            <div className="relative">
+              <input type="url" required value={url} onChange={e => setUrl(e.target.value)}
+                placeholder="Plak een URL..." className="w-full px-3 py-2 border rounded bg-white pr-10" />
+              {fetching && <Loader2 size={16} className="animate-spin absolute right-3 top-2.5 text-brand-ink/40" />}
+            </div>
+            <p className="text-xs text-brand-ink/50 mt-1">De titel en beschrijving worden automatisch ingevuld</p>
           </div>
+
+          {fetchedThumb && (
+            <div className="flex items-center gap-3 p-2 bg-white rounded border">
+              <img src={fetchedThumb} alt="" className="w-16 h-12 object-cover rounded" />
+              <div className="text-xs text-brand-ink/60">Thumbnail gevonden</div>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-medium mb-1">Titel</label>
@@ -1841,11 +1888,11 @@ function InboxModal({ onClose }: { onClose: () => void }) {
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Type</label>
+              <label className="block text-sm font-medium mb-1">Type <span className="text-xs text-brand-ink/50">(auto)</span></label>
               <select value={format} onChange={e => setFormat(e.target.value as any)} className="w-full px-3 py-2 border rounded bg-white">
-                <option value="article">Artikel</option>
-                <option value="podcast">Podcast</option>
-                <option value="video">Video</option>
+                <option value="article">{formatLabel.article}</option>
+                <option value="podcast">{formatLabel.podcast}</option>
+                <option value="video">{formatLabel.video}</option>
               </select>
             </div>
             <div>
@@ -1865,7 +1912,7 @@ function InboxModal({ onClose }: { onClose: () => void }) {
           <div>
             <label className="block text-sm font-medium mb-1">Beschrijving (optioneel)</label>
             <textarea value={description} onChange={e => setDescription(e.target.value)}
-              placeholder="Korte beschrijving..." rows={3} className="w-full px-3 py-2 border rounded bg-white" />
+              placeholder="Korte beschrijving..." rows={3} className="w-full px-3 py-2 border rounded bg-white text-sm" />
           </div>
 
           <div className="flex justify-end gap-3 pt-2">
