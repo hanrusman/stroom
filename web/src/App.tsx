@@ -1205,12 +1205,18 @@ function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; cur
   const [isOpen, setIsOpen] = useState(false);
   const [topics, setTopics] = useState<{ slug: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      fetchInboxTopics().then(setTopics).catch(() => setTopics([]));
-    }
-  }, [isOpen]);
+    // Load topics immediately on mount
+    fetchInboxTopics().then(t => {
+      setTopics(t);
+      setLoaded(true);
+    }).catch(() => {
+      setTopics([]);
+      setLoaded(true);
+    });
+  }, []);
 
   const availableTopics = topics.filter(t => !currentTopics.includes(t.name));
 
@@ -1227,7 +1233,8 @@ function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; cur
     }
   };
 
-  if (availableTopics.length === 0 && !isOpen) return null;
+  // Only hide if we've loaded and there are truly no available topics
+  if (loaded && availableTopics.length === 0 && !isOpen) return null;
 
   return (
     <div className="relative">
