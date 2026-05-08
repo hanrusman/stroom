@@ -413,7 +413,7 @@ async def schedule_item(item_id: str, body: ScheduleUpdate, session=Depends(get_
 # --- Filtered list (saved / summarized / scheduled) ---
 
 
-HuygensFilter = Literal["all", "saved", "summarized", "scheduled", "archived"]
+HuygensFilter = Literal["all", "saved", "summarized", "scheduled", "archived", "inbox"]
 HuygensWindow = Literal["all", "24h", "7d", "30d"]
 
 _WINDOW_INTERVAL: dict[str, str] = {
@@ -447,6 +447,9 @@ async def list_filtered_items(
         clauses.append("i.status <> 'archived'::item_status")
     elif filter == "scheduled":
         clauses.append("i.scheduled_for IS NOT NULL")
+        clauses.append("i.status <> 'archived'::item_status")
+    elif filter == "inbox":
+        clauses.append("s.name = 'Inbox (handmatig)'")
         clauses.append("i.status <> 'archived'::item_status")
     else:
         clauses.append("i.status <> 'archived'::item_status")
@@ -933,6 +936,66 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
         await _process_next_queued(session)
     except Exception as exc:
         print(f"[queue] _process_next_queued faalde: {exc}")
+
+    return await huygens_item(item_id, session)
+
+
+# --- Item Topics ---
+
+class AddItemTopicRequest(BaseModel):
+    topic_slug: str
+
+
+@app.post("/huygens/items/{item_id}/topics", response_model=ItemDetail)
+async def add_item_topic(item_id: str, body: AddItemTopicRequest,
+                         session=Depends(get_async_session),
+                         user=Depends(require_user)):
+    """Add an item to a topic."""
+    # Verify item exists
+    item = await _fetch_item_row(session, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Get topic
+    topic_row = (await session.exec(sa_text(
+        "SELECT id FROM topics WHERE slug = :slug"
+    ).bindparams(slug=body.topic_slug))).first()
+    if not topic_row:
+        raise HTTPException(status_code=404, detail=f"Topic '{body.topic_slug}' not found")
+    topic_id = topic_row[0]
+
+    # Add to topic (ignore if already exists)
+    await session.exec(sa_text(
+        "INSERT INTO item_topics (item_id, topic_id) VALUES (CAST(:iid AS uuid), :tid) ON CONFLICT DO NOTHING"
+    ).bindparams(iid=item_id, tid=topic_id))
+    await session.commit()
+
+    return await huygens_item(item_id, session)
+
+
+@app.delete("/huygens/items/{item_id}/topics/{topic_slug}", response_model=ItemDetail)
+async def remove_item_topic(item_id: str, topic_slug: str,
+                            session=Depends(get_async_session),
+                            user=Depends(require_user)):
+    """Remove an item from a topic."""
+    # Verify item exists
+    item = await _fetch_item_row(session, item_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found")
+
+    # Get topic
+    topic_row = (await session.exec(sa_text(
+        "SELECT id FROM topics WHERE slug = :slug"
+    ).bindparams(slug=topic_slug))).first()
+    if not topic_row:
+        raise HTTPException(status_code=404, detail=f"Topic '{topic_slug}' not found")
+    topic_id = topic_row[0]
+
+    # Remove from topic
+    await session.exec(sa_text(
+        "DELETE FROM item_topics WHERE item_id = CAST(:iid AS uuid) AND topic_id = :tid"
+    ).bindparams(iid=item_id, tid=topic_id))
+    await session.commit()
 
     return await huygens_item(item_id, session)
 

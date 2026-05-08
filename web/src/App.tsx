@@ -12,6 +12,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
+         addItemToTopic, removeItemTopic,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
 
@@ -1199,6 +1200,66 @@ const MobileAISections = ({ item, lessons, setLessons, onSummarize, summarizeBus
   );
 };
 
+// Topic Manager Component
+function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; currentTopics: string[]; onUpdate: (item: ItemDetail) => void }) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [topics, setTopics] = useState<{ slug: string; name: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchInboxTopics().then(setTopics).catch(() => setTopics([]));
+    }
+  }, [isOpen]);
+
+  const availableTopics = topics.filter(t => !currentTopics.includes(t.name));
+
+  const addTopic = async (slug: string) => {
+    setBusy(true);
+    try {
+      const updated = await addItemToTopic(itemId, slug);
+      onUpdate(updated);
+      setIsOpen(false);
+    } catch (e) {
+      console.error('Failed to add topic:', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (availableTopics.length === 0 && !isOpen) return null;
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-accent hover:text-brand-accent/70 flex items-center gap-1"
+        title="Toevoegen aan topic"
+      >
+        <Plus size={12} /> Topic
+      </button>
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-1 z-50 bg-brand-cream border border-brand-ink/10 rounded-lg shadow-lg py-1 min-w-[150px]">
+          {availableTopics.length === 0 ? (
+            <div className="px-3 py-2 text-[10px] text-brand-ink/40">Alle topics al toegevoegd</div>
+          ) : (
+            availableTopics.map(t => (
+              <button
+                key={t.slug}
+                onClick={() => !busy && addTopic(t.slug)}
+                disabled={busy}
+                className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-brand-surface transition-colors"
+              >
+                {t.name}
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1266,6 +1327,7 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
           {item.topics.map(t => (
             <span key={t} className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/40">{t}</span>
           ))}
+          <TopicManager itemId={id} currentTopics={item.topics} onUpdate={setItem} />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
           <QuietAction icon={Bookmark} label="Save" active={item.status === 'pinned'} busy={busy === 'pinned'} onClick={() => toggle('pinned')} />
@@ -1596,6 +1658,7 @@ const FILTER_LABELS: Record<ItemFilter, string> = {
   summarized: 'Met samenvatting',
   scheduled: 'Gepland',
   archived: 'Archief',
+  inbox: 'Inbox',
 };
 
 const WINDOW_LABELS: Record<ItemWindow, string> = {
@@ -2187,7 +2250,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
               </div>
               <div className="flex items-center gap-3 overflow-x-auto hide-scrollbar pb-1">
                 <span className="font-mono text-[11px] font-medium text-brand-ink/40 uppercase tracking-[0.22em] mr-4 shrink-0">Filter</span>
-                {(['all', 'saved', 'summarized', 'scheduled', 'archived'] as ItemFilter[]).map(f => (
+                {(['all', 'saved', 'summarized', 'scheduled', 'archived', 'inbox'] as ItemFilter[]).map(f => (
                   <button key={f}
                     onClick={() => setActiveFilter(f)}
                     className={`px-4 py-1.5 rounded-full text-[12px] font-medium whitespace-nowrap shrink-0 transition-all ${

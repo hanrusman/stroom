@@ -102,10 +102,13 @@ async def inbox_submit(
     }
     content_kind = kind_map.get(body.format, "rss")
 
-    # Determine initial processing status
-    # Articles: pending (for summarize)
-    # Podcast/Video: pending (will be queued for transcribe)
-    processing_status = "pending"
+    # Determine initial processing status based on format
+    # Articles: pending (will be picked up by article summarizer)
+    # Podcast/Video: queued (will be transcribed automatically)
+    if body.format == "article":
+        processing_status = "pending"
+    else:
+        processing_status = "queued"
 
     # Insert item
     r = await session.exec(sa_text(

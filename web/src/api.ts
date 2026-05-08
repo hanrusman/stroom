@@ -173,7 +173,7 @@ export async function rateLesson(lessonId: string, rating: 1 | -1 | null): Promi
   return r.json();
 }
 
-export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled' | 'archived';
+export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled' | 'archived' | 'inbox';
 export type ItemWindow = 'all' | '24h' | '7d' | '30d';
 
 export async function fetchFilteredItems(opts: {
@@ -481,6 +481,24 @@ export async function updateSettings(s: AppSettings): Promise<AppSettings> {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(s),
+  });
+  return r.json();
+}
+
+// --- Item Topics ---
+
+export async function addItemToTopic(itemId: string, topicSlug: string): Promise<ItemDetail> {
+  const r = await apiFetch(`/api/huygens/items/${itemId}/topics`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ topic_slug: topicSlug }),
+  });
+  return r.json();
+}
+
+export async function removeItemTopic(itemId: string, topicSlug: string): Promise<ItemDetail> {
+  const r = await apiFetch(`/api/huygens/items/${itemId}/topics/${topicSlug}`, {
+    method: 'DELETE',
   });
   return r.json();
 }
