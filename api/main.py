@@ -77,7 +77,7 @@ async def lifespan(app: FastAPI):
     await app.state.llm_client.aclose()
 
 
-app = FastAPI(title="Stroom API", lifespan=lifespan)
+app = FastAPI(title="Stroom API", lifespan=lifespan, root_path="/api")
 
 _DEFAULT_ORIGINS = [
     "http://localhost:3000",
