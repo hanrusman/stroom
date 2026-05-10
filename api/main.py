@@ -668,20 +668,27 @@ async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
         "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
     ).bindparams(tid=topic_id, w=window_hours))).first()
 
+    # Check of er een actieve generatie bezig is of in de wachtrij staat:
+    # - is_generating=true EN generation_started_at=NULL → in wachtrij
+    # - is_generating=true EN generation_started_at < 30 min geleden → actief bezig
     if existing and existing[0]:
         started = existing[1]
-        if started and (datetime.now(started.tzinfo) - started).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
+        if started is None:
+            raise HTTPException(status_code=409, detail="Staat in de wachtrij — even wachten.")
+        if (datetime.now(started.tzinfo) - started).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
             raise HTTPException(status_code=409, detail="Genereren is al bezig — even wachten.")
 
+    # generation_started_at wordt pas gezet wanneer de task daadwerkelijk begint (in de worker)
     if existing:
         await session.exec(sa_text(
-            "UPDATE topic_digests SET is_generating=true, generation_started_at=now(), error=NULL "
+            "UPDATE topic_digests SET is_generating=true, generation_started_at=NULL, "
+            "queued_at=now(), error=NULL "
             "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
         ).bindparams(tid=topic_id, w=window_hours))
     else:
         await session.exec(sa_text(
-            "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at) "
-            "VALUES (CAST(:tid AS uuid), :w, true, now())"
+            "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at, queued_at) "
+            "VALUES (CAST(:tid AS uuid), :w, true, NULL, now())"
         ).bindparams(tid=topic_id, w=window_hours))
     await session.commit()
 
@@ -1719,6 +1726,7 @@ CRON_NIGHTLY_HOURS = 24  # nightly kijkt 24u terug (niet meer)
 
 async def _cron_unstuck(session) -> int:
     """Reset items that have been stuck in queues/processing too long."""
+    # Reset items stuck in processing queues
     r = await session.exec(sa_text(f"""
         UPDATE items SET
           processing_status = 'failed'::processing_status,
@@ -1732,6 +1740,24 @@ async def _cron_unstuck(session) -> int:
         RETURNING id
     """))
     n = len(r.all())
+
+    # Reset topic digests stuck in queue (worker crasht voordat generatie begint)
+    # Dit kan gebeuren als de API herstart terwijl een digest in de wachtrij staat
+    r2 = await session.exec(sa_text("""
+        UPDATE topic_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
+        WHERE is_generating=true AND generation_started_at IS NULL
+          AND queued_at < now() - interval '4 hours'
+    """))
+    n += len(r2.all())
+
+    # Reset lessons digests stuck in queue
+    r3 = await session.exec(sa_text("""
+        UPDATE lessons_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
+        WHERE is_generating=true AND generation_started_at IS NULL
+          AND queued_at < now() - interval '4 hours'
+    """))
+    n += len(r3.all())
+
     await session.commit()
     return n
 
@@ -1858,7 +1884,11 @@ async def _cron_pick_articles_for_summary(session, *,
 
 async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
                                    window: str = "daily") -> int:
-    """For every topic, mark its daily digest as is_generating and kick a bg task."""
+    """For every topic, mark its daily digest as is_generating and kick a bg task.
+
+    Note: generation_started_at wordt pas gezet wanneer de task daadwerkelijk
+    begint (binnen de semaphore), niet hier. Dit voorkomt false-positive stale
+    detectie wanneer veel topics in de wachtrij staan."""
     window_hours = DIGEST_WINDOWS[window]
     rows = (await session.exec(sa_text(
         "SELECT id::text, slug, name FROM topics ORDER BY sort_order, name"
@@ -1869,18 +1899,28 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
             "SELECT is_generating, generation_started_at FROM topic_digests "
             "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
         ).bindparams(tid=tid, w=window_hours))).first()
-        if existing and existing[0] and existing[1] and \
-           (datetime.now(existing[1].tzinfo) - existing[1]).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
-            continue
+        # Skip als er al een digest bezig is of in de wachtrij staat:
+        # - is_generating=true EN generation_started_at=NULL → in wachtrij, skip
+        # - is_generating=true EN generation_started_at < 30 min geleden → actief bezig, skip
+        # - is_generating=true EN generation_started_at > 30 min geleden → echte stale, mag opnieuw
+        if existing and existing[0]:
+            started = existing[1]
+            if started is None:
+                continue  # In wachtrij, andere worker pakt 'm
+            if (datetime.now(started.tzinfo) - started).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
+                continue  # Actief bezig
         if existing:
+            # is_generating=true zetten, maar generation_started_at pas in de worker
             await session.exec(sa_text(
-                "UPDATE topic_digests SET is_generating=true, generation_started_at=now(), error=NULL "
+                "UPDATE topic_digests SET is_generating=true, generation_started_at=NULL, "
+                "queued_at=now(), error=NULL "
                 "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
             ).bindparams(tid=tid, w=window_hours))
         else:
+            # Insert zonder generation_started_at - die komt pas in de worker
             await session.exec(sa_text(
-                "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at) "
-                "VALUES (CAST(:tid AS uuid), :w, true, now())"
+                "INSERT INTO topic_digests (topic_id, window_hours, is_generating, generation_started_at, queued_at) "
+                "VALUES (CAST(:tid AS uuid), :w, true, NULL, now())"
             ).bindparams(tid=tid, w=window_hours))
         await session.commit()
         asyncio.create_task(_run_digest_generation(tid, name, slug, model, window_hours))
