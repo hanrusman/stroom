@@ -1798,9 +1798,8 @@ async def _cron_unstuck(session) -> int:
                'summarizing'::processing_status)
           AND queued_at IS NOT NULL
           AND queued_at < now() - interval '{CRON_STUCK_MIN} minutes'
-        RETURNING id
     """))
-    n = len(r.all())
+    n = r.rowcount or 0
 
     # Reset topic digests stuck in queue (worker crasht voordat generatie begint)
     # Dit kan gebeuren als de API herstart terwijl een digest in de wachtrij staat
@@ -1808,18 +1807,16 @@ async def _cron_unstuck(session) -> int:
         UPDATE topic_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
         WHERE is_generating=true AND generation_started_at IS NULL
           AND queued_at < now() - interval '4 hours'
-        RETURNING id
     """))
-    n += len(r2.all())
+    n += r2.rowcount or 0
 
     # Reset lessons digests stuck in queue
     r3 = await session.exec(sa_text("""
         UPDATE lessons_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
         WHERE is_generating=true AND generation_started_at IS NULL
           AND queued_at < now() - interval '4 hours'
-        RETURNING id
     """))
-    n += len(r3.all())
+    n += r3.rowcount or 0
 
     await session.commit()
     return n
