@@ -307,6 +307,13 @@ async def _run_lessons_digest_generation(window_hours: int, rating: int, model_a
     """Background-task: bouw digest uit lessen in venster (op basis van rated_at)."""
     try:
         async with async_session_maker() as bg:
+            # Zet generation_started_at NU pas — dit is het moment dat de generatie écht begint
+            await bg.exec(sa_text(
+                "UPDATE lessons_digests SET generation_started_at=now() "
+                "WHERE window_hours=:w AND rating=:r"
+            ).bindparams(w=window_hours, r=rating))
+            await bg.commit()
+
             where_rating = "AND l.rating = :r" if rating in (1, -1) else ""
             params: dict = {"w_int": f"{window_hours} hours", "lim": _DIGEST_MAX_LESSONS}
             if rating in (1, -1):
@@ -411,15 +418,16 @@ async def regenerate_lessons_digest(background_tasks: BackgroundTasks,
         if started and (datetime.now(started.tzinfo) - started).total_seconds() < _DIGEST_GENERATION_STALE_MIN * 60:
             raise HTTPException(status_code=409, detail="Genereren is al bezig — even wachten.")
 
+    # generation_started_at wordt pas gezet wanneer de task daadwerkelijk begint (in de worker)
     if existing:
         await session.exec(sa_text(
-            "UPDATE lessons_digests SET is_generating=true, generation_started_at=now(), error=NULL "
+            "UPDATE lessons_digests SET is_generating=true, generation_started_at=NULL, error=NULL "
             "WHERE window_hours=:w AND rating=:r"
         ).bindparams(w=w, r=r))
     else:
         await session.exec(sa_text(
             "INSERT INTO lessons_digests (window_hours, rating, is_generating, generation_started_at) "
-            "VALUES (:w, :r, true, now())"
+            "VALUES (:w, :r, true, NULL)"
         ).bindparams(w=w, r=r))
     await session.commit()
 

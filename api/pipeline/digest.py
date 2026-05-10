@@ -78,9 +78,18 @@ async def run_digest_generation(topic_id: str, topic_name: str, slug: str,
 async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str,
                                        model: str, window_hours: int,
                                        async_session_maker, llm_service):
+    """Inner worker: dit draait binnen de semaphore, dus één tegelijk."""
     llm_alias = DIGEST_MODEL_MAP[model]
     try:
         async with async_session_maker() as bg:
+            # Zet generation_started_at NU pas — we zitten binnen de semaphore,
+            # dus dit is het moment dat de generatie écht begint.
+            await bg.exec(sa_text(
+                "UPDATE topic_digests SET generation_started_at=now() "
+                "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
+            ).bindparams(tid=topic_id, w=window_hours))
+            await bg.commit()
+
             rows = (await bg.exec(sa_text(
                 f"""
                 SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
