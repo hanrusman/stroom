@@ -1,7 +1,6 @@
 """Inbox router - handmatig content insturen voor verwerking."""
 from __future__ import annotations
 
-import asyncio
 import re
 from datetime import datetime, timezone
 from typing import Literal, Optional
@@ -12,7 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
 from core.auth import require_user
-from core.db import get_async_session, async_session_maker
+from core.db import get_async_session
 
 router = APIRouter()
 
@@ -89,9 +88,10 @@ async def inbox_submit(
     """Submit a new item to the inbox for processing.
 
     The item will be:
-    - Created with processing_status='pending' (articles) or 'queued' (audio/video)
+    - Created with processing_status='summarize_queued' (articles met body),
+      'pending' (articles zonder body) of 'transcribe_queued' (audio/video)
     - Linked to the selected topic
-    - Processed by the normal pipeline (summarize/transcribe → distill lessons)
+    - Worker pool draineert vanzelf (zie SUMMARIZE_WORKERS in main.py)
     - For articles: full content extracted via trafilatura and stored in transcript
     """
     # Validate URL
@@ -132,29 +132,33 @@ async def inbox_submit(
     }
     content_kind = kind_map.get(body.format, "rss")
 
-    # Determine initial processing status based on format
-    # Articles: pending (will be picked up by article summarizer)
-    # Podcast/Video: queued (will be transcribed automatically)
-    if body.format == "article":
-        processing_status = "pending"
-    else:
-        processing_status = "queued"
-
-    # For articles: extract full content via trafilatura
+    # For articles: extract full content via trafilatura first,
+    # zodat we de juiste status kunnen kiezen.
     article_body: Optional[str] = None
     if body.format == "article":
         article_body = await _extract_article_body(request.app.state.http_client, url)
 
-    # Insert item
+    # Determine initial processing status:
+    # - Article met body: summarize_queued (worker pakt op)
+    # - Article zonder body: pending (handmatige actie nodig)
+    # - Podcast/video: transcribe_queued (transcribe-worker pakt op)
+    if body.format == "article":
+        processing_status = "summarize_queued" if article_body else "pending"
+    else:
+        processing_status = "transcribe_queued"
+
+    # Insert item. Status is al bepaald (zie boven).
+    # Workers pakken summarize_queued / transcribe_queued vanzelf op.
     r = await session.exec(sa_text(
         """
         INSERT INTO items
             (source_id, external_id, type, format, title, description,
              author, media_url, published_at,
-             processing_status, status, transcript)
+             processing_status, status, transcript, queued_at)
         VALUES (CAST(:sid AS uuid), :eid, CAST(:kind AS content_kind), CAST(:fmt AS item_format),
                 :title, :desc, :author, :url, :pub,
-                CAST(:pstatus AS processing_status), 'new', :transcript)
+                CAST(:pstatus AS processing_status), 'new', :transcript,
+                CASE WHEN :pstatus IN ('summarize_queued','transcribe_queued') THEN now() ELSE NULL END)
         ON CONFLICT (source_id, external_id) DO UPDATE
             SET title = EXCLUDED.title,
                 description = EXCLUDED.description,
@@ -182,125 +186,11 @@ async def inbox_submit(
 
     await session.commit()
 
-    # After commit, trigger summarize for articles with transcript
-    if body.format == "article" and article_body:
-        try:
-            from services.llm_service import LLMService
-            llm = LLMService(request.app.state.http_client)
-            asyncio.create_task(_summarize_inbox_article(item_id, article_body, llm))
-        except Exception as e:
-            print(f"[inbox] Failed to trigger summarize: {e}", flush=True)
-
     return InboxSubmitResponse(
         id=item_id,
         title=title,
         message=f"Item aangemaakt en gekoppeld aan topic '{body.topic_slug}'"
     )
-
-
-async def _summarize_inbox_article(item_id: str, article_body: str, llm_service):
-    """Background task to summarize an inbox article and distill lessons."""
-    try:
-        # Truncate if too long
-        cleaned = re.sub(r"\s+", " ", article_body)[:12000]
-
-        response = await llm_service.call_llm("stroom-bulk", [
-            {"role": "system", "content": (
-                "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
-                "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
-                "Beoordeel daarna de kwaliteit (1-10) op:\n"
-                "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
-                "- Diepgang: gaat het verder dan het oppervlakte?\n"
-                "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
-                "VERPLICHT: geef ALTIJD een quality_score terug als integer 1-10. "
-                "Als je echt niet kunt beoordelen, gebruik dan null.\n\n"
-                "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
-            )},
-            {"role": "user", "content": f"Tekst: {cleaned}"},
-        ], temperature=0.3, response_format="json_object")
-
-        import json as _json
-        try:
-            data = _json.loads(response)
-            summary = data.get("summary", "").strip()
-            # Only set quality_score if LLM actually provides one; otherwise None (neutral)
-            raw_score = data.get("quality_score")
-            if raw_score is not None:
-                try:
-                    quality_score = max(1, min(10, int(raw_score)))
-                except (TypeError, ValueError):
-                    quality_score = None
-            else:
-                quality_score = None
-        except Exception:
-            summary = response.strip() if response else ""
-            quality_score = None
-
-        # Update item in database
-        async with async_session_maker() as bg:
-            await bg.exec(sa_text(
-                "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
-                "summary_generated_at=now(), processing_status='ready'::processing_status, "
-                "quality_score=:q WHERE id = CAST(:i AS uuid)"
-            ).bindparams(s=summary, i=item_id, q=quality_score))
-            await bg.commit()
-
-        print(f"[inbox] Article {item_id} summarized", flush=True)
-
-        # Now distill lessons from the summary
-        await _distill_inbox_lessons(item_id, summary, article_body, llm_service)
-    except Exception as exc:
-        print(f"[inbox] Summarize failed for {item_id}: {exc}", flush=True)
-
-
-async def _distill_inbox_lessons(item_id: str, summary: str, article_body: str, llm_service):
-    """Distill lessons from article summary."""
-    try:
-        body_text = article_body.strip()[:18000]
-        if not body_text:
-            return
-
-        system = (
-            "Je destilleert kernlessen uit een bron (artikel). "
-            "Lever concrete, bruikbare lessen die de kern van het artikel vangen.\n\n"
-            "Output: strikt JSON, vorm: {\"lessons\": [{\"title\": \"…\", \"body\": \"…\"}]}\n"
-            "- title: korte kop (4-8 woorden)\n"
-            "- body: 1-3 zinnen, concreet en bruikbaar\n"
-            "Maximaal 5 lessen. Liever 0 dan oppervlakkig."
-        )
-        user_prompt = f"Samenvatting: {summary}\n\nArtikel tekst:\n{body_text}"
-
-        raw = await llm_service.call_llm(
-            "stroom-bulk",
-            [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-            temperature=0.4, response_format="json_object", timeout=240.0,
-        )
-
-        import json
-        try:
-            data = json.loads(raw)
-            new_lessons = data.get("lessons", []) or []
-        except json.JSONDecodeError:
-            print(f"[inbox] Invalid JSON for lessons {item_id}", flush=True)
-            return
-
-        async with async_session_maker() as bg:
-            inserted = 0
-            for idx, entry in enumerate(new_lessons, start=1):
-                t = (entry.get("title") or "").strip()
-                b = (entry.get("body") or "").strip()
-                if not t or not b:
-                    continue
-                await bg.exec(sa_text(
-                    "INSERT INTO lessons (item_id, idx, title, body) "
-                    "VALUES (CAST(:i AS uuid), :idx, :t, :b)"
-                ).bindparams(i=item_id, idx=idx, t=t, b=b))
-                inserted += 1
-            if inserted:
-                await bg.commit()
-                print(f"[inbox] Article {item_id} distilled {inserted} lessons", flush=True)
-    except Exception as exc:
-        print(f"[inbox] Distill lessons failed for {item_id}: {exc}", flush=True)
 
 
 def _detect_format_from_url(url: str) -> InboxFormat:
