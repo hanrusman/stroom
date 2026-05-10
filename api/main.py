@@ -32,48 +32,49 @@ from routers import ask as ask_router
 from routers import inbox as inbox_router
 
 
+# --- Queue tunables ---
+# Hard caps voorkomen dat cron/inbox de queue volgooit en de VPS plat trekt.
+SUMMARIZE_QUEUE_MAX_DEPTH = int(os.environ.get('SUMMARIZE_QUEUE_MAX_DEPTH', 30))
+TRANSCRIBE_QUEUE_MAX_DEPTH = int(os.environ.get('TRANSCRIBE_QUEUE_MAX_DEPTH', 30))
+SUMMARIZE_WORKERS = int(os.environ.get('SUMMARIZE_WORKERS', 2))
+LLM_HTTP_TIMEOUT_SEC = float(os.environ.get('LLM_HTTP_TIMEOUT_SEC', 60))
+LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
+WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
+QUEUE_DEPTH_LOG_EVERY_SEC = 60
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.http_client = httpx.AsyncClient(timeout=300.0)
+    # Generieke client voor RSS/og:image/Vikunja/Obsidian — kort timeout.
+    app.state.http_client = httpx.AsyncClient(
+        timeout=30.0,
+        limits=httpx.Limits(max_connections=10),
+    )
+    # Aparte client voor LLM-calls. Beperkte pool zodat een trage LLM
+    # niet de gewone API-requests platlegt.
+    app.state.llm_client = httpx.AsyncClient(
+        timeout=LLM_HTTP_TIMEOUT_SEC,
+        limits=httpx.Limits(max_connections=LLM_MAX_CONCURRENT),
+    )
 
-    # Start background queue worker
     from core.db import async_session_maker
-    queue_worker_task = asyncio.create_task(_queue_worker_loop(async_session_maker))
+    worker_tasks: list[asyncio.Task] = []
+    for i in range(SUMMARIZE_WORKERS):
+        worker_tasks.append(asyncio.create_task(_summarize_worker(i, async_session_maker)))
+    worker_tasks.append(asyncio.create_task(_transcribe_worker(async_session_maker)))
+    worker_tasks.append(asyncio.create_task(_queue_depth_logger(async_session_maker)))
 
     yield
 
-    # Cleanup
-    queue_worker_task.cancel()
-    try:
-        await queue_worker_task
-    except asyncio.CancelledError:
-        pass
-    await app.state.http_client.aclose()
-
-
-async def _queue_worker_loop(async_session_maker, interval_seconds: int = 30):
-    """Background worker that periodically checks and processes queues.
-
-    Runs every 30 seconds (configurable via QUEUE_WORKER_INTERVAL_SEC env var).
-    Processes both transcription (A2 GPU) and summarization (external LLM) queues.
-    """
-    interval = int(os.environ.get('QUEUE_WORKER_INTERVAL_SEC', interval_seconds))
-    print(f"[queue-worker] Started, checking queues every {interval}s")
-
-    while True:
+    for t in worker_tasks:
+        t.cancel()
+    for t in worker_tasks:
         try:
-            await asyncio.sleep(interval)
-
-            async with async_session_maker() as session:
-                # Process next item from queues
-                await _process_next_queued(session)
-
+            await t
         except asyncio.CancelledError:
-            print("[queue-worker] Shutting down")
-            break
-        except Exception as exc:
-            print(f"[queue-worker] Error: {exc}")
-            # Continue running despite errors
+            pass
+    await app.state.http_client.aclose()
+    await app.state.llm_client.aclose()
 
 
 app = FastAPI(title="Stroom API", lifespan=lifespan)
@@ -699,29 +700,21 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
     # Voor articles is media_url de artikel-URL zelf, dus skip die path.
     if not transcript and item["media_url"] and item["type"] in ("podcast", "youtube"):
         cur_status = item["processing_status"]
-        if cur_status in ("queued", "transcribing", "summarizing"):
+        if cur_status in ("queued", "transcribe_queued", "transcribing", "summarizing"):
             return await huygens_item(item_id, session)
 
         if not _check_transcribe_quota(user["id"]):
             raise HTTPException(status_code=429,
                                 detail=f"Max {TRANSCRIBE_MAX_PER_HOUR} transcribes per uur bereikt.")
 
-        # 1 actieve transcribe (single GPU). Anders → queue.
-        r = await session.exec(sa_text(
-            "SELECT COUNT(*) FROM items WHERE processing_status='transcribing'::processing_status"
-        ))
-        if r.first()[0] >= 1:
-            await session.exec(sa_text(
-                "UPDATE items SET processing_status='queued'::processing_status, "
-                "queued_at=now(), processing_error=NULL "
-                "WHERE id = CAST(:i AS uuid)"
-            ).bindparams(i=item_id))
-            await session.commit()
-        else:
-            try:
-                await _start_transcribe(session, item_id, item["media_url"], item["type"])
-            except Exception as exc:
-                raise HTTPException(status_code=502, detail=str(exc))
+        # Altijd queueen; worker pakt op binnen WORKER_IDLE_POLL_SEC.
+        # Voorkomt race tussen user-trigger en background worker.
+        await session.exec(sa_text(
+            "UPDATE items SET processing_status='transcribe_queued'::processing_status, "
+            "queued_at=now(), processing_error=NULL "
+            "WHERE id = CAST(:i AS uuid)"
+        ).bindparams(i=item_id))
+        await session.commit()
         return await huygens_item(item_id, session)
 
     # Transcript bestaat (of geen media_url) → direct samenvatten van beschikbare tekst.
@@ -781,90 +774,147 @@ def _check_transcribe_quota(user_id: str) -> bool:
     return True
 
 
-async def _start_transcribe(session, item_id: str, media_url: str, item_type: str) -> None:
-    """Mark item as transcribing and POST to samenvat-agent. Caller commits."""
-    await session.exec(sa_text(
-        "UPDATE items SET processing_status='transcribing'::processing_status, "
-        "processing_error=NULL WHERE id = CAST(:i AS uuid)"
-    ).bindparams(i=item_id))
-    await session.commit()
+async def _claim_next_summarize(session) -> Optional[str]:
+    """Atomair één summarize_queued item claimen.
 
-    source_type = "podcast" if item_type == "podcast" else "general"
-    try:
-        r = await app.state.http_client.post(
-            "http://samenvat-agent:8080/process",
-            json={"url": media_url, "source_type": source_type, "model_name": "medium",
-                  "stroom_item_id": item_id},
-            timeout=10.0,
-        )
-        if r.status_code >= 400:
-            raise RuntimeError(f"samenvat-agent {r.status_code}: {r.text[:200]}")
-    except Exception as exc:
-        await session.exec(sa_text(
-            "UPDATE items SET processing_status='failed'::processing_status, processing_error=:e "
-            "WHERE id = CAST(:i AS uuid)"
-        ).bindparams(e=f"transcribe trigger failed: {exc}"[:500], i=item_id))
-        await session.commit()
-        raise
-
-
-async def _start_summarize(session, item_id: str) -> None:
-    """Mark item as summarizing and kick off background summarization via LLM."""
-    await session.exec(sa_text(
-        "UPDATE items SET processing_status='summarizing'::processing_status, "
-        "processing_error=NULL WHERE id = CAST(:i AS uuid)"
-    ).bindparams(i=item_id))
-    await session.commit()
-
-    try:
-        from core.db import async_session_maker
-        llm = LLMService(app.state.http_client)
-        asyncio.create_task(_summarize_single_item(item_id, llm, async_session_maker))
-    except Exception as exc:
-        await session.exec(sa_text(
-            "UPDATE items SET processing_status='failed'::processing_status, processing_error=:e "
-            "WHERE id = CAST(:i AS uuid)"
-        ).bindparams(e=f"summarize trigger failed: {exc}"[:500], i=item_id))
-        await session.commit()
-        raise
-
-
-async def _process_next_queued(session) -> None:
-    """Process next item from queues:
-    1. Transcription queue (A2 GPU) - checked first, limited to 1 concurrent
-    2. Summarization queue (external LLM) - no limit, processed in background
+    Gebruikt FOR UPDATE SKIP LOCKED zodat meerdere workers nooit hetzelfde
+    item pakken en geen worker geblokkeerd raakt op een rij die een ander
+    al heeft gepakt. Returnt het id::text of None als de queue leeg is.
     """
-    # Check transcription queue first (A2 GPU, limited capacity)
+    r = await session.exec(sa_text("""
+        UPDATE items SET
+          processing_status = 'summarizing'::processing_status,
+          processing_error = NULL
+        WHERE id = (
+            SELECT id FROM items
+            WHERE processing_status = 'summarize_queued'::processing_status
+            ORDER BY queued_at ASC NULLS LAST
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id::text
+    """))
+    row = r.first()
+    await session.commit()
+    return row[0] if row else None
+
+
+async def _claim_next_transcribe(session) -> Optional[tuple[str, str, str]]:
+    """Atomair één transcribe_queued item claimen — single GPU.
+
+    Geeft (item_id, media_url, type) of None.
+    Caller is verantwoordelijk voor het posten naar samenvat-agent.
+    """
+    # Eerst checken of de GPU al bezet is (slechts 1 transcribing tegelijk).
     r = await session.exec(sa_text(
         "SELECT COUNT(*) FROM items WHERE processing_status='transcribing'::processing_status"
     ))
-    if r.first()[0] < 1:
-        # GPU is free, pick from transcribe queue
-        r = await session.exec(sa_text(
-            "SELECT id::text, media_url, type::text FROM items "
-            "WHERE processing_status='transcribe_queued'::processing_status "
-            "ORDER BY queued_at ASC LIMIT 1"
-        ))
-        nxt = r.first()
-        if nxt:
-            try:
-                await _start_transcribe(session, nxt[0], nxt[1], nxt[2])
-                return  # Started transcription, done for this cycle
-            except Exception as exc:
-                print(f"[queue] kon transcribe niet starten: {exc}")
+    if r.first()[0] >= 1:
+        return None
+    r = await session.exec(sa_text("""
+        UPDATE items SET
+          processing_status = 'transcribing'::processing_status,
+          processing_error = NULL
+        WHERE id = (
+            SELECT id FROM items
+            WHERE processing_status = 'transcribe_queued'::processing_status
+            ORDER BY queued_at ASC NULLS LAST
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        )
+        RETURNING id::text, media_url, type::text
+    """))
+    row = r.first()
+    await session.commit()
+    if not row:
+        return None
+    return (row[0], row[1], row[2])
 
-    # Process summarization queue (external LLM, can be parallel)
-    r = await session.exec(sa_text(
-        "SELECT id::text FROM items "
-        "WHERE processing_status='summarize_queued'::processing_status "
-        "ORDER BY queued_at ASC LIMIT 1"
-    ))
-    nxt = r.first()
-    if nxt:
+
+async def _summarize_worker(idx: int, async_session_maker) -> None:
+    """Continu draaiende worker: claim → process → repeat.
+
+    `SUMMARIZE_WORKERS` instances draaien parallel. Concurrency op LLM
+    is daarmee per definitie begrensd op N. Geen losse `create_task`
+    per item — als de pool vol zit, wacht de queue gewoon.
+    """
+    print(f"[sum-worker-{idx}] started", flush=True)
+    llm = LLMService(app.state.llm_client)
+    while True:
         try:
-            await _start_summarize(session, nxt[0])
+            async with async_session_maker() as s:
+                item_id = await _claim_next_summarize(s)
+            if not item_id:
+                await asyncio.sleep(WORKER_IDLE_POLL_SEC)
+                continue
+            await _summarize_single_item(item_id, llm, async_session_maker)
+        except asyncio.CancelledError:
+            print(f"[sum-worker-{idx}] shutting down", flush=True)
+            return
         except Exception as exc:
-            print(f"[queue] kon summarize niet starten: {exc}")
+            print(f"[sum-worker-{idx}] error: {exc}", flush=True)
+            await asyncio.sleep(5)
+
+
+async def _transcribe_worker(async_session_maker) -> None:
+    """Single worker voor de transcribe-queue (single GPU)."""
+    print("[trans-worker] started", flush=True)
+    while True:
+        try:
+            async with async_session_maker() as s:
+                claim = await _claim_next_transcribe(s)
+            if not claim:
+                await asyncio.sleep(WORKER_IDLE_POLL_SEC)
+                continue
+            item_id, media_url, item_type = claim
+            try:
+                source_type = "podcast" if item_type == "podcast" else "general"
+                r = await app.state.http_client.post(
+                    "http://samenvat-agent:8080/process",
+                    json={"url": media_url, "source_type": source_type,
+                          "model_name": "medium", "stroom_item_id": item_id},
+                    timeout=10.0,
+                )
+                if r.status_code >= 400:
+                    raise RuntimeError(f"samenvat-agent {r.status_code}: {r.text[:200]}")
+            except Exception as exc:
+                async with async_session_maker() as bg:
+                    await bg.exec(sa_text(
+                        "UPDATE items SET processing_status='failed'::processing_status, "
+                        "processing_error=:e WHERE id = CAST(:i AS uuid)"
+                    ).bindparams(e=f"transcribe trigger failed: {exc}"[:500], i=item_id))
+                    await bg.commit()
+                print(f"[trans-worker] kon transcribe niet starten voor {item_id}: {exc}",
+                      flush=True)
+        except asyncio.CancelledError:
+            print("[trans-worker] shutting down", flush=True)
+            return
+        except Exception as exc:
+            print(f"[trans-worker] error: {exc}", flush=True)
+            await asyncio.sleep(5)
+
+
+async def _queue_depth_logger(async_session_maker) -> None:
+    """Logt elke ~60s queue-diepte. Hiermee zie je vastlopers vroeg."""
+    while True:
+        try:
+            await asyncio.sleep(QUEUE_DEPTH_LOG_EVERY_SEC)
+            async with async_session_maker() as s:
+                r = await s.exec(sa_text("""
+                    SELECT processing_status::text, COUNT(*) FROM items
+                    WHERE processing_status IN (
+                        'transcribe_queued','transcribing',
+                        'summarize_queued','summarizing'
+                    )
+                    GROUP BY processing_status
+                """))
+                depth = {row[0]: row[1] for row in r.all()}
+            if depth:
+                print(f"[queue-depth] {depth}", flush=True)
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            print(f"[queue-depth] error: {exc}", flush=True)
 
 
 @app.post("/huygens/items/{item_id}/transcribe", response_model=HuygensItemDetail)
@@ -880,30 +930,20 @@ async def transcribe_item(item_id: str, session=Depends(get_async_session),
         "SELECT processing_status::text FROM items WHERE id = CAST(:i AS uuid)"
     ).bindparams(i=item_id))
     cur = r.first()
-    if cur and cur[0] in ("queued", "transcribing"):
+    if cur and cur[0] in ("queued", "transcribe_queued", "transcribing"):
         raise HTTPException(status_code=409, detail=f"Dit item staat al in de queue ({cur[0]})")
 
     if not _check_transcribe_quota(user["id"]):
         raise HTTPException(status_code=429,
                             detail=f"Max {TRANSCRIBE_MAX_PER_HOUR} transcribes per uur bereikt.")
 
-    # Globale concurrency: 1 actieve transcribe (single GPU). Anders → queue.
-    r = await session.exec(sa_text(
-        "SELECT COUNT(*) FROM items WHERE processing_status='transcribing'::processing_status"
-    ))
-    if r.first()[0] >= 1:
-        await session.exec(sa_text(
-            "UPDATE items SET processing_status='queued'::processing_status, "
-            "queued_at=now(), processing_error=NULL "
-            "WHERE id = CAST(:i AS uuid)"
-        ).bindparams(i=item_id))
-        await session.commit()
-        return await huygens_item(item_id, session)
-
-    try:
-        await _start_transcribe(session, item_id, item["media_url"], item["type"])
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+    # Altijd queueen; transcribe-worker pakt op binnen WORKER_IDLE_POLL_SEC.
+    await session.exec(sa_text(
+        "UPDATE items SET processing_status='transcribe_queued'::processing_status, "
+        "queued_at=now(), processing_error=NULL "
+        "WHERE id = CAST(:i AS uuid)"
+    ).bindparams(i=item_id))
+    await session.commit()
     return await huygens_item(item_id, session)
 
 
@@ -968,10 +1008,7 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
             "processing_error=:e WHERE id = CAST(:i AS uuid)"
         ).bindparams(e=body.error[:500], i=item_id))
         await session.commit()
-        try:
-            await _process_next_queued(session)
-        except Exception as exc:
-            print(f"[queue] _process_next_queued faalde: {exc}")
+        # Worker pakt de volgende vanzelf op binnen WORKER_IDLE_POLL_SEC.
         return await huygens_item(item_id, session)
 
     transcript = (body.transcript or "").strip()
@@ -1009,12 +1046,7 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
         except Exception as exc:
             print(f"[lessons] parse/store faalde voor {item_id}: {exc}")
 
-    # GPU-slot is vrij — kick de volgende uit de queue (best-effort).
-    try:
-        await _process_next_queued(session)
-    except Exception as exc:
-        print(f"[queue] _process_next_queued faalde: {exc}")
-
+    # Workers (transcribe + summarize) pakken vanzelf de volgende items.
     return await huygens_item(item_id, session)
 
 
@@ -1345,22 +1377,32 @@ _OG_PATTERNS = [
 from pipeline.articles import (
     extract_article_body as _extract_article_body,
     backfill_articles as _pipeline_backfill_articles,
-    summarize_articles as _pipeline_summarize_articles,
 )
 
 
+_INBOX_SOURCE_NAME = "Inbox (handmatig)"
+
+
 async def _summarize_single_item(item_id: str, llm_service, async_session_maker) -> bool:
-    """Summarize a single item (article/podcast/video with transcript)."""
+    """Summarize a single item (article/podcast/video with transcript).
+
+    Voor items uit de Inbox-bron wordt na summarize ook lesson-distill
+    gedraaid (binnen dezelfde worker — telt mee voor concurrency-budget).
+    """
     try:
         async with async_session_maker() as bg:
-            r = await bg.exec(sa_text(
-                "SELECT title, transcript, description, type::text FROM items WHERE id = CAST(:i AS uuid)"
-            ).bindparams(i=item_id))
+            r = await bg.exec(sa_text("""
+                SELECT i.title, i.transcript, i.description, i.type::text, s.name
+                FROM items i JOIN sources s ON s.id = i.source_id
+                WHERE i.id = CAST(:i AS uuid)
+            """).bindparams(i=item_id))
             row = r.first()
             if not row:
                 return False
             title = row[0]
             raw = (row[1] or "").strip() or re.sub(r"<[^>]+>", " ", row[2] or "").strip()
+            article_body = (row[1] or "").strip()
+            source_name = row[4]
             if not raw:
                 await bg.exec(sa_text(
                     "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL "
@@ -1401,6 +1443,16 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker)
                 "quality_score=:q, queued_at=NULL WHERE id = CAST(:i AS uuid)"
             ).bindparams(s=summary, i=item_id, q=quality_score))
             await bg.commit()
+
+        # Inbox-items krijgen ook lesson-distill (was het oude inbox-gedrag).
+        # Best-effort: faalt distill, dan blijft summary nog steeds geldig.
+        if source_name == _INBOX_SOURCE_NAME and article_body:
+            try:
+                await _distill_lessons_for_item(item_id, summary, article_body,
+                                                llm_service, async_session_maker)
+            except Exception as exc:
+                print(f"[sum-worker] distill faalde voor {item_id}: {exc}", flush=True)
+
         return True
     except Exception as exc:
         try:
@@ -1413,6 +1465,50 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker)
         except Exception:
             pass
         return False
+
+
+async def _distill_lessons_for_item(item_id: str, summary: str, article_body: str,
+                                     llm_service, async_session_maker) -> int:
+    """Genereer kernlessen via LLM en sla ze op. Returnt aantal inserted."""
+    body_text = article_body.strip()[:18000]
+    if not body_text:
+        return 0
+    system = (
+        "Je destilleert kernlessen uit een bron (artikel). "
+        "Lever concrete, bruikbare lessen die de kern van het artikel vangen.\n\n"
+        "Output: strikt JSON, vorm: {\"lessons\": [{\"title\": \"…\", \"body\": \"…\"}]}\n"
+        "- title: korte kop (4-8 woorden)\n"
+        "- body: 1-3 zinnen, concreet en bruikbaar\n"
+        "Maximaal 5 lessen. Liever 0 dan oppervlakkig."
+    )
+    raw = await llm_service.call_llm(
+        "stroom-bulk",
+        [{"role": "system", "content": system},
+         {"role": "user", "content": f"Samenvatting: {summary}\n\nArtikel tekst:\n{body_text}"}],
+        temperature=0.4, response_format="json_object",
+    )
+    import json as _json
+    try:
+        data = _json.loads(raw)
+        new_lessons = data.get("lessons", []) or []
+    except _json.JSONDecodeError:
+        return 0
+
+    inserted = 0
+    async with async_session_maker() as bg:
+        for idx, entry in enumerate(new_lessons, start=1):
+            t = (entry.get("title") or "").strip()
+            b = (entry.get("body") or "").strip()
+            if not t or not b:
+                continue
+            await bg.exec(sa_text(
+                "INSERT INTO lessons (item_id, idx, title, body) "
+                "VALUES (CAST(:i AS uuid), :idx, :t, :b)"
+            ).bindparams(i=item_id, idx=idx, t=t, b=b))
+            inserted += 1
+        if inserted:
+            await bg.commit()
+    return inserted
 
 
 async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]:
@@ -1648,9 +1744,24 @@ async def _cron_queue_transcribes(session, *, content_kind: str,
 
     `content_kind`: 'podcast' or 'youtube'.
     `hours`: only items published in last N hours, or None for all-time backlog.
+
+    Hard cap: nooit meer dan TRANSCRIBE_QUEUE_MAX_DEPTH items totaal in
+    de pipeline (queued + transcribing). Bij volle queue: 0.
     """
+    r = await session.exec(sa_text(
+        "SELECT COUNT(*) FROM items WHERE processing_status IN "
+        "('transcribe_queued'::processing_status, 'transcribing'::processing_status)"
+    ))
+    in_flight = r.first()[0] or 0
+    available = max(0, TRANSCRIBE_QUEUE_MAX_DEPTH - in_flight)
+    if available == 0:
+        print(f"[cron] transcribe-queue vol ({in_flight}/{TRANSCRIBE_QUEUE_MAX_DEPTH}), "
+              f"niets gequeued voor {content_kind}", flush=True)
+        return 0
+    effective_limit = min(limit, available) if limit else available
+
     where_age = "AND i.published_at >= now() - (:hrs * interval '1 hour')" if hours is not None else ""
-    sql = f"""
+    sql = """
         WITH picks AS (
           SELECT i.id
           FROM items i
@@ -1664,9 +1775,9 @@ async def _cron_queue_transcribes(session, *, content_kind: str,
                 ('transcribe_queued'::processing_status, 'transcribing'::processing_status,
                  'queued'::processing_status, 'summarizing'::processing_status)
             AND i.transcribe_attempts < :max_att
-            {where_age}
+            """ + where_age + """
           ORDER BY s.weight DESC, i.published_at DESC
-          {f'LIMIT {int(limit)}' if limit else ''}
+          LIMIT :lim
         )
         UPDATE items SET
           processing_status = 'transcribe_queued'::processing_status,
@@ -1676,7 +1787,8 @@ async def _cron_queue_transcribes(session, *, content_kind: str,
         WHERE id IN (SELECT id FROM picks)
         RETURNING id
     """
-    params: dict = {"kind": content_kind, "wmin": weight_min, "max_att": CRON_MAX_TRANSCRIBE_ATTEMPTS}
+    params: dict = {"kind": content_kind, "wmin": weight_min,
+                    "max_att": CRON_MAX_TRANSCRIBE_ATTEMPTS, "lim": effective_limit}
     if hours is not None:
         params["hrs"] = hours
     r = await session.exec(sa_text(sql).bindparams(**params))
@@ -1689,10 +1801,28 @@ async def _cron_pick_articles_for_summary(session, *,
                                           hours: Optional[int] = None,
                                           weight_min: int = CRON_WEIGHT_MIN,
                                           limit: int = 200) -> list[str]:
-    """Pick articles needing summary, pre-mark als 'summarize_queued' zodat ze direct zichtbaar zijn
-    in het queue-paneel (awaiting external LLM). Pipeline flipt ze daarna naar 'summarizing' → 'ready'."""
+    """Pick articles needing summary, pre-mark als 'summarize_queued'.
+
+    Workers (zie _summarize_worker) draineren de queue. Cron flipt alleen
+    statussen — geen background-task spawn.
+
+    Hard cap: nooit meer dan SUMMARIZE_QUEUE_MAX_DEPTH items totaal in
+    de pipeline (queued + summarizing). Bij volle queue: lege list.
+    """
+    r = await session.exec(sa_text(
+        "SELECT COUNT(*) FROM items WHERE processing_status IN "
+        "('summarize_queued'::processing_status, 'summarizing'::processing_status)"
+    ))
+    in_flight = r.first()[0] or 0
+    available = max(0, SUMMARIZE_QUEUE_MAX_DEPTH - in_flight)
+    if available == 0:
+        print(f"[cron] summarize-queue vol ({in_flight}/{SUMMARIZE_QUEUE_MAX_DEPTH}), "
+              f"niets gequeued", flush=True)
+        return []
+    effective_limit = min(limit, available)
+
     where_age = "AND i.published_at >= now() - (:hrs * interval '1 hour')" if hours is not None else ""
-    sql = f"""
+    sql = """
         WITH picks AS (
           SELECT i.id
           FROM items i
@@ -1706,7 +1836,7 @@ async def _cron_pick_articles_for_summary(session, *,
             AND i.processing_status NOT IN
                 ('summarize_queued'::processing_status, 'summarizing'::processing_status,
                  'queued'::processing_status, 'transcribing'::processing_status)
-            {where_age}
+            """ + where_age + """
           ORDER BY s.weight DESC, i.published_at DESC
           LIMIT :lim
         )
@@ -1717,7 +1847,7 @@ async def _cron_pick_articles_for_summary(session, *,
         WHERE id IN (SELECT id FROM picks)
         RETURNING id::text
     """
-    params: dict = {"wmin": weight_min, "lim": limit}
+    params: dict = {"wmin": weight_min, "lim": effective_limit}
     if hours is not None:
         params["hrs"] = hours
     r = await session.exec(sa_text(sql).bindparams(**params))
@@ -1760,13 +1890,12 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
 
 @app.post("/admin/cron/nightly")
 async def admin_cron_nightly(session=Depends(get_async_session)):
-    """Nightly job: refresh sources, then in this order:
-      1. Reset stuck items.
-      2. Refresh all active sources.
-      3. Queue podcasts (no time limit, weight >= 5, attempts < 3).
-      4. Pick articles for summary (no time limit).
-      5. Queue YouTube videos.
-      6. Kick GPU-queue + start article-summarize bg + topic-digest generation.
+    """Nightly job: reset stuck → refresh sources → queue items.
+
+    Cron flipt alleen statussen naar *_queued. De worker pool draineert
+    de queues vanzelf (bounded door SUMMARIZE_WORKERS + hard cap op
+    queue-depth). Geen background-task spawn meer hier.
+
     Auth: internal token or admin session cookie.
     """
     unstuck = await _cron_unstuck(session)
@@ -1794,18 +1923,6 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     videos_queued = await _cron_queue_transcribes(session, content_kind="youtube", hours=CRON_NIGHTLY_HOURS)
     article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
 
-    started = False
-    try:
-        await _process_next_queued(session)
-        started = True
-    except Exception as exc:
-        print(f"[cron] _process_next_queued faalde: {exc}")
-
-    if article_ids:
-        from core.db import async_session_maker
-        llm = LLMService(app.state.http_client)
-        asyncio.create_task(_pipeline_summarize_articles(article_ids, llm, async_session_maker))
-
     from routers.settings import _load as _load_settings
     digest_default = (await _load_settings(session)).digest
     digests_started = await _cron_kick_topic_digests(session, model=digest_default, window="daily")
@@ -1820,7 +1937,6 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
         "videos_queued": videos_queued,
         "articles_summarize_kicked": len(article_ids),
         "digests_started": digests_started,
-        "queue_started": started,
     }
 
 
@@ -1829,10 +1945,7 @@ async def admin_cron_transcribe_podcasts(hours: int = Query(24, ge=1, le=720),
                                          session=Depends(get_async_session)):
     await _cron_unstuck(session)
     n = await _cron_queue_transcribes(session, content_kind="podcast", hours=hours)
-    started = False
-    try: await _process_next_queued(session); started = True
-    except Exception as exc: print(f"[admin] queue kick faalde: {exc}")
-    return {"ok": True, "queued": n, "queue_started": started, "hours": hours}
+    return {"ok": True, "queued": n, "hours": hours}
 
 
 @app.post("/admin/cron/transcribe-videos")
@@ -1840,10 +1953,7 @@ async def admin_cron_transcribe_videos(hours: int = Query(24, ge=1, le=720),
                                        session=Depends(get_async_session)):
     await _cron_unstuck(session)
     n = await _cron_queue_transcribes(session, content_kind="youtube", hours=hours)
-    started = False
-    try: await _process_next_queued(session); started = True
-    except Exception as exc: print(f"[admin] queue kick faalde: {exc}")
-    return {"ok": True, "queued": n, "queue_started": started, "hours": hours}
+    return {"ok": True, "queued": n, "hours": hours}
 
 
 @app.post("/admin/cron/summarize-articles")
@@ -1851,10 +1961,6 @@ async def admin_cron_summarize_articles(hours: int = Query(24, ge=1, le=720),
                                         session=Depends(get_async_session)):
     await _cron_unstuck(session)
     article_ids = await _cron_pick_articles_for_summary(session, hours=hours)
-    if article_ids:
-        from core.db import async_session_maker
-        llm = LLMService(app.state.http_client)
-        asyncio.create_task(_pipeline_summarize_articles(article_ids, llm, async_session_maker))
     return {"ok": True, "articles_kicked": len(article_ids), "hours": hours}
 
 
@@ -1879,15 +1985,9 @@ async def admin_queue_remove(item_id: str, session=Depends(get_async_session),
 
 @app.post("/admin/queue/restart")
 async def admin_queue_restart(session=Depends(get_async_session), user=Depends(require_user)):
-    """Onstuck-pas + kick van de eerstvolgende in de queue. Gebruik bij vastlopers."""
+    """Onstuck-pas. Workers pakken vanzelf de volgende items op."""
     unstuck = await _cron_unstuck(session)
-    started = False
-    try:
-        await _process_next_queued(session)
-        started = True
-    except Exception as exc:
-        print(f"[admin] queue restart kick faalde: {exc}")
-    return {"ok": True, "stuck_reset": unstuck, "queue_started": started}
+    return {"ok": True, "stuck_reset": unstuck}
 
 
 @app.post("/admin/cron/digest-topics")
