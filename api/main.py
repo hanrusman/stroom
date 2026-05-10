@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
-from typing import List, Optional, Literal
+from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
@@ -16,6 +16,7 @@ import asyncio
 import httpx
 import os
 import re
+import time
 from datetime import datetime
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.auth import (
@@ -41,6 +42,55 @@ LLM_HTTP_TIMEOUT_SEC = float(os.environ.get('LLM_HTTP_TIMEOUT_SEC', 60))
 LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
 WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
 QUEUE_DEPTH_LOG_EVERY_SEC = 60
+
+# Memory-gate: workers weigeren nieuwe items te claimen als de host-RAM
+# headroom onder deze drempel zakt. Voorkomt OOM op kleine VPS waar
+# Whisper-medium ~1.6GB piek RAM nodig heeft naast de baseline van andere
+# stacks (n8n, authentik, etc.). MemAvailable uit /proc/meminfo is host-stat,
+# niet cgroup — perfect voor deze use-case.
+TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 2000))
+SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 500))
+MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
+
+
+def _available_host_mem_mb() -> int:
+    """MemAvailable uit /proc/meminfo, in MB. 0 bij leesfout (gate uit).
+
+    Let op: Docker exposet /proc/meminfo als HOST-stat, niet de cgroup
+    memory limit van de container. Voor onze setup (geen cgroup-mem limit
+    op stroom-api, host == VPS) is dat exact wat we willen. Voor setups
+    waar de container een lagere mem-limit heeft dan de host, kan deze
+    gate "vals positief" zijn (host heeft RAM, container niet) — dan moet
+    je in plaats daarvan /sys/fs/cgroup/memory.max lezen.
+    """
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    return 0
+
+
+# Per-worker state voor throttled mem-gate logging.
+_LAST_MEM_GATE_LOG: Dict[str, float] = {}
+
+
+def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
+    """True als beschikbare host-RAM onder de drempel zit. Logt throttled."""
+    avail = _available_host_mem_mb()
+    if avail == 0:
+        return False  # /proc/meminfo onleesbaar — gate uit, fail open
+    if avail >= min_mb:
+        return False
+    now = time.time()
+    last = _LAST_MEM_GATE_LOG.get(worker_name, 0.0)
+    if now - last >= MEM_GATE_LOG_EVERY_SEC:
+        print(f"[{worker_name}] mem-gate: {avail}MB available, "
+              f"need {min_mb}MB — wachten", flush=True)
+        _LAST_MEM_GATE_LOG[worker_name] = now
+    return True
 
 
 @asynccontextmanager
@@ -787,7 +837,12 @@ async def _claim_next_summarize(session) -> Optional[str]:
     Gebruikt FOR UPDATE SKIP LOCKED zodat meerdere workers nooit hetzelfde
     item pakken en geen worker geblokkeerd raakt op een rij die een ander
     al heeft gepakt. Returnt het id::text of None als de queue leeg is.
+
+    Mem-gate: weigert te claimen als host-RAM onder SUMMARIZE_MIN_FREE_MB
+    zit. Worker valt dan terug op de idle-poll-sleep en probeert later weer.
     """
+    if _mem_gate_blocks('sum-worker', SUMMARIZE_MIN_FREE_MB):
+        return None
     r = await session.exec(sa_text("""
         UPDATE items SET
           processing_status = 'summarizing'::processing_status,
@@ -811,7 +866,13 @@ async def _claim_next_transcribe(session) -> Optional[tuple[str, str, str]]:
 
     Geeft (item_id, media_url, type) of None.
     Caller is verantwoordelijk voor het posten naar samenvat-agent.
+
+    Mem-gate: weigert te claimen als host-RAM onder TRANSCRIBE_MIN_FREE_MB
+    zit. Whisper-medium piekt op ~1.6GB host-RAM (model + alignment + audio
+    buffer) ook al draait inference op GPU.
     """
+    if _mem_gate_blocks('trans-worker', TRANSCRIBE_MIN_FREE_MB):
+        return None
     # Eerst checken of de GPU al bezet is (slechts 1 transcribing tegelijk).
     r = await session.exec(sa_text(
         "SELECT COUNT(*) FROM items WHERE processing_status='transcribing'::processing_status"
