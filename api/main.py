@@ -1808,6 +1808,7 @@ async def _cron_unstuck(session) -> int:
         UPDATE topic_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
         WHERE is_generating=true AND generation_started_at IS NULL
           AND queued_at < now() - interval '4 hours'
+        RETURNING id
     """))
     n += len(r2.all())
 
@@ -1816,6 +1817,7 @@ async def _cron_unstuck(session) -> int:
         UPDATE lessons_digests SET is_generating=false, error='wachtrij timeout — worker crashed?'
         WHERE is_generating=true AND generation_started_at IS NULL
           AND queued_at < now() - interval '4 hours'
+        RETURNING id
     """))
     n += len(r3.all())
 
