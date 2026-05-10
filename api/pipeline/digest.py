@@ -84,6 +84,7 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
         async with async_session_maker() as bg:
             # Zet generation_started_at NU pas — we zitten binnen de semaphore,
             # dus dit is het moment dat de generatie écht begint.
+            # queued_at blijft staan zodat we later kunnen zien hoe lang de wachtrij duurde.
             await bg.exec(sa_text(
                 "UPDATE topic_digests SET generation_started_at=now() "
                 "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"

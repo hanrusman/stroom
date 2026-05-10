@@ -415,19 +415,22 @@ async def regenerate_lessons_digest(background_tasks: BackgroundTasks,
 
     if existing and existing[0]:
         started = existing[1]
-        if started and (datetime.now(started.tzinfo) - started).total_seconds() < _DIGEST_GENERATION_STALE_MIN * 60:
+        if started is None:
+            raise HTTPException(status_code=409, detail="Staat in de wachtrij — even wachten.")
+        if (datetime.now(started.tzinfo) - started).total_seconds() < _DIGEST_GENERATION_STALE_MIN * 60:
             raise HTTPException(status_code=409, detail="Genereren is al bezig — even wachten.")
 
     # generation_started_at wordt pas gezet wanneer de task daadwerkelijk begint (in de worker)
     if existing:
         await session.exec(sa_text(
-            "UPDATE lessons_digests SET is_generating=true, generation_started_at=NULL, error=NULL "
+            "UPDATE lessons_digests SET is_generating=true, generation_started_at=NULL, "
+            "queued_at=now(), error=NULL "
             "WHERE window_hours=:w AND rating=:r"
         ).bindparams(w=w, r=r))
     else:
         await session.exec(sa_text(
-            "INSERT INTO lessons_digests (window_hours, rating, is_generating, generation_started_at) "
-            "VALUES (:w, :r, true, NULL)"
+            "INSERT INTO lessons_digests (window_hours, rating, is_generating, generation_started_at, queued_at) "
+            "VALUES (:w, :r, true, NULL, now())"
         ).bindparams(w=w, r=r))
     await session.commit()
 
