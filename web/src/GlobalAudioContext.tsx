@@ -18,7 +18,7 @@ interface GlobalAudioState {
 }
 
 interface GlobalAudioContextType extends GlobalAudioState {
-  loadTrack: (track: Track) => void;
+  loadTrack: (track: Track, startTime?: number) => void;
   togglePlay: () => void;
   seek: (time: number) => void;
   skip: (deltaSeconds: number) => void;
@@ -36,12 +36,16 @@ export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRateState] = useState(1.7);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const currentTrackIdRef = useRef<string | null>(null);
 
-  const loadTrack = useCallback((track: Track) => {
+  const loadTrack = useCallback((track: Track, startTime?: number) => {
     setCurrentTrack(track);
     setIsPlaying(true);
-    setCurrentTime(0);
-    // Audio element will load and play via useEffect
+    setCurrentTime(startTime || 0);
+    // Set audio currentTime when loaded
+    if (audioRef.current && startTime) {
+      audioRef.current.currentTime = startTime;
+    }
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -56,12 +60,11 @@ export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ c
   }, []);
 
   const skip = useCallback((deltaSeconds: number) => {
-    const newTime = Math.max(0, currentTime + deltaSeconds);
-    setCurrentTime(newTime);
-    if (audioRef.current) {
-      audioRef.current.currentTime = newTime;
-    }
-  }, [currentTime]);
+    if (!audioRef.current) return;
+    const t = Math.max(0, audioRef.current.currentTime + deltaSeconds);
+    audioRef.current.currentTime = t;
+    setCurrentTime(t);
+  }, []);
 
   const setPlaybackRate = useCallback((rate: number) => {
     setPlaybackRateState(rate);
@@ -82,15 +85,16 @@ export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ c
     const audio = audioRef.current;
     if (!audio) return;
 
-    // Reset time when track changes
-    if (audio.src !== currentTrack?.mediaUrl) {
+    // Reset time when track changes (vergelijk op itemId, niet src)
+    if (currentTrackIdRef.current !== currentTrack?.itemId) {
+      currentTrackIdRef.current = currentTrack?.itemId || null;
       audio.src = currentTrack?.mediaUrl || '';
       setCurrentTime(0);
       setDuration(0);
     }
 
     if (isPlaying && currentTrack) {
-      audio.play().catch(() => {});
+      audio.play().catch((err) => console.error('Audio play failed:', err));
     } else {
       audio.pause();
     }
@@ -102,19 +106,6 @@ export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ c
       audioRef.current.playbackRate = playbackRate;
     }
   }, [playbackRate]);
-
-  // Update current time while playing
-  useEffect(() => {
-    if (!isPlaying || !audioRef.current) return;
-
-    const interval = setInterval(() => {
-      if (audioRef.current) {
-        setCurrentTime(audioRef.current.currentTime);
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, currentTrack]);
 
   // Handle track ended and time updates
   useEffect(() => {

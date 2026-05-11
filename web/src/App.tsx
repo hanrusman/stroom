@@ -869,7 +869,8 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
             <img src={item.thumbnail_url} alt="" className="w-full h-full object-cover" />
           </div>
         ) : null}
-        {!isVideo && item.media_url && (
+        {/* Inline audio alleen renderen als niet gepinned */}
+        {!isVideo && item.media_url && !isPinned && (
           <audio ref={mediaRef as React.Ref<HTMLAudioElement>} src={item.media_url}
             onTimeUpdate={onTime} onLoadedMetadata={onMeta}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
@@ -905,19 +906,19 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
                   mediaUrl: item.media_url,
                   format: item.format === 'podcast' ? 'podcast' : 'video',
                   thumbnailUrl: item.thumbnail_url || undefined,
-                });
+                }, cur); // Pin vanaf huidige positie
               }}
               disabled={isPinned}
               className={`mt-4 w-full py-2.5 rounded-full font-mono text-[11px] uppercase tracking-[0.15em] flex items-center justify-center gap-2 transition ${
                 isPinned
-                  ? 'bg-green-600 text-white cursor-default'
+                  ? 'bg-brand-accent text-brand-cream cursor-default'
                   : 'bg-brand-surface hover:bg-brand-accent hover:text-brand-cream text-brand-ink/70'
               }`}
             >
               {isPinned ? (
-                <>✓ Vastgezet aan speler</>
+                <>Vastgezet aan speler</>
               ) : (
-                <>📌 Vastzetten aan speler</>
+                <>Vastzetten aan speler</>
               )}
             </button>
           </div>
@@ -1616,6 +1617,20 @@ function useDarkMode(): [boolean, () => void] {
   return [dark, () => setDark(d => !d)];
 }
 
+function AppWithStickyPlayer({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { currentTrack } = useGlobalAudio();
+  return (
+    <>
+      <SettingsProvider>
+        <AuthedApp user={user} onLogout={onLogout} />
+      </SettingsProvider>
+      <StickyPlayer />
+      {/* Spacer voor sticky player hoogte */}
+      {currentTrack && <div className="h-[76px]" />}
+    </>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
 
@@ -1631,14 +1646,10 @@ export default function App() {
   }
   return (
     <GlobalAudioProvider>
-      <SettingsProvider>
-        <AuthedApp user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />
-      </SettingsProvider>
-      <StickyPlayer />
+      <AppWithStickyPlayer user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />
     </GlobalAudioProvider>
   );
 }
-
 
 const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
   qwen: 'Qwen (lokaal)',

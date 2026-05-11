@@ -36,38 +36,70 @@ const StickyPlayer: React.FC = () => {
     seek(pct * duration);
   };
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleStart = (clientX: number) => {
     setIsDragging(true);
-    calculateSeek(e.clientX);
+    calculateSeek(clientX);
   };
 
-  const handleMouseMove = React.useCallback(
-    (e: MouseEvent) => {
+  const handleMove = React.useCallback(
+    (clientX: number) => {
       if (isDragging) {
-        calculateSeek(e.clientX);
+        calculateSeek(clientX);
       }
     },
     [isDragging, duration]
   );
 
-  const handleMouseUp = React.useCallback(() => {
+  const handleEnd = React.useCallback(() => {
     setIsDragging(false);
   }, []);
+
+  // Mouse events
+  const handleMouseDown = (e: React.MouseEvent) => handleStart(e.clientX);
+  const handleMouseMove = React.useCallback(
+    (e: MouseEvent) => handleMove(e.clientX),
+    [handleMove]
+  );
+  const handleMouseUp = handleEnd;
+
+  // Touch events
+  const handleTouchStart = (e: React.TouchEvent) => handleStart(e.touches[0].clientX);
+  const handleTouchMove = React.useCallback(
+    (e: TouchEvent) => {
+      e.preventDefault();
+      handleMove(e.touches[0].clientX);
+    },
+    [handleMove]
+  );
+  const handleTouchEnd = handleEnd;
 
   React.useEffect(() => {
     if (isDragging) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
+      document.addEventListener('touchmove', handleTouchMove, { passive: false });
+      document.addEventListener('touchend', handleTouchEnd);
     }
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
+      document.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
     };
-  }, [isDragging, handleMouseMove, handleMouseUp]);
+  }, [isDragging, handleMouseMove, handleMouseUp, handleTouchMove, handleTouchEnd]);
 
-  const cycleRate = () => {
-    const next = playbackRate >= 2.5 ? 1.0 : Math.round((playbackRate + 0.1) * 10) / 10;
-    setPlaybackRate(next);
+  const cycleRate = (direction: 'up' | 'down' = 'up') => {
+    if (direction === 'down') {
+      const next = playbackRate <= 1.0 ? 2.5 : Math.round((playbackRate - 0.1) * 10) / 10;
+      setPlaybackRate(next);
+    } else {
+      const next = playbackRate >= 2.5 ? 1.0 : Math.round((playbackRate + 0.1) * 10) / 10;
+      setPlaybackRate(next);
+    }
+  };
+
+  const handleRateClick = (e: React.MouseEvent) => {
+    cycleRate(e.altKey ? 'down' : 'up');
   };
 
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -79,6 +111,7 @@ const StickyPlayer: React.FC = () => {
         ref={progressRef}
         className="h-3 bg-brand-ink/10 cursor-pointer relative group"
         onMouseDown={handleMouseDown}
+        onTouchStart={handleTouchStart}
       >
         {/* Background track */}
         <div className="absolute inset-0 h-full" />
@@ -146,8 +179,9 @@ const StickyPlayer: React.FC = () => {
           </button>
 
           <button
-            onClick={cycleRate}
+            onClick={handleRateClick}
             className="w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-xs font-semibold text-brand-accent"
+            title="Klik voor omhoog, Alt+klik voor omlaag"
           >
             {playbackRate.toFixed(1)}×
           </button>
