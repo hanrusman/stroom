@@ -29,23 +29,23 @@ interface GlobalAudioContextType extends GlobalAudioState {
 
 const GlobalAudioContext = createContext<GlobalAudioContextType | null>(null);
 
+const DEFAULT_PLAYBACK_RATE = 1.7;
+
 export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentTrack, setCurrentTrack] = useState<Track | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
-  const [playbackRate, setPlaybackRateState] = useState(1.7);
+  const [playbackRate, setPlaybackRateState] = useState(DEFAULT_PLAYBACK_RATE);
   const audioRef = useRef<HTMLAudioElement>(null);
   const currentTrackIdRef = useRef<string | null>(null);
+  const pendingSeekRef = useRef<number | null>(null);
 
   const loadTrack = useCallback((track: Track, startTime?: number) => {
+    pendingSeekRef.current = startTime ?? null;
     setCurrentTrack(track);
     setIsPlaying(true);
     setCurrentTime(startTime || 0);
-    // Set audio currentTime when loaded
-    if (audioRef.current && startTime) {
-      audioRef.current.currentTime = startTime;
-    }
   }, []);
 
   const togglePlay = useCallback(() => {
@@ -124,6 +124,11 @@ export const GlobalAudioProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
     const handleLoadedMetadata = () => {
       setDuration(audio.duration || 0);
+      // Apply pending seek when metadata is loaded
+      if (pendingSeekRef.current != null) {
+        audio.currentTime = pendingSeekRef.current;
+        pendingSeekRef.current = null;
+      }
     };
 
     audio.addEventListener('ended', handleEnded);

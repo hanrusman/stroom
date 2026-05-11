@@ -102,6 +102,29 @@ const StickyPlayer: React.FC = () => {
     cycleRate(e.altKey ? 'down' : 'up');
   };
 
+  // Long-press voor mobile: snelheid omlaag
+  const longPressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [isLongPress, setIsLongPress] = React.useState(false);
+
+  const handleRateTouchStart = () => {
+    setIsLongPress(false);
+    longPressTimer.current = setTimeout(() => {
+      setIsLongPress(true);
+      cycleRate('down');
+    }, 500);
+  };
+
+  const handleRateTouchEnd = (e: React.TouchEvent | React.MouseEvent) => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+    // Alleen klik als het geen long-press was
+    if (!isLongPress && 'altKey' in e) {
+      handleRateClick(e as React.MouseEvent);
+    }
+  };
+
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
@@ -109,6 +132,12 @@ const StickyPlayer: React.FC = () => {
       {/* Progress bar */}
       <div
         ref={progressRef}
+        role="slider"
+        aria-label="Voortgang"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(duration)}
+        aria-valuenow={Math.round(currentTime)}
+        aria-valuetext={`${formatTime(currentTime)} van ${formatTime(duration)}`}
         className="h-3 bg-brand-ink/10 cursor-pointer relative group"
         onMouseDown={handleMouseDown}
         onTouchStart={handleTouchStart}
@@ -165,6 +194,7 @@ const StickyPlayer: React.FC = () => {
 
           <button
             onClick={togglePlay}
+            aria-label={isPlaying ? 'Pauzeren' : 'Afspelen'}
             className="w-11 h-11 rounded-full bg-brand-accent text-brand-cream flex items-center justify-center hover:opacity-90"
           >
             {isPlaying ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" />}
@@ -180,8 +210,13 @@ const StickyPlayer: React.FC = () => {
 
           <button
             onClick={handleRateClick}
-            className="w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-xs font-semibold text-brand-accent"
-            title="Klik voor omhoog, Alt+klik voor omlaag"
+            onMouseDown={handleRateTouchStart}
+            onMouseUp={handleRateTouchEnd}
+            onMouseLeave={() => longPressTimer.current && clearTimeout(longPressTimer.current)}
+            onTouchStart={handleRateTouchStart}
+            onTouchEnd={handleRateTouchEnd}
+            className="w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-xs font-semibold text-brand-accent select-none"
+            title="Klik/lang-press voor omhoog, Alt+klik/lang-press voor omlaag"
           >
             {playbackRate.toFixed(1)}×
           </button>
