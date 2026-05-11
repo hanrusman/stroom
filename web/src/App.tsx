@@ -5,6 +5,8 @@ import DOMPurify from 'dompurify';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { SettingsProvider, useSettings } from './settings';
+import { GlobalAudioProvider, useGlobalAudio } from './GlobalAudioContext';
+import StickyPlayer from './StickyPlayer';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest, fetchTopicDigestHistory, TopicDigestRun,
@@ -756,47 +758,84 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(0);
   const [playing, setPlaying] = useState(false);
-  const [rate, setRate] = useState(1);
+  const [rate, setRate] = useState(1.7);
+  const { loadTrack, currentTrack, isPlaying: globalIsPlaying, currentTime: globalCurrentTime, duration: globalDuration, playbackRate: globalPlaybackRate, togglePlay, seek, skip, setPlaybackRate } = useGlobalAudio();
+  const isPinned = currentTrack?.itemId === item.id;
 
-  useEffect(() => { setCur(0); setDur(0); setPlaying(false); setRate(1); }, [item.id]);
+  useEffect(() => { setCur(0); setDur(0); setPlaying(false); setRate(1.7); }, [item.id]);
+
+  // Sync local rate with global when pinned
+  useEffect(() => {
+    if (isPinned) {
+      setRate(globalPlaybackRate);
+    }
+  }, [isPinned, globalPlaybackRate]);
 
   const onTime = () => { if (mediaRef.current) setCur(mediaRef.current.currentTime); };
   const onMeta = () => { if (mediaRef.current) setDur(mediaRef.current.duration); };
 
   const toggle = () => {
-    const m = mediaRef.current; if (!m) return;
-    if (m.paused) m.play(); else m.pause();
+    if (isPinned) {
+      togglePlay();
+    } else {
+      const m = mediaRef.current; if (!m) return;
+      if (m.paused) m.play(); else m.pause();
+    }
   };
   const seekDelta = (d: number) => {
-    const m = mediaRef.current; if (!m) return;
-    m.currentTime = Math.max(0, Math.min(dur || m.duration || 0, m.currentTime + d));
+    if (isPinned) {
+      skip(d);
+    } else {
+      const m = mediaRef.current; if (!m) return;
+      m.currentTime = Math.max(0, Math.min(dur || m.duration || 0, m.currentTime + d));
+    }
   };
   const seekTo = (e: React.MouseEvent<HTMLDivElement>) => {
-    const m = mediaRef.current; if (!m || !dur) return;
+    const totalDur = isPinned ? globalDuration : dur;
+    if (!totalDur) return;
     const r = e.currentTarget.getBoundingClientRect();
-    m.currentTime = ((e.clientX - r.left) / r.width) * dur;
+    const newTime = ((e.clientX - r.left) / r.width) * totalDur;
+    if (isPinned) {
+      seek(newTime);
+    } else {
+      const m = mediaRef.current; if (!m) return;
+      m.currentTime = newTime;
+    }
   };
   const cycleRate = () => {
-    const next = rate === 1 ? 1.25 : rate === 1.25 ? 1.5 : rate === 1.5 ? 2 : 1;
+    const next = rate >= 2.5 ? 1.0 : Math.round((rate + 0.1) * 10) / 10;
     setRate(next);
-    if (mediaRef.current) mediaRef.current.playbackRate = next;
+    if (isPinned) {
+      setPlaybackRate(next);
+    } else if (mediaRef.current) {
+      mediaRef.current.playbackRate = next;
+    }
   };
 
   const transcript = item.transcript;
   const segments = item.transcript_segments ?? null;
-  const pct = dur > 0 ? (cur / dur) * 100 : 0;
-  const remaining = Math.max(0, dur - cur);
+  // Use global state when pinned, local state otherwise
+  const displayCur = isPinned ? globalCurrentTime : cur;
+  const displayDur = isPinned ? globalDuration : dur;
+  const displayPlaying = isPinned ? globalIsPlaying : playing;
+  const displayRate = isPinned ? globalPlaybackRate : rate;
+  const pct = displayDur > 0 ? (displayCur / displayDur) * 100 : 0;
+  const remaining = Math.max(0, displayDur - displayCur);
   const isVideo = item.format === 'video';
   const ytId = isVideo ? youtubeId(item.media_url) : null;
 
   const seekToSec = (s: number) => {
-    const m = mediaRef.current;
-    if (!m) return;
-    m.currentTime = Math.max(0, s);
-    if (m.paused) m.play().catch(() => {});
+    if (isPinned) {
+      seek(Math.max(0, s));
+    } else {
+      const m = mediaRef.current;
+      if (!m) return;
+      m.currentTime = Math.max(0, s);
+      if (m.paused) m.play().catch(() => {});
+    }
   };
   const activeIdx = segments
-    ? segments.findIndex(s => cur >= s.start && cur < s.end)
+    ? segments.findIndex(s => displayCur >= s.start && displayCur < s.end)
     : -1;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -830,7 +869,8 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
             <img src={item.thumbnail_url} alt="" className="w-full h-full object-cover" />
           </div>
         ) : null}
-        {!isVideo && item.media_url && (
+        {/* Inline audio alleen renderen als niet gepinned */}
+        {!isVideo && item.media_url && !isPinned && (
           <audio ref={mediaRef as React.Ref<HTMLAudioElement>} src={item.media_url}
             onTimeUpdate={onTime} onLoadedMetadata={onMeta}
             onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} />
@@ -844,7 +884,7 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
                 <div className="h-full bg-brand-accent" style={{ width: `${pct}%` }} />
               </div>
               <div className="flex justify-between mt-2 font-mono text-[10px] tracking-[0.1em] text-brand-ink/50">
-                <span>{fmtTime(cur)}</span>
+                <span>{fmtTime(displayCur)}</span>
                 <span>−{fmtTime(remaining)}</span>
               </div>
             </div>
@@ -852,11 +892,35 @@ const MediaBody = ({ item, onTranscribe, busy, transcribeLabel, transcribeDisabl
               <button onClick={() => seekDelta(-15)} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/65 font-mono text-[11px]">−15</button>
               <button onClick={toggle}
                 className="w-14 h-14 rounded-full bg-brand-accent text-brand-cream flex items-center justify-center text-xl shadow-sm hover:opacity-90">
-                {playing ? '❚❚' : '▶'}
+                {displayPlaying ? '❚❚' : '▶'}
               </button>
               <button onClick={() => seekDelta(30)} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/65 font-mono text-[11px]">+30</button>
-              <button onClick={cycleRate} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center font-mono text-[10px] text-brand-ink/65">{rate}×</button>
+              <button onClick={cycleRate} className="w-10 h-10 rounded-full hover:bg-brand-ink/5 flex items-center justify-center font-mono text-[10px] text-brand-ink/65">{displayRate.toFixed(1)}×</button>
             </div>
+            <button
+              onClick={() => {
+                loadTrack({
+                  itemId: item.id,
+                  title: item.title,
+                  sourceName: item.source_name,
+                  mediaUrl: item.media_url,
+                  format: item.format === 'podcast' ? 'podcast' : 'video',
+                  thumbnailUrl: item.thumbnail_url || undefined,
+                }, cur); // Pin vanaf huidige positie
+              }}
+              disabled={isPinned}
+              className={`mt-4 w-full py-2.5 rounded-full font-mono text-[11px] uppercase tracking-[0.15em] flex items-center justify-center gap-2 transition ${
+                isPinned
+                  ? 'bg-brand-accent text-brand-cream cursor-default'
+                  : 'bg-brand-surface hover:bg-brand-accent hover:text-brand-cream text-brand-ink/70'
+              }`}
+            >
+              {isPinned ? (
+                <>Vastgezet aan speler</>
+              ) : (
+                <>Vastzetten aan speler</>
+              )}
+            </button>
           </div>
         )}
         {!item.media_url && (
@@ -1553,6 +1617,20 @@ function useDarkMode(): [boolean, () => void] {
   return [dark, () => setDark(d => !d)];
 }
 
+function AppWithStickyPlayer({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const { currentTrack } = useGlobalAudio();
+  return (
+    <>
+      <SettingsProvider>
+        <AuthedApp user={user} onLogout={onLogout} />
+      </SettingsProvider>
+      <StickyPlayer />
+      {/* Spacer voor sticky player hoogte */}
+      {currentTrack && <div className="h-[76px]" />}
+    </>
+  );
+}
+
 export default function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined);
 
@@ -1567,12 +1645,11 @@ export default function App() {
     return <LoginScreen onLoggedIn={setUser} />;
   }
   return (
-    <SettingsProvider>
-      <AuthedApp user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />
-    </SettingsProvider>
+    <GlobalAudioProvider>
+      <AppWithStickyPlayer user={user} onLogout={() => { apiLogout().finally(() => setUser(null)); }} />
+    </GlobalAudioProvider>
   );
 }
-
 
 const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
   qwen: 'Qwen (lokaal)',
