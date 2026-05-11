@@ -98,18 +98,14 @@ const StickyPlayer: React.FC = () => {
     }
   };
 
-  const handleRateClick = (e: React.MouseEvent) => {
-    cycleRate(e.altKey ? 'down' : 'up');
-  };
-
   // Long-press voor mobile: snelheid omlaag
   const longPressTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [isLongPress, setIsLongPress] = React.useState(false);
+  const isLongPressRef = React.useRef(false);
 
   const handleRateTouchStart = () => {
-    setIsLongPress(false);
+    isLongPressRef.current = false;
     longPressTimer.current = setTimeout(() => {
-      setIsLongPress(true);
+      isLongPressRef.current = true;
       cycleRate('down');
     }, 500);
   };
@@ -120,9 +116,11 @@ const StickyPlayer: React.FC = () => {
       longPressTimer.current = null;
     }
     // Alleen klik als het geen long-press was
-    if (!isLongPress && 'altKey' in e) {
-      handleRateClick(e as React.MouseEvent);
+    if (!isLongPressRef.current) {
+      const altKey = 'altKey' in e && e.altKey;
+      cycleRate(altKey ? 'down' : 'up');
     }
+    isLongPressRef.current = false;
   };
 
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
@@ -209,14 +207,19 @@ const StickyPlayer: React.FC = () => {
           </button>
 
           <button
-            onClick={handleRateClick}
             onMouseDown={handleRateTouchStart}
             onMouseUp={handleRateTouchEnd}
-            onMouseLeave={() => longPressTimer.current && clearTimeout(longPressTimer.current)}
+            onMouseLeave={() => {
+              if (longPressTimer.current) {
+                clearTimeout(longPressTimer.current);
+                longPressTimer.current = null;
+              }
+              isLongPressRef.current = false;
+            }}
             onTouchStart={handleRateTouchStart}
-            onTouchEnd={handleRateTouchEnd}
+            onTouchEnd={(e) => { e.preventDefault(); handleRateTouchEnd(e); }}
             className="w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-xs font-semibold text-brand-accent select-none"
-            title="Klik/lang-press voor omhoog, Alt+klik/lang-press voor omlaag"
+            title="Klik voor omhoog, Alt+klik/lang-press voor omlaag"
           >
             {playbackRate.toFixed(1)}×
           </button>
