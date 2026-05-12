@@ -1026,6 +1026,7 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
 }) => {
   const [distilling, setDistilling] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sendingToVikunja, setSendingToVikunja] = useState<Set<string>>(new Set());
   const { getDefault } = useSettings();
 
   const onDistill = async () => {
@@ -1047,6 +1048,24 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
       setLessons(prev => prev?.map(l => l.id === lid ? updated : l) ?? prev);
     } catch {
       fetchLessons(itemId).then(d => setLessons(() => d)).catch(() => {});
+    }
+  };
+
+  const sendToVikunja = async (lid: string) => {
+    setSendingToVikunja(prev => new Set(prev).add(lid));
+    try {
+      const result = await sendLessonToVikunja(lid);
+      if (result.success && result.task_id) {
+        setLessons(prev => prev?.map(l => l.id === lid ? { ...l, vikunja_task_id: result.task_id } : l) ?? prev);
+      }
+    } catch (e) {
+      console.error('Failed to send to Vikunja:', e);
+    } finally {
+      setSendingToVikunja(prev => {
+        const next = new Set(prev);
+        next.delete(lid);
+        return next;
+      });
     }
   };
 
@@ -1092,6 +1111,16 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
                 className={`w-6 h-6 rounded-full flex items-center justify-center transition ${
                   l.rating === -1 ? 'bg-rose-500 text-white' : 'bg-brand-surface text-brand-ink/40 hover:text-rose-600'
                 }`}><X size={11} /></button>
+              <button
+                onClick={() => sendToVikunja(l.id)}
+                disabled={sendingToVikunja.has(l.id) || !!l.vikunja_task_id}
+                title={l.vikunja_task_id ? 'Verstuurd naar Vikunja' : 'Verstuur naar Vikunja inbox'}
+                className={`w-6 h-6 rounded-full flex items-center justify-center transition ${
+                  l.vikunja_task_id ? 'bg-blue-500 text-white cursor-default' : 'bg-brand-surface text-brand-ink/40 hover:text-blue-600'
+                } ${sendingToVikunja.has(l.id) ? 'opacity-50' : ''}`}
+              >
+                {sendingToVikunja.has(l.id) ? <Loader2 size={11} className="animate-spin" /> : l.vikunja_task_id ? <Check size={11} /> : <InboxIcon size={11} />}
+              </button>
             </div>
             <div className={`flex-1 min-w-0 ${l.rating === -1 ? 'opacity-50' : ''}`}>
               <div className="font-serif font-semibold text-[15px] text-brand-ink leading-tight mb-1">{renderInline(l.title)}</div>
