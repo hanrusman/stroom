@@ -2259,9 +2259,9 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
                      s.max_per_rail,
                      ROW_NUMBER() OVER (
                        PARTITION BY i.source_id, i.format
-                       ORDER BY (EXTRACT(EPOCH FROM i.published_at) + s.weight * 604800) DESC NULLS LAST
+                       ORDER BY (EXTRACT(EPOCH FROM i.published_at) + s.weight * 172800) DESC NULLS LAST
                      ) AS rn,
-                     (EXTRACT(EPOCH FROM i.published_at) + s.weight * 604800) AS score
+                     (EXTRACT(EPOCH FROM i.published_at) + s.weight * 172800) AS score
               FROM items i
               JOIN item_topics it ON it.item_id = i.id
               JOIN sources s ON s.id = i.source_id

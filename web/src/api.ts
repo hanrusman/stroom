@@ -159,6 +159,7 @@ export interface Lesson {
   expansion: string | null;
   expansion_model: string | null;
   expansion_generated_at: string | null;
+  vikunja_task_id?: number | null;
 }
 
 export async function fetchLessons(itemId: string): Promise<Lesson[]> {
@@ -178,6 +179,14 @@ export async function rateLesson(lessonId: string, rating: 1 | -1 | null): Promi
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ rating }),
+  });
+  return r.json();
+}
+
+export async function sendLessonToVikunja(lessonId: string): Promise<{ success: boolean; task_id: number; already_sent?: boolean }> {
+  const r = await apiFetch(`/api/lessons/${lessonId}/send-to-vikunja`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
   });
   return r.json();
 }
