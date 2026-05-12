@@ -52,9 +52,13 @@ const TopicChip = ({ topic, active, onClick }: {
   </button>
 );
 
-const Meta = ({ item, onScoreUpdate }: { item: HuygensItem; onScoreUpdate?: (score: number | null) => void }) => {
+// Gedeelde score-color helper
+const scoreColorClass = (s: number | null | undefined) =>
+  !s ? '' : s >= 8 ? 'text-green-600' : s >= 6 ? 'text-amber-600' : 'text-rose-600';
+
+const Meta = ({ item }: { item: HuygensItem }) => {
   const score = item.quality_score;
-  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : '';
+  const scoreColor = scoreColorClass(score);
   return (
     <div className="text-brand-ink/40 mt-3 text-[10px] font-mono uppercase tracking-[0.18em] flex items-center gap-2">
       <span className="font-medium">{item.source_name}</span>
@@ -62,9 +66,7 @@ const Meta = ({ item, onScoreUpdate }: { item: HuygensItem; onScoreUpdate?: (sco
         <span className="opacity-30">·</span>
         <span>{new Date(item.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
       </>)}
-      {onScoreUpdate ? (
-        <QualityScoreEditor itemId={item.id} score={score} onUpdate={onScoreUpdate} />
-      ) : score ? (<>
+      {score ? (<>
         <span className="opacity-30">·</span>
         <span className={`font-bold ${scoreColor}`} title="Kwaliteitsscore (1-10)">{score}/10</span>
       </>) : null}
@@ -76,7 +78,7 @@ const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : 'text-brand-ink/40';
+  const scoreColor = scoreColorClass(score) || 'text-brand-ink/40';
 
   const handleSelect = async (newScore: number | null) => {
     setBusy(true);
@@ -1499,7 +1501,11 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
               </div>
             )}
           </div>
-          <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={async () => { await toggle('archived'); if (item.status !== 'archived') onBack(); }} />
+          <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={async () => {
+            const wasArchived = item.status === 'archived';
+            await toggle('archived');
+            if (!wasArchived) onBack();
+          }} />
         </div>
       </div>
 
