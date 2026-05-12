@@ -14,7 +14,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          askItem, fetchItemQuestions, deleteQuestion, AskAnswer,
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
-         addItemToTopic, removeItemTopic, updateItemQualityScore,
+         addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter } from './api';
 
@@ -468,6 +468,7 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
   const [distilling, setDistilling] = useState(false);
   const [distillError, setDistillError] = useState<string | null>(null);
+  const [sendingToVikunja, setSendingToVikunja] = useState<Set<string>>(new Set());
   const { getDefault } = useSettings();
   useEffect(() => {
     setLessons(null);
@@ -481,6 +482,24 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
       setLessons(prev => prev?.map(l => l.id === lid ? updated : l) ?? prev);
     } catch {
       fetchLessons(itemId).then(setLessons).catch(() => {});
+    }
+  };
+
+  const sendToVikunja = async (lid: string) => {
+    setSendingToVikunja(prev => new Set(prev).add(lid));
+    try {
+      const result = await sendLessonToVikunja(lid);
+      if (result.success && result.task_id) {
+        setLessons(prev => prev?.map(l => l.id === lid ? { ...l, vikunja_task_id: result.task_id } : l) ?? prev);
+      }
+    } catch (e) {
+      console.error('Failed to send to Vikunja:', e);
+    } finally {
+      setSendingToVikunja(prev => {
+        const next = new Set(prev);
+        next.delete(lid);
+        return next;
+      });
     }
   };
 
@@ -551,6 +570,16 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
                   l.rating === -1 ? 'bg-rose-500 text-white' : 'bg-brand-surface text-brand-ink/40 hover:text-rose-600 hover:bg-rose-50'
                 }`}
               ><X size={14} /></button>
+              <button
+                onClick={() => sendToVikunja(l.id)}
+                disabled={sendingToVikunja.has(l.id) || !!l.vikunja_task_id}
+                title={l.vikunja_task_id ? 'Verstuurd naar Vikunja' : 'Verstuur naar Vikunja inbox'}
+                className={`w-7 h-7 flex items-center justify-center rounded-full transition-all ${
+                  l.vikunja_task_id ? 'bg-blue-500 text-white cursor-default' : 'bg-brand-surface text-brand-ink/40 hover:text-blue-600 hover:bg-blue-50'
+                } ${sendingToVikunja.has(l.id) ? 'opacity-50' : ''}`}
+              >
+                {sendingToVikunja.has(l.id) ? <Loader2 size={14} className="animate-spin" /> : l.vikunja_task_id ? <Check size={14} /> : <InboxIcon size={14} />}
+              </button>
             </div>
             <div className={`flex-1 ${l.rating === -1 ? 'opacity-40' : ''}`}>
               <div className="font-serif font-semibold text-[17px] text-brand-ink mb-1">{l.title}</div>

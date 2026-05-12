@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stroom Player Prototype</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #faf9f6;
+            color: #1a1a1a;
+            line-height: 1.6;
+        }
+
+        /* Header */
+        .header {
+            background: #fff;
+            border-bottom: 1px solid #e5e5e5;
+            padding: 1rem 2rem;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .logo {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: #2563eb;
+        }
+
+        .nav {
+            margin-left: auto;
+            display: flex;
+            gap: 1.5rem;
+        }
+
+        .nav a {
+            color: #666;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }
+
+        .nav a:hover {
+            color: #2563eb;
+        }
+
+        /* Main content */
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .page-title {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            font-weight: 600;
+        }
+
+        .page-meta {
+            color: #666;
+            font-size: 0.9rem;
+            margin-bottom: 2rem;
+        }
+
+        .content {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .content h2 {
+            margin-bottom: 1rem;
+            font-size: 1.3rem;
+        }
+
+        .content p {
+            margin-bottom: 1rem;
+            color: #444;
+        }
+
+        /* Player in content */
+        .player-section {
+            background: #fff;
+            padding: 2rem;
+            border-radius: 12px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            margin-bottom: 2rem;
+        }
+
+        .player-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+        }
+
+        .audio-container {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        /* Inline Player Controls */
+        .inline-player {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 6px;
+            background: #e5e5e5;
+            border-radius: 3px;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: #2563eb;
+            border-radius: 3px;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        .time-display {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: #666;
+            font-family: monospace;
+        }
+
+        .controls {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+        }
+
+        .control-btn {
+            background: #fff;
+            border: 1px solid #e5e5e5;
+            border-radius: 50%;
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 1.2rem;
+        }
+
+        .control-btn:hover {
+            background: #f0f0f0;
+            border-color: #2563eb;
+        }
+
+        .control-btn.play {
+            width: 56px;
+            height: 56px;
+            background: #2563eb;
+            color: #fff;
+            border: none;
+        }
+
+        .control-btn.play:hover {
+            background: #1d4ed8;
+        }
+
+        .skip-btn {
+            font-size: 0.9rem;
+            width: 40px;
+            height: 40px;
+        }
+
+        .speed-btn {
+            background: #fff;
+            border: 1px solid #e5e5e5;
+            border-radius: 20px;
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            font-family: monospace;
+            font-weight: 600;
+            color: #2563eb;
+            min-width: 60px;
+            transition: all 0.2s;
+        }
+
+        .speed-btn:hover {
+            background: #eff6ff;
+            border-color: #2563eb;
+        }
+
+        .pin-btn {
+            background: #2563eb;
+            color: #fff;
+            border: none;
+            border-radius: 20px;
+            padding: 0.6rem 1.2rem;
+            cursor: pointer;
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            transition: background 0.2s;
+        }
+
+        .pin-btn:hover {
+            background: #1d4ed8;
+        }
+
+        .pin-btn.pinned {
+            background: #059669;
+        }
+
+        /* Sticky Player Bar */
+        .sticky-player {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: #fff;
+            border-top: 1px solid #e5e5e5;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.1);
+            padding: 0.75rem 1.5rem;
+            z-index: 1000;
+            transform: translateY(100%);
+            transition: transform 0.3s ease;
+        }
+
+        .sticky-player.active {
+            transform: translateY(0);
+        }
+
+        .sticky-player-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .sticky-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: #e5e5e5;
+            cursor: pointer;
+        }
+
+        .sticky-progress-fill {
+            height: 100%;
+            background: #2563eb;
+            width: 0%;
+            transition: width 0.1s linear;
+        }
+
+        .sticky-artwork {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 6px;
+            flex-shrink: 0;
+        }
+
+        .sticky-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .sticky-title {
+            font-weight: 600;
+            font-size: 0.95rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .sticky-source {
+            font-size: 0.8rem;
+            color: #666;
+        }
+
+        .sticky-controls {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .sticky-btn {
+            background: none;
+            border: none;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            transition: background 0.2s;
+        }
+
+        .sticky-btn:hover {
+            background: #f0f0f0;
+        }
+
+        .sticky-btn.play {
+            background: #2563eb;
+            color: #fff;
+        }
+
+        .sticky-btn.play:hover {
+            background: #1d4ed8;
+        }
+
+        .sticky-speed {
+            background: #f0f0f0;
+            border: none;
+            border-radius: 12px;
+            padding: 0.3rem 0.6rem;
+            cursor: pointer;
+            font-family: monospace;
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: #2563eb;
+        }
+
+        .sticky-close {
+            color: #666;
+        }
+
+        /* Demo content for scrolling */
+        .demo-content {
+            height: 200vh;
+            padding: 2rem;
+        }
+
+        .demo-text {
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 2;
+            color: #444;
+        }
+
+        .demo-text p {
+            margin-bottom: 1.5rem;
+        }
+
+        /* Notification */
+        .notification {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: #059669;
+            color: #fff;
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            transform: translateX(150%);
+            transition: transform 0.3s ease;
+            z-index: 1001;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">Stroom</div>
+            <nav class="nav">
+                <a href="#" onclick="showPage('home'); return false;">Home</a>
+                <a href="#" onclick="showPage('topic'); return false;">Topics</a>
+                <a href="#" onclick="showPage('item'); return false;">Podcast</a>
+                <a href="#" onclick="showPage('settings'); return false;">Settings</a>
+            </nav>
+        </div>
+    </header>
+
+    <div id="content-area">
+        <!-- HOME PAGE -->
+        <div id="page-home" class="page">
+            <div class="container">
+                <h1 class="page-title">Welcome to Stroom</h1>
+                <p class="page-meta">Navigate to the Podcast page to test the player features.</p>
+
+                <div class="content">
+                    <h2>Prototype Features</h2>
+                    <p><strong>1. Playback Speed Control:</strong> Click the speed button to cycle through 1.0× → 1.1× → 1.2× ... → 2.5× → 1.0×</p>
+                    <p><strong>2. Sticky Player:</strong> On the podcast page, click "Vastzetten aan speler" to pin the player. Then navigate to other pages—the player stays visible and continues playing!</p>
+                    <p><strong>3. Navigation Test:</strong> Use the nav links above to switch pages while the sticky player is active.</p>
+                </div>
+
+                <div class="content">
+                    <h2>Current State</h2>
+                    <p id="state-info">No active playback. Go to the Podcast page to start.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TOPIC PAGE -->
+        <div id="page-topic" class="page" style="display: none;">
+            <div class="container">
+                <h1 class="page-title">Health</h1>
+                <p class="page-meta">12 items • Last updated 2 hours ago</p>
+
+                <div class="content">
+                    <h2>Articles</h2>
+                    <p>• The Science of Sleep</p>
+                    <p>• Nutrition Myths Debunked</p>
+                    <p>• Exercise and Longevity</p>
+                </div>
+
+                <div class="content">
+                    <h2>Podcasts</h2>
+                    <p>• <a href="#" onclick="showPage('item'); return false;" style="color: #2563eb;">De essentie van Thaise curry</a> ← Click to test player</p>
+                    <p>• Understanding Metabolism</p>
+                    <p>• The Gut-Brain Connection</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- ITEM/PODCAST PAGE -->
+        <div id="page-item" class="page" style="display: none;">
+            <div class="container">
+                <h1 class="page-title">De essentie van Thaise curry</h1>
+                <p class="page-meta">Podcast • Wat Schaft de Podcast • 14 december 2024</p>
+
+                <div class="player-section">
+                    <div class="player-title">Luister naar deze aflevering</div>
+
+                    <div class="audio-container">
+                        <div class="inline-player" id="inline-player">
+                            <div class="progress-bar" onclick="seek(event, this)">
+                                <div class="progress-fill" id="progress-fill"></div>
+                            </div>
+
+                            <div class="time-display">
+                                <span id="current-time">0:00</span>
+                                <span id="duration">15:30</span>
+                            </div>
+
+                            <div class="controls">
+                                <button class="control-btn skip-btn" onclick="skip(-15)">⏮</button>
+                                <button class="control-btn play" id="play-btn" onclick="togglePlay()">▶</button>
+                                <button class="control-btn skip-btn" onclick="skip(30)">⏭</button>
+                                <button class="speed-btn" id="speed-btn" onclick="cycleSpeed()">1.0×</button>
+                            </div>
+
+                            <button class="pin-btn" id="pin-btn" onclick="pinPlayer()">
+                                📌 Vastzetten aan speler
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="content">
+                    <h2>Samenvatting</h2>
+                    <p>De vijzel is geen snobisme, maar chemie: Stampen in plaats van mixen voorkomt verhitting door wrijving en breekt celwanden beter open, wat resulteert in een gladde, aromatische pasta zonder vezelige restanten die de structuur verpesten.</p>
+
+                    <h2 style="margin-top: 2rem;">Transcript</h2>
+                    <p>[00:00] Welkom bij Wat Schaft de Podcast...</p>
+                    <p>[02:15] Vandaag gaan we dieper in op Thaise curry...</p>
+                    <p>[05:30] Het belangrijkste verschil zit in het gebruik van...</p>
+
+                    <!-- Extra content for scrolling -->
+                    <p style="margin-top: 2rem; color: #666;">(Scroll down to see the sticky player in action)</p>
+                    <div style="height: 100vh; display: flex; align-items: center; justify-content: center; color: #ccc;">
+                        ↓ Scroll to test sticky player ↓
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SETTINGS PAGE -->
+        <div id="page-settings" class="page" style="display: none;">
+            <div class="container">
+                <h1 class="page-title">Settings</h1>
+                <p class="page-meta">Configure your preferences</p>
+
+                <div class="content">
+                    <h2>Audio Preferences</h2>
+                    <p>Default playback speed: <strong>1.0×</strong></p>
+                    <p>Auto-play next episode: <strong>On</strong></p>
+                    <p>Skip silence: <strong>Off</strong></p>
+                </div>
+
+                <div class="content">
+                    <h2>About</h2>
+                    <p>Stroom v1.0.0</p>
+                    <p>This is a prototype demonstrating the sticky player feature.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- STICKY PLAYER BAR -->
+    <div class="sticky-player" id="sticky-player">
+        <div class="sticky-progress" onclick="seekSticky(event)">
+            <div class="sticky-progress-fill" id="sticky-progress-fill"></div>
+        </div>
+        <div class="sticky-player-content">
+            <div class="sticky-artwork"></div>
+            <div class="sticky-info">
+                <div class="sticky-title">De essentie van Thaise curry</div>
+                <div class="sticky-source">Wat Schaft de Podcast</div>
+            </div>
+            <div class="sticky-controls">
+                <button class="sticky-btn" onclick="skipSticky(-15)">⏮</button>
+                <button class="sticky-btn play" id="sticky-play-btn" onclick="toggleStickyPlay()">▶</button>
+                <button class="sticky-btn" onclick="skipSticky(30)">⏭</button>
+                <button class="sticky-speed" id="sticky-speed-btn" onclick="cycleStickySpeed()">1.0×</button>
+                <button class="sticky-btn sticky-close" onclick="closeSticky()">✕</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- NOTIFICATION -->
+    <div class="notification" id="notification">
+        Player vastgezet! Je kunt nu navigeren.
+    </div>
+
+    <!-- Simulated Audio Element (for demo purposes) -->
+    <audio id="demo-audio" preload="metadata">
+        <source src="https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" type="audio/mpeg">
+    </audio>
+
+    <script>
+        // Global state
+        let currentSpeed = 1.0;
+        let isPlaying = false;
+        let currentTime = 0;
+        let duration = 930; // 15:30 in seconds
+        let isPinned = false;
+        let progressInterval = null;
+
+        // Elements
+        const playBtn = document.getElementById('play-btn');
+        const speedBtn = document.getElementById('speed-btn');
+        const pinBtn = document.getElementById('pin-btn');
+        const progressFill = document.getElementById('progress-fill');
+        const currentTimeEl = document.getElementById('current-time');
+        const stickyPlayer = document.getElementById('sticky-player');
+        const stickyPlayBtn = document.getElementById('sticky-play-btn');
+        const stickySpeedBtn = document.getElementById('sticky-speed-btn');
+        const stickyProgressFill = document.getElementById('sticky-progress-fill');
+        const notification = document.getElementById('notification');
+
+        // Format time
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = Math.floor(seconds % 60);
+            return `${mins}:${secs.toString().padStart(2, '0')}`;
+        }
+
+        // Cycle speed (1.0 → 1.1 → 1.2 ... → 2.5 → 1.0)
+        function cycleSpeed() {
+            currentSpeed = currentSpeed >= 2.5 ? 1.0 : Math.round((currentSpeed + 0.1) * 10) / 10;
+            updateSpeedDisplay();
+        }
+
+        function cycleStickySpeed() {
+            cycleSpeed();
+        }
+
+        function updateSpeedDisplay() {
+            const display = currentSpeed.toFixed(1) + '×';
+            speedBtn.textContent = display;
+            stickySpeedBtn.textContent = display;
+        }
+
+        // Play/Pause
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            updatePlayButtons();
+            if (isPlaying) {
+                startProgress();
+            } else {
+                stopProgress();
+            }
+        }
+
+        function toggleStickyPlay() {
+            togglePlay();
+        }
+
+        function updatePlayButtons() {
+            const icon = isPlaying ? '⏸' : '▶';
+            playBtn.textContent = icon;
+            stickyPlayBtn.textContent = icon;
+        }
+
+        // Progress simulation
+        function startProgress() {
+            progressInterval = setInterval(() => {
+                currentTime += currentSpeed;
+                if (currentTime >= duration) {
+                    currentTime = 0;
+                    isPlaying = false;
+                    updatePlayButtons();
+                    stopProgress();
+                }
+                updateProgress();
+            }, 1000);
+        }
+
+        function stopProgress() {
+            clearInterval(progressInterval);
+        }
+
+        function updateProgress() {
+            const percent = (currentTime / duration) * 100;
+            progressFill.style.width = percent + '%';
+            stickyProgressFill.style.width = percent + '%';
+            currentTimeEl.textContent = formatTime(currentTime);
+        }
+
+        // Seek
+        function seek(event, element) {
+            const rect = element.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const percent = x / rect.width;
+            currentTime = percent * duration;
+            updateProgress();
+        }
+
+        function seekSticky(event) {
+            const rect = event.currentTarget.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const percent = x / rect.width;
+            currentTime = percent * duration;
+            updateProgress();
+        }
+
+        // Skip
+        function skip(seconds) {
+            currentTime = Math.max(0, Math.min(duration, currentTime + seconds));
+            updateProgress();
+        }
+
+        function skipSticky(seconds) {
+            skip(seconds);
+        }
+
+        // Pin player
+        function pinPlayer() {
+            isPinned = true;
+            pinBtn.textContent = '✓ Vastgezet aan speler';
+            pinBtn.classList.add('pinned');
+            stickyPlayer.classList.add('active');
+
+            // Show notification
+            notification.classList.add('show');
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 3000);
+
+            // Update state info on home page
+            document.getElementById('state-info').textContent =
+                `🎧 Playing: "De essentie van Thaise curry" at ${currentSpeed.toFixed(1)}× speed`;
+        }
+
+        // Close sticky player
+        function closeSticky() {
+            isPinned = false;
+            stickyPlayer.classList.remove('active');
+            isPlaying = false;
+            updatePlayButtons();
+            stopProgress();
+
+            // Reset inline player
+            pinBtn.textContent = '📌 Vastzetten aan speler';
+            pinBtn.classList.remove('pinned');
+
+            document.getElementById('state-info').textContent = 'No active playback.';
+        }
+
+        // Navigation
+        function showPage(pageId) {
+            // Hide all pages
+            document.querySelectorAll('.page').forEach(page => {
+                page.style.display = 'none';
+            });
+
+            // Show selected page
+            document.getElementById('page-' + pageId).style.display = 'block';
+
+            // Scroll to top
+            window.scrollTo(0, 0);
+
+            // Update state display
+            if (isPinned && pageId !== 'item') {
+                document.getElementById('state-info').textContent =
+                    `🎧 Continue playing: "De essentie van Thaise curry" (${formatTime(currentTime)} / ${formatTime(duration)})`;
+            }
+        }
+
+        // Initialize
+        updateProgress();
+    </script>
+</body>
+</html>

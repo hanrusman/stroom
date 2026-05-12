@@ -9,8 +9,13 @@ from sqlalchemy import text as sa_text
 from core.auth import require_user
 from core.db import async_session_maker, get_async_session
 from services.llm_service import LLMService
+from services.vikunja_service import VikunjaService
 
 router = APIRouter()
+
+
+def _vikunja(request: Request) -> VikunjaService:
+    return VikunjaService(request.app.state.http_client)
 
 
 # ---- Models ----
@@ -30,6 +35,7 @@ class LessonRead(BaseModel):
     expansion: Optional[str] = None
     expansion_model: Optional[str] = None
     expansion_generated_at: Optional[str] = None
+    vikunja_task_id: Optional[int] = None
 
 
 class LessonRating(BaseModel):
@@ -54,7 +60,8 @@ _DIGEST_MAX_LESSONS = 80
 _LESSON_SELECT = (
     "SELECT l.id::text, l.idx, l.title, l.body, l.rating, l.rated_at, "
     "       l.item_id::text, i.title, s.name, i.media_url, "
-    "       l.expansion, l.expansion_model, l.expansion_generated_at "
+    "       l.expansion, l.expansion_model, l.expansion_generated_at, "
+    "       l.vikunja_task_id "
     "FROM lessons l "
     "JOIN items i ON i.id = l.item_id "
     "JOIN sources s ON s.id = i.source_id"
@@ -62,6 +69,8 @@ _LESSON_SELECT = (
 
 
 def _lesson_row(r) -> LessonRead:
+    # Handle both old queries (13 cols) and new queries (14 cols with vikunja_task_id)
+    vikunja_task_id = r[13] if len(r) > 13 else None
     return LessonRead(
         id=r[0], idx=r[1], title=r[2], body=r[3],
         rating=r[4], rated_at=str(r[5]) if r[5] else None,
@@ -69,6 +78,7 @@ def _lesson_row(r) -> LessonRead:
         expansion=r[10],
         expansion_model=r[11],
         expansion_generated_at=str(r[12]) if r[12] else None,
+        vikunja_task_id=vikunja_task_id,
     )
 
 
@@ -122,6 +132,50 @@ async def rate_lesson(lesson_id: str, body: LessonRating, session=Depends(get_as
     if not row:
         raise HTTPException(status_code=404, detail="lesson not found")
     return _lesson_row(row)
+
+
+@router.post("/lessons/{lesson_id}/send-to-vikunja", response_model=dict)
+async def send_lesson_to_vikunja(
+    lesson_id: str,
+    request: Request,
+    session=Depends(get_async_session),
+    user=Depends(require_user)
+):
+    """Send a lesson to Vikunja inbox."""
+    # Get lesson details with item info
+    result = await session.exec(sa_text(
+        "SELECT l.id, l.title, l.body, l.vikunja_task_id, "
+        "       i.title as item_title, s.name as source_name, i.media_url, "
+        "       t.name as topic_name "
+        "FROM lessons l "
+        "JOIN items i ON i.id = l.item_id "
+        "JOIN sources s ON s.id = i.source_id "
+        "LEFT JOIN item_topics it ON it.item_id = i.id "
+        "LEFT JOIN topics t ON t.id = it.topic_id "
+        "WHERE l.id = CAST(:lid AS uuid) "
+        "LIMIT 1"
+    ).bindparams(lid=lesson_id))
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Lesson not found")
+
+    # Check if already sent
+    if row.vikunja_task_id:
+        return {"success": True, "task_id": row.vikunja_task_id, "already_sent": True}
+
+    # Send to Vikunja
+    task_id = await _vikunja(request).send_lesson_to_inbox(
+        session=session,
+        lesson_id=lesson_id,
+        title=row.title,
+        body=row.body,
+        source_name=row.source_name or "Onbekende bron",
+        item_title=row.item_title or "Onbekend item",
+        media_url=row.media_url,
+        topic_name=row.topic_name or "Stroom"
+    )
+
+    return {"success": True, "task_id": task_id, "already_sent": False}
 
 
 # ---- Distill more lessons ----
