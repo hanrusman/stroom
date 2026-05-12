@@ -52,9 +52,13 @@ const TopicChip = ({ topic, active, onClick }: {
   </button>
 );
 
+// Gedeelde score-color helper
+const scoreColorClass = (s: number | null | undefined) =>
+  !s ? '' : s >= 8 ? 'text-green-600' : s >= 6 ? 'text-amber-600' : 'text-rose-600';
+
 const Meta = ({ item }: { item: HuygensItem }) => {
   const score = item.quality_score;
-  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : '';
+  const scoreColor = scoreColorClass(score);
   return (
     <div className="text-brand-ink/40 mt-3 text-[10px] font-mono uppercase tracking-[0.18em] flex items-center gap-2">
       <span className="font-medium">{item.source_name}</span>
@@ -74,7 +78,7 @@ const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const scoreColor = score ? (score >= 8 ? 'text-green-600' : score >= 6 ? 'text-amber-600' : 'text-rose-600') : 'text-brand-ink/40';
+  const scoreColor = scoreColorClass(score) || 'text-brand-ink/40';
 
   const handleSelect = async (newScore: number | null) => {
     setBusy(true);
@@ -141,8 +145,8 @@ const IconBtn = ({ icon: Icon, title, active, busy, disabled, onClick }: {
   </button>
 );
 
-const CardActions = ({ item, onUpdate }: {
-  item: HuygensItem; onUpdate?: (updated: Partial<HuygensItem>) => void;
+const CardActions = ({ item, onUpdate, onArchive }: {
+  item: HuygensItem; onUpdate?: (updated: Partial<HuygensItem>) => void; onArchive?: () => void;
 }) => {
   const [busy, setBusy] = useState<CardAction | null>(null);
 
@@ -158,6 +162,10 @@ const CardActions = ({ item, onUpdate }: {
         has_transcript: !!(d.transcript && d.transcript.trim()),
         scheduled_for: d.scheduled_for,
       });
+      // If archiving, trigger onArchive callback to remove from list
+      if (key === 'archived' && d.status === 'archived') {
+        onArchive?.();
+      }
     } catch {
       // stil — gebruiker ziet dat de status niet flipt
     } finally {
@@ -198,9 +206,9 @@ const CardActions = ({ item, onUpdate }: {
   );
 };
 
-type CardProps = { item: HuygensItem; onOpen: (id: string) => void; onUpdate?: (u: Partial<HuygensItem>) => void };
+type CardProps = { item: HuygensItem; onOpen: (id: string) => void; onUpdate?: (u: Partial<HuygensItem>) => void; onArchive?: () => void };
 
-const ArticleCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps) => {
+const ArticleCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & CardProps) => {
   const summary = stripHtml(item.description);
   const img = item.thumbnail_url ?? item.source_image_url;
   return (
@@ -222,13 +230,13 @@ const ArticleCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps
         </h3>
         <p className="text-brand-ink/70 line-clamp-[5] text-[13px] leading-[1.55] flex-1">{summary}</p>
         <Meta item={item} />
-        <CardActions item={item} onUpdate={onUpdate} />
+        <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
       </div>
     </motion.article>
   );
 };
 
-const MediaCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format: 'podcast' | 'video' } & CardProps) => {
+const MediaCard = ({ item, format, onOpen, onUpdate, onArchive }: { key?: React.Key; format: 'podcast' | 'video' } & CardProps) => {
   const summary = stripHtml(item.description);
   const isVideo = format === 'video';
   const img = item.thumbnail_url ?? item.source_image_url;
@@ -256,7 +264,7 @@ const MediaCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format
             <Meta item={item} />
           </div>
         </div>
-        <CardActions item={item} onUpdate={onUpdate} />
+        <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
       </motion.article>
     );
   }
@@ -284,13 +292,13 @@ const MediaCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format
         </h3>
         <p className="text-brand-ink/65 line-clamp-2 text-[13px] leading-[1.45]">{summary}</p>
         <Meta item={item} />
-        <CardActions item={item} onUpdate={onUpdate} />
+        <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
       </div>
     </motion.article>
   );
 };
 
-const ShortCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps) => {
+const ShortCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & CardProps) => {
   const summary = stripHtml(item.description);
   return (
     <motion.article
@@ -303,22 +311,23 @@ const ShortCard = ({ item, onOpen, onUpdate }: { key?: React.Key } & CardProps) 
       <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5">
         {item.source_name}
       </div>
-      <CardActions item={item} onUpdate={onUpdate} />
+      <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
     </motion.article>
   );
 };
 
-const ItemCard = ({ item, format, onOpen, onUpdate }: { key?: React.Key; format: ItemFormat } & CardProps) => {
-  if (format === 'article') return <ArticleCard item={item} onOpen={onOpen} onUpdate={onUpdate} />;
-  if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} onUpdate={onUpdate} />;
-  return <MediaCard item={item} format={format} onOpen={onOpen} onUpdate={onUpdate} />;
+const ItemCard = ({ item, format, onOpen, onUpdate, onArchive }: { key?: React.Key; format: ItemFormat } & CardProps) => {
+  if (format === 'article') return <ArticleCard item={item} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
+  if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
+  return <MediaCard item={item} format={format} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
 };
 
-const Rail = ({ format, items, onOpen, onUpdate, onArchiveAll }: {
+const Rail = ({ format, items, onOpen, onUpdate, onArchiveAll, onArchiveItem }: {
   key?: React.Key; format: ItemFormat; items: HuygensItem[];
   onOpen: (id: string) => void;
   onUpdate?: (id: string, u: Partial<HuygensItem>) => void;
   onArchiveAll?: (format: ItemFormat) => Promise<void>;
+  onArchiveItem?: (id: string) => void;
 }) => {
   const meta = RAIL_META[format];
   const Icon = meta.icon;
@@ -348,7 +357,7 @@ const Rail = ({ format, items, onOpen, onUpdate, onArchiveAll }: {
       ) : (
         <div className="flex overflow-x-auto hide-scrollbar gap-8 pb-12 -mx-6 px-6 md:-mx-12 md:px-12 snap-x">
           {items.map(item => <ItemCard key={item.id} item={item} format={format} onOpen={onOpen}
-            onUpdate={u => onUpdate?.(item.id, u)} />)}
+            onUpdate={u => onUpdate?.(item.id, u)} onArchive={() => onArchiveItem?.(item.id)} />)}
           {onArchiveAll && (
             <button onClick={onArchive} disabled={archiving}
               className="snap-start shrink-0 w-[260px] rounded-3xl border border-dashed border-brand-ink/20 bg-brand-surface/40 hover:bg-brand-accent hover:text-brand-cream hover:border-brand-accent text-brand-ink/60 transition flex flex-col items-center justify-center gap-3 p-6 disabled:opacity-50 disabled:cursor-wait">
@@ -1492,7 +1501,11 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
               </div>
             )}
           </div>
-          <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={() => toggle('archived')} />
+          <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={async () => {
+            const wasArchived = item.status === 'archived';
+            await toggle('archived');
+            if (!wasArchived) onBack();
+          }} />
         </div>
       </div>
 
@@ -2433,6 +2446,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
                   onUpdate={(id, u) => setData(d => d ? {
                     ...d,
                     rails: d.rails.map(r => ({ ...r, items: r.items.map(it => it.id === id ? { ...it, ...u } : it) })),
+                  } : d)}
+                  onArchiveItem={(id) => setData(d => d ? {
+                    ...d,
+                    rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== id) })),
                   } : d)}
                   onArchiveAll={async (format) => {
                     const targetRail = data.rails.find(r => r.format === format);
