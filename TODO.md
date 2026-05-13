@@ -29,7 +29,8 @@ Nieuw logo geüpload naar: `web/public/logo.png`
 Acties:
 - [x] Logo geüpload naar VPS
 - [x] Update `web/index.html` favicon link
-- [ ] Update header logo in `web/src/App.tsx` (optioneel - kan later)
+- [x] Update header logo in `web/src/App.tsx`
+- [x] Update login logo in `web/src/App.tsx`
 - [ ] Test op verschillende devices (iOS, Android, desktop)
 
 **Opmerking:** Favicon conversie naar meerdere formaten kan later met:
