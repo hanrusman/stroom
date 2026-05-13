@@ -24,14 +24,21 @@ Deze applicatie vereist npm packages die geïnstalleerd moeten worden via de web
 
 ## Logo Update
 
-Nieuw logo beschikbaar op:
-`/Users/hanrusman/Downloads/stitch (3)/screen.png`
+Nieuw logo geüpload naar: `web/public/logo.png`
 
 Acties:
-- [ ] Logo converteren naar favicon formaten (16x16, 32x32, 180x180)
-- [ ] Update `web/index.html` favicon link
-- [ ] Update header logo in `web/src/App.tsx`
+- [x] Logo geüpload naar VPS
+- [x] Update `web/index.html` favicon link
+- [ ] Update header logo in `web/src/App.tsx` (optioneel - kan later)
 - [ ] Test op verschillende devices (iOS, Android, desktop)
+
+**Opmerking:** Favicon conversie naar meerdere formaten kan later met:
+```bash
+# Op Mac met sips:
+sips -z 16 16   logo.png --out favicon-16x16.png
+sips -z 32 32   logo.png --out favicon-32x32.png
+sips -z 180 180 logo.png --out apple-touch-icon.png
+```
 
 ## Post-Deploy Checks
 
