@@ -1781,53 +1781,53 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
   const ago = digest?.generated_at ? new Date(digest.generated_at).toLocaleString('nl-NL', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : null;
 
   return (
-    <section className="border border-brand-ink/10 rounded-3xl bg-brand-surface/40 p-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3">
-          <Newspaper size={20} className="text-brand-accent" />
+    <section className="border border-brand-ink/10 rounded-2xl md:rounded-3xl bg-brand-surface/40 p-4 md:p-6">
+      <div className="flex items-center justify-between gap-2 md:gap-4 flex-wrap">
+        <div className="flex items-center gap-2 md:gap-3">
+          <Newspaper size={18} className="text-brand-accent md:w-5 md:h-5" />
           <div>
-            <div className="font-mono text-[11px] uppercase tracking-[0.18em] text-brand-accent">{windowLabel} · {topicName}</div>
+            <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent">{windowLabel} · {topicName}</div>
             {digest?.is_generating && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
+              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
                 Bezig met genereren…
               </div>
             )}
             {digest && !digest.is_generating && digest.generated_at && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
+              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
                 {digest.item_count} items · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
               </div>
             )}
             {digest === null && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
+              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1 md:gap-2">
           {digest?.markdown && (
             <button onClick={() => setOpen(o => !o)}
-              className="flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+              className="flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
           <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
-            className="px-3 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
+            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
             {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
               <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
             ))}
           </select>
           <button onClick={regen} disabled={busy || !!digest?.is_generating}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[10px] uppercase tracking-[0.18em] transition-all ${
+            className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
               busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
                    : 'bg-brand-accent text-brand-cream hover:opacity-90'
             }`}>
-            {busy || digest?.is_generating ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+            {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
             {digest?.markdown ? 'Ververs' : 'Genereer'}
           </button>
         </div>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
       {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
-        <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
+        <div className="mt-3 font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
           {digest.error
             ? (digest.error.length > 120 ? digest.error.slice(0, 120) + '…' : digest.error)
             : 'Generatie liep, maar geen output. Probeer opnieuw.'}
@@ -2029,7 +2029,7 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
       {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
-        <div className="mt-3 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
+        <div className="mt-3 font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/45">
           {digest.error
             ? (digest.error.length > 120 ? digest.error.slice(0, 120) + '…' : digest.error)
             : 'Generatie liep, maar geen output. Probeer opnieuw.'}
@@ -2410,33 +2410,33 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       </div>
 
       <nav className="sticky top-0 z-40 bg-brand-cream/95 backdrop-blur-md w-full border-b border-brand-ink/10">
-        <div className="flex justify-between items-center px-6 md:px-12 py-6 w-full max-w-screen-2xl mx-auto">
+        <div className="flex justify-between items-center px-4 md:px-12 py-3 md:py-6 w-full max-w-screen-2xl mx-auto">
           <button onClick={goHome} title="Naar home"
-            className="text-3xl text-brand-ink flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-10 h-10 rounded-lg bg-brand-blue flex items-center justify-center text-brand-cream font-display italic font-semibold text-xl">S</div>
-            <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom <span className="text-brand-ink/40 not-italic font-mono text-base align-middle ml-2 tracking-[0.15em] uppercase">Huygens</span></span>
+            className="text-2xl md:text-3xl text-brand-ink flex items-center gap-2 md:gap-3 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 md:w-10 md:h-10 rounded-lg bg-brand-blue flex items-center justify-center text-brand-cream font-display italic font-semibold text-lg md:text-xl">S</div>
+            <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom</span>
           </button>
-          <div className="flex gap-6 items-center text-brand-ink/40">
-            <button className="hover:text-brand-accent transition-colors"><Search size={20} strokeWidth={2.5} /></button>
+          <div className="flex gap-3 md:gap-6 items-center text-brand-ink/40">
+            <button className="hover:text-brand-accent transition-colors p-1 md:p-0"><Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" /></button>
             <button onClick={openLessons} title="Alle lessen"
-                    className="hover:text-brand-accent transition-colors">
-              <BookOpen size={20} strokeWidth={2.5} />
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <BookOpen size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
             <button onClick={() => setInboxOpen(true)} title="Inbox — Content insturen"
-                    className="hover:text-brand-accent transition-colors">
-              <InboxIcon size={20} strokeWidth={2.5} />
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <InboxIcon size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
             <button onClick={toggleDark} title={dark ? 'Lichtmodus' : 'Donkermodus'}
-                    className="hover:text-brand-accent transition-colors">
-              {dark ? <Sun size={20} strokeWidth={2.5} /> : <Moon size={20} strokeWidth={2.5} />}
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              {dark ? <Sun size={18} strokeWidth={2.5} className="md:w-5 md:h-5" /> : <Moon size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />}
             </button>
             <button onClick={openAdmin} title="Sources beheren"
-                    className="hover:text-brand-accent transition-colors">
-              <Settings size={20} strokeWidth={2.5} />
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <Settings size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
             <button onClick={onLogout} title={`Uitloggen (${user.email})`}
-                    className="hover:text-brand-accent transition-colors flex items-center gap-2 text-[12px] font-mono uppercase tracking-[0.15em]">
-              <UserIcon size={20} strokeWidth={2.5} />
+                    className="hover:text-brand-accent transition-colors flex items-center gap-2 text-[12px] font-mono uppercase tracking-[0.15em] p-1 md:p-0">
+              <UserIcon size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
               <span className="hidden md:inline">Uitloggen</span>
             </button>
           </div>
