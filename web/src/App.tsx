@@ -2413,7 +2413,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         <div className="flex justify-between items-center px-4 md:px-12 py-3 md:py-6 w-full max-w-screen-2xl mx-auto">
           <button onClick={goHome} title="Naar home"
             className="text-2xl md:text-3xl text-brand-ink flex items-center gap-2 md:gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-8 h-8 md:w-10 md:h-10 rounded-lg bg-brand-blue flex items-center justify-center text-brand-cream font-display italic font-semibold text-lg md:text-xl">S</div>
+            <img src="/logo.png" alt="Stroom" className="w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover" />
             <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom</span>
           </button>
           <div className="flex gap-3 md:gap-6 items-center text-brand-ink/40">
