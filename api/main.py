@@ -161,6 +161,8 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/digest-topics",
 )
 INTERNAL_TOKEN = os.environ.get("STROOM_INTERNAL_TOKEN", "")
+if not INTERNAL_TOKEN:
+    print("[SECURITY WARNING] STROOM_INTERNAL_TOKEN not set - internal endpoints will only work with session auth")
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -184,9 +186,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # OR fall through to session-cookie auth (admin user kicking the cron from UI).
         if any(path.endswith(s) for s in _INTERNAL_TOKEN_PATH_SUFFIXES):
             tok = request.headers.get("x-stroom-internal-token", "")
-            if INTERNAL_TOKEN and tok and tok == INTERNAL_TOKEN:
-                return await call_next(request)
-            # geen (geldige) token → laat block 4 het proberen via session cookie
+            if INTERNAL_TOKEN and tok:
+                if tok == INTERNAL_TOKEN:
+                    return await call_next(request)
+                # Invalid token - log for security monitoring
+                print(f"[SECURITY] Invalid internal token attempt from {request.client.host} to {path}", flush=True)
+                return JSONResponse({"detail": "Unauthorized"}, status_code=403)
+            # No token provided → fall through to session-cookie auth
 
         # 4. Everything else needs a session cookie
         token = request.cookies.get(SESSION_COOKIE)
@@ -359,8 +365,10 @@ async def search_items(q: str = Query(..., min_length=2),
     """Postgres FTS over title+summary+transcript+description.
     `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'."""
     fmt_filter = ""
+    params: dict = {"q": q, "lim": limit}
     if format in ("article", "podcast", "video"):
-        fmt_filter = f"AND i.format = '{format}'::item_format"
+        fmt_filter = "AND i.format = :fmt::item_format"
+        params["fmt"] = format
 
     r = await session.exec(sa_text(
         f"""
@@ -379,7 +387,7 @@ async def search_items(q: str = Query(..., min_length=2),
         ORDER BY rank DESC, i.published_at DESC NULLS LAST
         LIMIT :lim
         """
-    ).bindparams(q=q, lim=limit))
+    ).bindparams(**params))
     rows = r.all()
     return [SearchHit(
         id=row[0], title=row[1], format=row[2], source_name=row[3],
