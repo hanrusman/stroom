@@ -1987,8 +1987,8 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
   return (
     <section className="border border-brand-ink/10 rounded-2xl md:rounded-3xl bg-brand-surface/40 p-4 md:p-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4">
-        <div className="flex items-center gap-3">
-          <BookOpen size={18} className="text-brand-accent shrink-0" />
+        <div className="flex items-center gap-2 md:gap-3 min-w-0">
+          <BookOpen size={18} className="text-brand-accent shrink-0 md:w-5 md:h-5" />
           <div className="min-w-0">
             <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent truncate">{windowLabel} · {LESSON_FILTER_LABELS[filter as LessonFilter]}</div>
             {digest?.is_generating && (
@@ -2004,25 +2004,25 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
             )}
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex items-center gap-1 md:gap-2 flex-wrap">
           {digest?.markdown && (
             <button onClick={() => setOpen(o => !o)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono text-[9px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+              className="flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
           <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
-            className="px-2.5 py-1.5 rounded-full font-mono text-[9px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
+            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
             {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
               <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
             ))}
           </select>
           <button onClick={regen} disabled={busy || !!digest?.is_generating}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full font-mono text-[9px] uppercase tracking-[0.18em] transition-all ${
+            className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
               busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
                    : 'bg-brand-accent text-brand-cream hover:opacity-90'
             }`}>
-            {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+            {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
             {digest?.markdown ? 'Ververs' : 'Genereer'}
           </button>
         </div>
