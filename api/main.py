@@ -1249,6 +1249,8 @@ async def remove_item_topic(item_id: str, topic_slug: str,
 
 class QualityScoreUpdate(BaseModel):
     quality_score: Optional[int] = None  # 1-10 or null for neutral
+    reason: Optional[str] = None  # ScoreChangeReason value
+    note: Optional[str] = None  # Optional free text note
 
 
 @app.patch("/huygens/items/{item_id}/quality-score", response_model=HuygensItemDetail)
@@ -1262,7 +1264,19 @@ async def update_item_quality_score(
 
     Allows users to correct the auto-generated quality score.
     Set to null to remove the score (neutral).
+
+    Reasons:
+    - auto: Automatisch door systeem (niet handmatig)
+    - wrong_topic: Verkeerd onderwerp
+    - too_many_ads: Te veel reclame
+    - low_quality: Lage technische kwaliteit
+    - high_quality: Hoge kwaliteit, moet hoger
+    - personal_interest: Persoonlijke interesse
+    - not_interesting: Niet interessant
+    - other: Anders
     """
+    from models.base import ScoreChangeReason
+
     # Verify item exists
     item = await _fetch_item_row(session, item_id)
     if not item:
@@ -1273,10 +1287,33 @@ async def update_item_quality_score(
         if not (1 <= update.quality_score <= 10):
             raise HTTPException(status_code=400, detail="Quality score must be between 1 and 10")
 
-    # Update the score
-    await session.exec(sa_text(
-        "UPDATE items SET quality_score = :score WHERE id = CAST(:id AS uuid)"
-    ).bindparams(score=update.quality_score, id=item_id))
+    # Validate reason if provided
+    reason_value = None
+    if update.reason:
+        try:
+            reason_enum = ScoreChangeReason(update.reason)
+            reason_value = reason_enum.value
+        except ValueError:
+            valid_reasons = [r.value for r in ScoreChangeReason]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid reason. Valid options: {', '.join(valid_reasons)}"
+            )
+
+    # Update the score with timestamp and reason
+    await session.exec(sa_text("""
+        UPDATE items
+        SET quality_score = :score,
+            quality_score_updated_at = NOW(),
+            quality_score_reason = :reason,
+            quality_score_note = :note
+        WHERE id = CAST(:id AS uuid)
+    """).bindparams(
+        score=update.quality_score,
+        id=item_id,
+        reason=reason_value,
+        note=update.note
+    ))
     await session.commit()
 
     return await huygens_item(item_id, session)
@@ -1573,7 +1610,8 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             await bg.exec(sa_text(
                 "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
                 "summary_generated_at=now(), processing_status='ready'::processing_status, "
-                "quality_score=:q, queued_at=NULL WHERE id = CAST(:i AS uuid)"
+                "quality_score=:q, quality_score_reason='auto', quality_score_updated_at=now(), "
+                "queued_at=NULL WHERE id = CAST(:i AS uuid)"
             ).bindparams(s=summary, i=item_id, q=quality_score))
             await bg.commit()
 
@@ -2448,7 +2486,9 @@ async def admin_quality_backfill(
     for item_id, score in scores_by_id.items():
         await session.exec(sa_text("""
             UPDATE items
-            SET quality_score = :score
+            SET quality_score = :score,
+                quality_score_reason = 'auto',
+                quality_score_updated_at = NOW()
             WHERE id = CAST(:id AS uuid)
         """).bindparams(score=score, id=item_id))
         updated_count += 1
