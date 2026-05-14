@@ -136,11 +136,19 @@ export const transcribeItem = (id: string) => postAction(id, 'transcribe');
 export const scheduleItem   = (id: string, scheduled_for: string | null) =>
   postAction(id, 'schedule', { scheduled_for });
 
-export async function updateItemQualityScore(id: string, quality_score: number | null): Promise<ItemDetail> {
+export type ScoreChangeReason = 'auto' | 'wrong_topic' | 'too_many_ads' | 'low_quality' | 'high_quality' | 'personal_interest' | 'not_interesting' | 'other';
+
+export interface QualityScoreUpdate {
+  quality_score: number | null;
+  reason?: ScoreChangeReason;
+  note?: string;
+}
+
+export async function updateItemQualityScore(id: string, update: QualityScoreUpdate): Promise<ItemDetail> {
   const r = await apiFetch(`/api/huygens/items/${id}/quality-score`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ quality_score }),
+    body: JSON.stringify(update),
   });
   return r.json();
 }

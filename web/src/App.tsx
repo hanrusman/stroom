@@ -16,7 +16,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
-         LessonsDigest, LessonsDigestFilter } from './api';
+         LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -77,43 +77,109 @@ const Meta = ({ item }: { item: HuygensItem }) => {
 const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [newScore, setNewScore] = useState<number | null>(score);
+  const [reason, setReason] = useState<string>('personal_interest');
+  const [note, setNote] = useState<string>('');
 
   const scoreColor = scoreColorClass(score) || 'text-brand-ink/40';
 
-  const handleSelect = async (newScore: number | null) => {
+  const reasonLabels: Record<string, string> = {
+    'wrong_topic': 'Verkeerd onderwerp',
+    'too_many_ads': 'Te veel reclame',
+    'low_quality': 'Lage kwaliteit',
+    'high_quality': 'Hoge kwaliteit (moet hoger)',
+    'personal_interest': 'Persoonlijke interesse',
+    'not_interesting': 'Niet interessant',
+    'other': 'Anders',
+  };
+
+  const handleSave = async () => {
     setBusy(true);
     try {
-      const updated = await updateItemQualityScore(itemId, newScore);
+      const updated = await updateItemQualityScore(itemId, {
+        quality_score: newScore,
+        reason: reason as any,
+        note: note || undefined,
+      });
       onUpdate(updated.quality_score);
+      setIsEditing(false);
     } catch (e) {
       console.error('Failed to update quality score:', e);
     } finally {
       setBusy(false);
-      setIsEditing(false);
     }
+  };
+
+  const handleCancel = () => {
+    setIsEditing(false);
+    setNewScore(score);
+    setNote('');
   };
 
   if (isEditing) {
     return (
-      <span className="relative inline-flex items-center gap-1">
-        <select
-          autoFocus
-          disabled={busy}
-          onChange={(e) => {
-            const val = e.target.value;
-            handleSelect(val === '' ? null : parseInt(val, 10));
-          }}
-          onBlur={() => setIsEditing(false)}
-          className="font-mono text-[10px] uppercase tracking-[0.2em] bg-brand-surface border border-brand-ink/20 rounded px-1 py-0.5 w-16"
-          defaultValue={score ?? ''}
-        >
-          <option value="">—</option>
-          {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
-            <option key={n} value={n}>{n}/10</option>
-          ))}
-        </select>
-        {busy && <Loader2 size={12} className="animate-spin" />}
-      </span>
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+          <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Score (1-10)</label>
+              <select
+                value={newScore ?? ''}
+                onChange={(e) => setNewScore(e.target.value === '' ? null : parseInt(e.target.value, 10))}
+                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink"
+              >
+                <option value="">— Geen score —</option>
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                  <option key={n} value={n}>{n}/10</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Reden</label>
+              <select
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink"
+              >
+                {Object.entries(reasonLabels).map(([key, label]) => (
+                  <option key={key} value={key}>{label}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Waarom deze score?"
+                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink text-sm"
+                rows={3}
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-3 mt-6">
+            <button
+              onClick={handleCancel}
+              disabled={busy}
+              className="flex-1 px-4 py-2 border border-brand-ink/20 rounded text-brand-ink hover:bg-brand-surface transition-colors"
+            >
+              Annuleren
+            </button>
+            <button
+              onClick={handleSave}
+              disabled={busy || newScore === null}
+              className="flex-1 px-4 py-2 bg-brand-accent text-white rounded hover:opacity-90 transition-colors disabled:opacity-50"
+            >
+              {busy ? 'Opslaan...' : 'Opslaan'}
+            </button>
+          </div>
+        </div>
+      </div>
     );
   }
 
