@@ -2535,3 +2535,177 @@ async def admin_quality_status(
         "avg_score": round(rows[0][2], 2) if rows and rows[0][2] else None,
         "distribution": distribution
     }
+
+
+# --- Quality Scorer Admin Proxy ---
+
+from pydantic import BaseModel
+
+class QualityScorerTopic(BaseModel):
+    name: str
+    keywords: list[str]
+
+class QualityScorerPerson(BaseModel):
+    name: str
+    keywords: list[str]
+
+@app.get("/admin/quality-scorer/topics")
+async def admin_quality_scorer_topics(
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Get all quality scorer topics."""
+    try:
+        r = await request.app.state.http_client.get(
+            f"{QUALITY_SCORER_URL}/admin/topics"
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.get("/admin/quality-scorer/persons")
+async def admin_quality_scorer_persons(
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Get all quality scorer persons."""
+    try:
+        r = await request.app.state.http_client.get(
+            f"{QUALITY_SCORER_URL}/admin/persons"
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.post("/admin/quality-scorer/topics")
+async def admin_quality_scorer_topics_create(
+    topic: QualityScorerTopic,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Create a new topic."""
+    try:
+        r = await request.app.state.http_client.post(
+            f"{QUALITY_SCORER_URL}/admin/topics",
+            json={"name": topic.name, "keywords": topic.keywords}
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.put("/admin/quality-scorer/topics/{topic_name}")
+async def admin_quality_scorer_topics_update(
+    topic_name: str,
+    update: dict,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Update a topic."""
+    try:
+        r = await request.app.state.http_client.put(
+            f"{QUALITY_SCORER_URL}/admin/topics/{topic_name}",
+            json=update
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.delete("/admin/quality-scorer/topics/{topic_name}")
+async def admin_quality_scorer_topics_delete(
+    topic_name: str,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Delete a topic."""
+    try:
+        r = await request.app.state.http_client.delete(
+            f"{QUALITY_SCORER_URL}/admin/topics/{topic_name}"
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.post("/admin/quality-scorer/persons")
+async def admin_quality_scorer_persons_create(
+    person: QualityScorerPerson,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Create a new person."""
+    try:
+        r = await request.app.state.http_client.post(
+            f"{QUALITY_SCORER_URL}/admin/persons",
+            json={"name": person.name, "keywords": person.keywords}
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.put("/admin/quality-scorer/persons/{person_name}")
+async def admin_quality_scorer_persons_update(
+    person_name: str,
+    update: dict,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Update a person."""
+    try:
+        r = await request.app.state.http_client.put(
+            f"{QUALITY_SCORER_URL}/admin/persons/{person_name}",
+            json=update
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.delete("/admin/quality-scorer/persons/{person_name}")
+async def admin_quality_scorer_persons_delete(
+    person_name: str,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Delete a person."""
+    try:
+        r = await request.app.state.http_client.delete(
+            f"{QUALITY_SCORER_URL}/admin/persons/{person_name}"
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+@app.post("/admin/quality-scorer/reload")
+async def admin_quality_scorer_reload(
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Reload quality scorer config."""
+    try:
+        r = await request.app.state.http_client.post(
+            f"{QUALITY_SCORER_URL}/topics/reload"
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+
+
+class ExtractKeywordsRequest(BaseModel):
+    text: str
+    title: Optional[str] = None
+    max_keywords: int = 20
+
+
+@app.post("/admin/quality-scorer/extract-keywords")
+async def admin_quality_scorer_extract_keywords(
+    req: ExtractKeywordsRequest,
+    request: Request,
+    user=Depends(require_user)
+):
+    """Proxy: Extract keywords from text for interest learning."""
+    try:
+        r = await request.app.state.http_client.post(
+            f"{QUALITY_SCORER_URL}/extract-keywords",
+            json={"text": req.text, "title": req.title, "max_keywords": req.max_keywords}
+        )
+        return r.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")

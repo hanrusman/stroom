@@ -651,6 +651,27 @@ export async function reloadQualityScorerConfig(): Promise<{ status: string; top
   return r.json();
 }
 
+export interface ExtractedKeyword {
+  term: string;
+  score: number;
+  type: 'bigram' | 'unigram';
+}
+
+export interface ExtractKeywordsResponse {
+  keywords: ExtractedKeyword[];
+  persons_mentioned: string[];
+  topics_matched: string[];
+}
+
+export async function extractKeywords(text: string, title?: string): Promise<ExtractKeywordsResponse> {
+  const r = await apiFetch('/api/admin/quality-scorer/extract-keywords', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.slice(0, 5000), title, max_keywords: 15 }),
+  });
+  return r.json();
+}
+
 // --- Inbox ---
 
 export interface InboxSubmitRequest {

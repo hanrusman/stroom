@@ -7,6 +7,7 @@ import { AdminPage } from './AdminPage';
 import { SettingsProvider, useSettings } from './settings';
 import { GlobalAudioProvider, useGlobalAudio } from './GlobalAudioContext';
 import StickyPlayer from './StickyPlayer';
+import { InterestLearner } from './InterestLearner';
 import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, transcribeItem,
          scheduleItem, fetchLessons, rateLesson, fetchAllLessons, fetchFilteredItems,
          fetchTopicDigest, regenerateTopicDigest, fetchTopicDigestHistory, TopicDigestRun,
@@ -74,12 +75,13 @@ const Meta = ({ item }: { item: HuygensItem }) => {
   );
 };
 
-const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void }) => {
+const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void; title?: string; summary?: string }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [newScore, setNewScore] = useState<number | null>(score);
   const [reason, setReason] = useState<string>('personal_interest');
   const [note, setNote] = useState<string>('');
+  const [showInterestLearner, setShowInterestLearner] = useState(false);
 
   const scoreColor = scoreColorClass(score) || 'text-brand-ink/40';
 
@@ -150,6 +152,21 @@ const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score
               </select>
             </div>
 
+            {reason === 'personal_interest' && title && (
+              <div className="bg-amber-50 border border-amber-200 rounded p-3">
+                <p className="text-sm text-amber-800 mb-2">
+                  Ontdek waarom dit item interessant is voor jou
+                </p>
+                <button
+                  onClick={() => setShowInterestLearner(true)}
+                  className="text-sm px-3 py-1.5 bg-amber-500 text-white rounded hover:bg-amber-600 transition-colors flex items-center gap-1"
+                >
+                  <span>Ontdek interesses</span>
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                </button>
+              </div>
+            )}
+
             <div>
               <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
               <textarea
@@ -179,6 +196,15 @@ const QualityScoreEditor = ({ itemId, score, onUpdate }: { itemId: string; score
             </button>
           </div>
         </div>
+
+        {showInterestLearner && title && (
+          <InterestLearner
+            itemId={itemId}
+            title={title}
+            summary={summary}
+            onClose={() => setShowInterestLearner(false)}
+          />
+        )}
       </div>
     );
   }
@@ -1661,6 +1687,8 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
                   itemId={item.id}
                   score={item.quality_score}
                   onUpdate={(newScore) => setItem(prev => prev ? { ...prev, quality_score: newScore } : prev)}
+                  title={item.title}
+                  summary={item.summary}
                 /></>
               </div>
             </div>
