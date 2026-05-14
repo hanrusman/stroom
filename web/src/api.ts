@@ -572,6 +572,85 @@ export async function removeItemTopic(itemId: string, topicSlug: string): Promis
   return r.json();
 }
 
+// --- Quality Scorer Admin ---
+
+export interface QualityScorerTopic {
+  name: string;
+  keywords: string[];
+}
+
+export interface QualityScorerPerson {
+  name: string;
+  keywords: string[];
+}
+
+export async function fetchQualityScorerTopics(): Promise<{ topics: Record<string, string[]>; count: number }> {
+  const r = await apiFetch('/api/admin/quality-scorer/topics');
+  return r.json();
+}
+
+export async function fetchQualityScorerPersons(): Promise<{ persons: Record<string, string[]>; count: number }> {
+  const r = await apiFetch('/api/admin/quality-scorer/persons');
+  return r.json();
+}
+
+export async function createQualityScorerTopic(topic: QualityScorerTopic): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch('/api/admin/quality-scorer/topics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(topic),
+  });
+  return r.json();
+}
+
+export async function updateQualityScorerTopic(name: string, keywords: string[]): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/topics/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords }),
+  });
+  return r.json();
+}
+
+export async function deleteQualityScorerTopic(name: string): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/topics/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return r.json();
+}
+
+export async function createQualityScorerPerson(person: QualityScorerPerson): Promise<{ status: string; person: string }> {
+  const r = await apiFetch('/api/admin/quality-scorer/persons', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(person),
+  });
+  return r.json();
+}
+
+export async function updateQualityScorerPerson(name: string, keywords: string[]): Promise<{ status: string; person: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/persons/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords }),
+  });
+  return r.json();
+}
+
+export async function deleteQualityScorerPerson(name: string): Promise<{ status: string; person: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/persons/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return r.json();
+}
+
+export async function reloadQualityScorerConfig(): Promise<{ status: string; topics: string[]; persons: string[] }> {
+  const r = await apiFetch('/api/admin/quality-scorer/reload', {
+    method: 'POST',
+  });
+  return r.json();
+}
+
 // --- Inbox ---
 
 export interface InboxSubmitRequest {

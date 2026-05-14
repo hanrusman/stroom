@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered, ChevronUp, ChevronDown, Mic, PlayCircle, Sparkles, BookOpen, Archive } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Check, X, Trash2, Loader2, RefreshCw, ListOrdered, ChevronUp, ChevronDown, Mic, PlayCircle, Sparkles, BookOpen, Archive, Star, Users } from 'lucide-react';
 import {
   AdminSource, AdminSourceUpdate, AdminSourceCreate, SourceKind,
   fetchAdminSources, updateAdminSource, createAdminSource, deleteAdminSource,
@@ -9,6 +9,10 @@ import {
   CronResult, cronTranscribePodcasts, cronTranscribeVideos, cronSummarizeArticles, cronDigestTopics,
   removeFromQueue, restartQueue, fetchDigestStatus, DigestStatus,
   bulkArchive, BulkArchiveResponse, AdminStats, fetchAdminStats,
+  fetchQualityScorerTopics, fetchQualityScorerPersons,
+  createQualityScorerTopic, updateQualityScorerTopic, deleteQualityScorerTopic,
+  createQualityScorerPerson, updateQualityScorerPerson, deleteQualityScorerPerson,
+  reloadQualityScorerConfig, QualityScorerTopic, QualityScorerPerson,
 } from './api';
 import { useSettings } from './settings';
 
@@ -1241,6 +1245,8 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
 
       <TopicsPanel />
 
+      <QualityScorerAdmin />
+
       <BulkArchivePanel topics={topics} />
 
       <div className="mb-6">
@@ -1299,6 +1305,290 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
         </>
       )}
     </div>
+  );
+};
+// --- Quality Scorer Admin Component ---
+
+const QualityScorerAdmin = () => {
+  const [activeTab, setActiveTab] = useState<'topics' | 'persons'>('topics');
+  const [topics, setTopics] = useState<Record<string, string[]>>({});
+  const [persons, setPersons] = useState<Record<string, string[]>>({});
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editKeywords, setEditKeywords] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newKeywords, setNewKeywords] = useState('');
+  const [showAdd, setShowAdd] = useState(false);
+
+  const loadData = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [t, p] = await Promise.all([
+        fetchQualityScorerTopics(),
+        fetchQualityScorerPersons()
+      ]);
+      setTopics(t.topics);
+      setPersons(p.persons);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadData(); }, []);
+
+  const handleReload = async () => {
+    setLoading(true);
+    try {
+      await reloadQualityScorerConfig();
+      await loadData();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startEdit = (name: string, keywords: string[]) => {
+    setEditing(name);
+    setEditKeywords(keywords.join(', '));
+  };
+
+  const saveEdit = async () => {
+    if (!editing) return;
+    const keywords = editKeywords.split(',').map(k => k.trim()).filter(Boolean);
+    try {
+      if (activeTab === 'topics') {
+        await updateQualityScorerTopic(editing, keywords);
+      } else {
+        await updateQualityScorerPerson(editing, keywords);
+      }
+      setEditing(null);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!confirm(`Weet je zeker dat je '${name}' wilt verwijderen?`)) return;
+    try {
+      if (activeTab === 'topics') {
+        await deleteQualityScorerTopic(name);
+      } else {
+        await deleteQualityScorerPerson(name);
+      }
+      await loadData();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    }
+  };
+
+  const handleCreate = async () => {
+    if (!newName.trim()) return;
+    const keywords = newKeywords.split(',').map(k => k.trim()).filter(Boolean);
+    try {
+      if (activeTab === 'topics') {
+        await createQualityScorerTopic({ name: newName.trim(), keywords });
+      } else {
+        await createQualityScorerPerson({ name: newName.trim(), keywords });
+      }
+      setNewName('');
+      setNewKeywords('');
+      setShowAdd(false);
+      await loadData();
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    }
+  };
+
+  const data = activeTab === 'topics' ? topics : persons;
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">
+            Interesse Configuratie
+          </h2>
+          <p className="text-[13px] text-brand-ink/60">
+            Beheer onderwerpen en personen voor het kwaliteitsscore algoritme.
+          </p>
+        </div>
+        <button
+          onClick={handleReload}
+          disabled={loading}
+          className="px-4 py-2 rounded-xl bg-brand-surface border border-brand-ink/10 text-brand-ink text-sm flex items-center gap-2 hover:bg-brand-surface-low disabled:opacity-50 transition"
+        >
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Herlaad
+        </button>
+      </div>
+
+      {/* Tabs */}
+      <div className="flex gap-2 mb-6 border-b border-brand-ink/10">
+        <button
+          onClick={() => { setActiveTab('topics'); setEditing(null); setShowAdd(false); }}
+          className={`px-4 py-2 text-sm font-medium flex items-center gap-2 transition ${
+            activeTab === 'topics'
+              ? 'text-brand-accent border-b-2 border-brand-accent'
+              : 'text-brand-ink/60 hover:text-brand-ink'
+          }`}
+        >
+          <Star size={16} />
+          Onderwerpen ({Object.keys(topics).length})
+        </button>
+        <button
+          onClick={() => { setActiveTab('persons'); setEditing(null); setShowAdd(false); }}
+          className={`px-4 py-2 text-sm font-medium flex items-center gap-2 transition ${
+            activeTab === 'persons'
+              ? 'text-brand-accent border-b-2 border-brand-accent'
+              : 'text-brand-ink/60 hover:text-brand-ink'
+          }`}
+        >
+          <Users size={16} />
+          Personen ({Object.keys(persons).length})
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-4 p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Add new */}
+      {!showAdd ? (
+        <button
+          onClick={() => setShowAdd(true)}
+          className="mb-4 px-4 py-2 rounded-xl bg-brand-accent text-brand-cream text-sm flex items-center gap-2 hover:opacity-90 transition"
+        >
+          <Plus size={14} />
+          {activeTab === 'topics' ? 'Nieuw onderwerp' : 'Nieuwe persoon'}
+        </button>
+      ) : (
+        <div className="mb-4 p-4 rounded-xl bg-brand-surface border border-brand-ink/10">
+          <h4 className="font-medium text-brand-ink mb-3">
+            {activeTab === 'topics' ? 'Nieuw onderwerp toevoegen' : 'Nieuwe persoon toevoegen'}
+          </h4>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+            <input
+              type="text"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder={activeTab === 'topics' ? 'Bijv: fintech' : 'Bijv: sam altman'}
+              className="px-3 py-2 rounded-lg bg-white border border-brand-ink/10 text-sm text-brand-ink"
+            />
+            <input
+              type="text"
+              value={newKeywords}
+              onChange={(e) => setNewKeywords(e.target.value)}
+              placeholder="Keywords, gescheiden door komma"
+              className="px-3 py-2 rounded-lg bg-white border border-brand-ink/10 text-sm text-brand-ink"
+            />
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCreate}
+              disabled={!newName.trim()}
+              className="px-3 py-1.5 rounded-lg bg-brand-accent text-brand-cream text-sm disabled:opacity-50"
+            >
+              Toevoegen
+            </button>
+            <button
+              onClick={() => { setShowAdd(false); setNewName(''); setNewKeywords(''); }}
+              className="px-3 py-1.5 rounded-lg bg-brand-surface text-brand-ink text-sm border border-brand-ink/10"
+            >
+              Annuleren
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* List */}
+      <div className="space-y-2">
+        {Object.entries(data).map(([name, keywords]) => (
+          <div
+            key={name}
+            className="flex items-start gap-3 p-3 rounded-xl bg-brand-surface border border-brand-ink/5 hover:border-brand-ink/10 transition"
+          >
+            {editing === name ? (
+              <div className="flex-1 grid grid-cols-1 gap-2">
+                <div className="font-medium text-brand-ink">{name}</div>
+                <input
+                  type="text"
+                  value={editKeywords}
+                  onChange={(e) => setEditKeywords(e.target.value)}
+                  className="px-3 py-2 rounded-lg bg-white border border-brand-ink/10 text-sm text-brand-ink"
+                  placeholder="Keywords, gescheiden door komma"
+                />
+                <div className="flex gap-2">
+                  <button
+                    onClick={saveEdit}
+                    className="px-3 py-1.5 rounded-lg bg-brand-accent text-brand-cream text-sm flex items-center gap-1"
+                  >
+                    <Check size={12} />
+                    Opslaan
+                  </button>
+                  <button
+                    onClick={() => setEditing(null)}
+                    className="px-3 py-1.5 rounded-lg bg-brand-surface text-brand-ink text-sm border border-brand-ink/10"
+                  >
+                    Annuleren
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex-1">
+                  <div className="font-medium text-brand-ink mb-1">{name}</div>
+                  <div className="flex flex-wrap gap-1">
+                    {keywords.slice(0, 8).map((k) => (
+                      <span
+                        key={k}
+                        className="px-2 py-0.5 rounded-full bg-brand-surface-low text-brand-ink/70 text-[11px]"
+                      >
+                        {k}
+                      </span>
+                    ))}
+                    {keywords.length > 8 && (
+                      <span className="px-2 py-0.5 rounded-full bg-brand-surface-low text-brand-ink/50 text-[11px]">
+                        +{keywords.length - 8}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => startEdit(name, keywords)}
+                    className="p-1.5 rounded-lg hover:bg-brand-surface-low text-brand-ink/60 hover:text-brand-ink transition"
+                    title="Bewerken"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(name)}
+                    className="p-1.5 rounded-lg hover:bg-rose-50 text-brand-ink/60 hover:text-rose-600 transition"
+                    title="Verwijderen"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      {Object.keys(data).length === 0 && !loading && (
+        <div className="text-center py-8 text-brand-ink/50 text-sm">
+          Geen {activeTab === 'topics' ? 'onderwerpen' : 'personen'} gevonden.
+        </div>
+      )}
+    </section>
   );
 };
 
