@@ -514,6 +514,29 @@ export async function deleteTopic(slug: string, reassignTo: string): Promise<voi
   });
 }
 
+export interface AdminStats {
+  total_items: number;
+  total_sources: number;
+  status_breakdown: Record<string, number>;
+  type_breakdown: Record<string, number>;
+  type_breakdown_24h: Record<string, number>;
+  queue: {
+    summarize_queued: number;
+    summarizing: number;
+    transcribe_queued: number;
+    transcribing: number;
+  };
+  recent_items: {
+    hours_24: number;
+    days_7: number;
+  };
+}
+
+export async function fetchAdminStats(): Promise<AdminStats> {
+  const r = await apiFetch('/api/admin/stats');
+  return r.json();
+}
+
 export async function updateSettings(s: AppSettings): Promise<AppSettings> {
   const r = await apiFetch('/api/admin/settings', {
     method: 'PUT',

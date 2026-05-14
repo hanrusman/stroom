@@ -8,7 +8,7 @@ import {
   AdminTopic, fetchAdminTopics, updateTopicOrder, deleteTopic,
   CronResult, cronTranscribePodcasts, cronTranscribeVideos, cronSummarizeArticles, cronDigestTopics,
   removeFromQueue, restartQueue, fetchDigestStatus, DigestStatus,
-  bulkArchive, BulkArchiveResponse,
+  bulkArchive, BulkArchiveResponse, AdminStats, fetchAdminStats,
 } from './api';
 import { useSettings } from './settings';
 
@@ -907,6 +907,151 @@ const BulkArchivePanel = ({ topics }: { topics: Topic[] }) => {
   );
 };
 
+const StatsPanel = () => {
+  const [stats, setStats] = useState<AdminStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = async (showLoading = true) => {
+    if (showLoading) setRefreshing(true);
+    try {
+      const data = await fetchAdminStats();
+      setStats(data);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const interval = setInterval(() => load(false), 60 * 60 * 1000); // 1 hour
+    return () => clearInterval(interval);
+  }, []);
+
+  if (loading) return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-5">Statistieken</h2>
+      <div className="text-brand-ink/50 italic">Laden...</div>
+    </section>
+  );
+
+  if (error) return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-5">Statistieken</h2>
+      <div className="text-rose-600 text-sm">{error}</div>
+    </section>
+  );
+
+  if (!stats) return null;
+
+  const queueTotal = stats.queue.summarize_queued + stats.queue.transcribe_queued +
+                     stats.queue.summarizing + stats.queue.transcribing;
+
+  const has24hData = Object.keys(stats.type_breakdown_24h).length > 0;
+
+  return (
+    <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em]">Statistieken</h2>
+        <button
+          onClick={() => load(true)}
+          disabled={refreshing}
+          className="px-3 py-1.5 rounded-xl bg-brand-surface hover:bg-brand-surface-low text-brand-ink text-sm flex items-center gap-2 transition disabled:opacity-50"
+        >
+          {refreshing ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={14} />}
+          Ververs
+        </button>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+        {/* Total items */}
+        <div className="bg-brand-surface rounded-xl p-4">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">Totaal items</div>
+          <div className="text-2xl font-display text-brand-ink">{stats.total_items.toLocaleString()}</div>
+        </div>
+
+        {/* Total sources */}
+        <div className="bg-brand-surface rounded-xl p-4">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">Sources</div>
+          <div className="text-2xl font-display text-brand-ink">{stats.total_sources.toLocaleString()}</div>
+        </div>
+
+        {/* Queue status */}
+        <div className="bg-brand-surface rounded-xl p-4">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">In queue</div>
+          <div className="text-2xl font-display text-brand-ink">{queueTotal.toLocaleString()}</div>
+          <div className="text-[10px] text-brand-ink/50 mt-1 font-mono leading-tight">
+            {stats.queue.summarize_queued + stats.queue.summarizing} sum · {stats.queue.transcribe_queued + stats.queue.transcribing} trans
+          </div>
+        </div>
+
+        {/* Recent items */}
+        <div className="bg-brand-surface rounded-xl p-4">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono">Nieuw (24u / 7d)</div>
+          <div className="text-2xl font-display text-brand-ink">
+            {stats.recent_items.hours_24.toLocaleString()}
+            <span className="text-brand-ink/40 text-lg ml-1">/ {stats.recent_items.days_7.toLocaleString()}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Type breakdown - Total */}
+      <div className="mb-5">
+        <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono mb-3">Per type (totaal)</div>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(stats.type_breakdown).map(([type, count]) => (
+            <span key={type} className="px-3 py-1.5 rounded-full text-xs font-mono bg-brand-surface text-brand-ink/70">
+              <span className="capitalize">{type}</span>: {count.toLocaleString()}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      {/* Type breakdown - 24h */}
+      {has24hData && (
+        <div className="mb-5">
+          <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono mb-3">Per type (laatste 24u)</div>
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(stats.type_breakdown_24h).map(([type, count]) => (
+              <span key={type} className="px-3 py-1.5 rounded-full text-xs font-mono bg-brand-surface text-brand-ink/70">
+                <span className="capitalize">{type}</span>: {count.toLocaleString()}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Status breakdown */}
+      <div>
+        <div className="text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 font-mono mb-3">Status verdeling</div>
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(stats.status_breakdown).map(([status, count]) => (
+            <span key={status}
+              className={`px-3 py-1.5 rounded-full text-xs font-mono ${
+                status === 'ready' ? 'bg-emerald-50 text-emerald-700' :
+                status === 'failed' ? 'bg-rose-50 text-rose-700' :
+                status.includes('queued') ? 'bg-amber-50 text-amber-700' :
+                status.includes('ing') ? 'bg-blue-50 text-blue-700' :
+                'bg-brand-surface-low text-brand-ink/70'
+              }`}>
+              {status}: {count.toLocaleString()}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 text-[11px] text-brand-ink/40 font-mono">
+        Auto-refresh elke uur
+      </div>
+    </section>
+  );
+};
+
 const QueuePanel = ({ onClose }: { onClose: () => void }) => {
   const [items, setItems] = useState<QueueItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1090,6 +1235,8 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
 
       <ModelDefaultsPanel />
 
+      <StatsPanel />
+
       <CronPanel />
 
       <TopicsPanel />
@@ -1154,3 +1301,4 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
     </div>
   );
 };
+

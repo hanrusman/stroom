@@ -156,9 +156,9 @@ const StickyPlayer: React.FC = () => {
         />
       </div>
 
-      <div className="max-w-screen-2xl mx-auto px-4 md:px-6 py-3 flex items-center gap-4">
+      <div className="max-w-screen-2xl mx-auto px-2 md:px-6 py-2 md:py-3 flex items-center gap-2 md:gap-4">
         {/* Artwork */}
-        <div className="w-12 h-12 rounded-lg bg-gradient-to-br from-brand-blue/30 to-brand-accent/30 flex-shrink-0 flex items-center justify-center">
+        <div className="w-9 h-9 md:w-12 md:h-12 rounded-lg bg-gradient-to-br from-brand-blue/30 to-brand-accent/30 flex-shrink-0 flex items-center justify-center">
           {currentTrack.thumbnailUrl ? (
             <img
               src={currentTrack.thumbnailUrl}
@@ -166,25 +166,25 @@ const StickyPlayer: React.FC = () => {
               className="w-full h-full object-cover rounded-lg"
             />
           ) : (
-            <span className="text-xl">🎧</span>
+            <span className="text-lg md:text-xl">🎧</span>
           )}
         </div>
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <div className="font-medium text-sm text-brand-ink truncate">
+          <div className="font-medium text-xs md:text-sm text-brand-ink truncate">
             {currentTrack.title}
           </div>
-          <div className="text-xs text-brand-ink/60">
+          <div className="text-[10px] md:text-xs text-brand-ink/60">
             {currentTrack.sourceName} • {formatTime(currentTime)} / {formatTime(duration)}
           </div>
         </div>
 
         {/* Controls */}
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-0.5 md:gap-1">
           <button
             onClick={() => skip(-15)}
-            className="h-9 px-2 rounded-full bg-brand-surface hover:bg-brand-surface-low flex flex-col items-center justify-center text-brand-ink/70 leading-none"
+            className="h-9 px-1.5 md:px-2 rounded-full bg-brand-surface hover:bg-brand-surface-low flex flex-col items-center justify-center text-brand-ink/70 leading-none"
             title="-15s"
           >
             <span className="text-[10px] font-bold">-15s</span>
@@ -200,7 +200,7 @@ const StickyPlayer: React.FC = () => {
 
           <button
             onClick={() => skip(30)}
-            className="h-9 px-2 rounded-full bg-brand-surface hover:bg-brand-surface-low flex flex-col items-center justify-center text-brand-ink/70 leading-none"
+            className="h-9 px-1.5 md:px-2 rounded-full bg-brand-surface hover:bg-brand-surface-low flex flex-col items-center justify-center text-brand-ink/70 leading-none"
             title="+30s"
           >
             <span className="text-[10px] font-bold">+30s</span>
@@ -218,7 +218,7 @@ const StickyPlayer: React.FC = () => {
             }}
             onTouchStart={handleRateTouchStart}
             onTouchEnd={(e) => { e.preventDefault(); handleRateTouchEnd(e); }}
-            className="w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-xs font-semibold text-brand-accent select-none"
+            className="w-10 md:w-12 h-9 rounded-full bg-brand-surface hover:bg-brand-surface-low font-mono text-[11px] md:text-xs font-semibold text-brand-accent select-none"
             title="Klik voor omhoog, Alt+klik/lang-press voor omlaag"
           >
             {playbackRate.toFixed(1)}×
@@ -226,7 +226,7 @@ const StickyPlayer: React.FC = () => {
 
           <button
             onClick={close}
-            className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/50 ml-2"
+            className="w-9 h-9 rounded-full hover:bg-brand-ink/5 flex items-center justify-center text-brand-ink/50 ml-1 md:ml-2"
             title="Sluiten"
           >
             <X size={18} />

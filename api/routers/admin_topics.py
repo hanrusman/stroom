@@ -1,4 +1,5 @@
-from typing import List
+from typing import List, Dict
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -24,6 +25,21 @@ class TopicOrderUpdate(BaseModel):
 
 class TopicDeleteBody(BaseModel):
     reassign_to: str
+
+
+class TimeSeriesStats(BaseModel):
+    hours_24: int
+    days_7: int
+
+
+class AdminStats(BaseModel):
+    total_items: int
+    total_sources: int
+    status_breakdown: Dict[str, int]
+    type_breakdown: Dict[str, int]
+    type_breakdown_24h: Dict[str, int]
+    queue: Dict[str, int]
+    recent_items: TimeSeriesStats
 
 
 @router.get("/admin/topics", response_model=List[AdminTopic])
@@ -86,3 +102,80 @@ async def delete_topic(slug: str, body: TopicDeleteBody,
     await session.execute(sa_text("DELETE FROM topics WHERE id = :src"), {"src": src_id})
     await session.commit()
     return {"ok": True, "deleted": slug, "reassigned_to": body.reassign_to}
+
+
+@router.get("/admin/stats", response_model=AdminStats)
+async def get_admin_stats(session=Depends(get_async_session), user=Depends(require_user)):
+    """Get system statistics for admin dashboard with time-based breakdowns."""
+
+    # Totals
+    total_items = (await session.execute(sa_text("SELECT COUNT(*) FROM items"))).scalar()
+    total_sources = (await session.execute(sa_text("SELECT COUNT(*) FROM sources"))).scalar()
+
+    # Status breakdown
+    status_rows = await session.execute(sa_text("""
+        SELECT processing_status::text, COUNT(*)
+        FROM items
+        GROUP BY processing_status
+    """))
+    status_breakdown = {row[0]: row[1] for row in status_rows}
+
+    # Type breakdown
+    type_rows = await session.execute(sa_text("""
+        SELECT type::text, COUNT(*)
+        FROM items
+        GROUP BY type
+    """))
+    type_breakdown = {row[0]: row[1] for row in type_rows}
+
+    # Type breakdown (last 24 hours)
+    type_24h_rows = await session.execute(sa_text("""
+        SELECT type::text, COUNT(*)
+        FROM items
+        WHERE created_at > NOW() - INTERVAL '24 hours'
+        GROUP BY type
+    """))
+    type_breakdown_24h = {row[0]: row[1] for row in type_24h_rows}
+
+    # Queue depth
+    queue_rows = await session.execute(sa_text("""
+        SELECT
+            COUNT(*) FILTER (WHERE processing_status = 'summarize_queued'),
+            COUNT(*) FILTER (WHERE processing_status = 'summarizing'),
+            COUNT(*) FILTER (WHERE processing_status = 'transcribe_queued'),
+            COUNT(*) FILTER (WHERE processing_status = 'transcribing')
+        FROM items
+    """))
+    summarize_queued, summarizing, transcribe_queued, transcribing = queue_rows.first()
+
+    # Recent items (24 hours)
+    recent_24h = (await session.execute(sa_text("""
+        SELECT COUNT(*)
+        FROM items
+        WHERE created_at > NOW() - INTERVAL '24 hours'
+    """))).scalar()
+
+    # Recent items (7 days)
+    recent_7d = (await session.execute(sa_text("""
+        SELECT COUNT(*)
+        FROM items
+        WHERE created_at > NOW() - INTERVAL '7 days'
+    """))).scalar()
+
+    return AdminStats(
+        total_items=total_items,
+        total_sources=total_sources,
+        status_breakdown=status_breakdown,
+        type_breakdown=type_breakdown,
+        type_breakdown_24h=type_breakdown_24h,
+        queue={
+            "summarize_queued": summarize_queued,
+            "summarizing": summarizing,
+            "transcribe_queued": transcribe_queued,
+            "transcribing": transcribing
+        },
+        recent_items=TimeSeriesStats(
+            hours_24=recent_24h,
+            days_7=recent_7d
+        )
+    )
