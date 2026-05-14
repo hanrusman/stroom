@@ -52,6 +52,10 @@ TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 2000))
 SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 500))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
+# --- Quality Scorer Configuration ---
+QUALITY_SCORER_URL = os.environ.get('QUALITY_SCORER_URL', 'http://quality-scorer:8080')
+QUALITY_SCORER_TIMEOUT = float(os.environ.get('QUALITY_SCORER_TIMEOUT', '5.0'))
+
 
 def _available_host_mem_mb() -> int:
     """MemAvailable uit /proc/meminfo, in MB. 0 bij leesfout (gate uit).
@@ -91,6 +95,61 @@ def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
               f"need {min_mb}MB — wachten", flush=True)
         _LAST_MEM_GATE_LOG[worker_name] = now
     return True
+
+
+async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, title: Optional[str] = None) -> Optional[int]:
+    """Score text using quality-scorer service. Returns hybrid 1-10 score or None on failure.
+
+    Uses the /score/interest endpoint to get both quality and interest scores,
+    returning the hybrid weighted score (60% interest + 40% quality).
+    Fail open: if service is down or errors, return None so item can proceed.
+    """
+    try:
+        r = await http_client.post(
+            f"{QUALITY_SCORER_URL}/score/interest",
+            json={"items": [{"id": "single", "text": text[:8000], "title": title}]},
+            timeout=QUALITY_SCORER_TIMEOUT,
+        )
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            if results:
+                return results[0].get("hybrid_score")
+            return None
+        else:
+            print(f"[quality-scorer] non-200 response: {r.status_code}")
+            return None
+    except httpx.TimeoutException:
+        print(f"[quality-scorer] timeout calling service")
+        return None
+    except Exception as e:
+        print(f"[quality-scorer] error: {e}")
+        return None
+
+
+async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items: List[dict]) -> dict[str, int]:
+    """Score multiple items using quality-scorer interest batch endpoint.
+
+    Returns dict of item_id -> hybrid_score. Failed items are omitted.
+    Uses the /score/interest endpoint to get both quality and interest scores.
+    """
+    if not items:
+        return {}
+
+    try:
+        r = await http_client.post(
+            f"{QUALITY_SCORER_URL}/score/interest",
+            json={"items": items},
+            timeout=QUALITY_SCORER_TIMEOUT * 5,  # More time for batch
+        )
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            return {r["id"]: r["hybrid_score"] for r in results}
+        else:
+            print(f"[quality-scorer] batch non-200 response: {r.status_code}")
+            return {}
+    except Exception as e:
+        print(f"[quality-scorer] batch error: {e}")
+        return {}
 
 
 @asynccontextmanager
@@ -923,7 +982,7 @@ async def _summarize_worker(idx: int, async_session_maker) -> None:
             if not item_id:
                 await asyncio.sleep(WORKER_IDLE_POLL_SEC)
                 continue
-            await _summarize_single_item(item_id, llm, async_session_maker)
+            await _summarize_single_item(item_id, llm, async_session_maker, app.state.http_client)
         except asyncio.CancelledError:
             print(f"[sum-worker-{idx}] shutting down", flush=True)
             return
@@ -1459,11 +1518,15 @@ from pipeline.articles import (
 _INBOX_SOURCE_NAME = "Inbox (handmatig)"
 
 
-async def _summarize_single_item(item_id: str, llm_service, async_session_maker) -> bool:
+async def _summarize_single_item(item_id: str, llm_service, async_session_maker, http_client=None) -> bool:
     """Summarize a single item (article/podcast/video with transcript).
 
     Voor items uit de Inbox-bron wordt na summarize ook lesson-distill
     gedraaid (binnen dezelfde worker — telt mee voor concurrency-budget).
+
+    Args:
+        http_client: Optional httpx.AsyncClient for quality-scorer calls.
+                    If not provided, quality scoring is skipped.
     """
     try:
         async with async_session_maker() as bg:
@@ -1492,25 +1555,19 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker)
             {"role": "system", "content": (
                 "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
                 "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
-                "Beoordeel ook de kwaliteit (1-10) op:\n"
-                "- Nieuwswaarde: is dit echt nieuw of oud nieuws?\n"
-                "- Diepgang: gaat het verder dan het oppervlakte?\n"
-                "- Originaliteit: uniek perspectief of standaard bericht?\n\n"
-                "Output strikt als JSON: {\"summary\": \"...\", \"quality_score\": 7}"
+                "Lever alleen de samenvatting, geen extra uitleg of JSON."
             )},
             {"role": "user", "content": f"Titel: {title}\n\nTekst: {cleaned}"},
-        ], temperature=0.3, response_format="json_object")
+        ], temperature=0.3)
 
-        import json as _json
-        try:
-            data = _json.loads(response)
-            summary = data.get("summary", "").strip()
-            quality_score = data.get("quality_score")
-            if quality_score is not None:
-                quality_score = max(1, min(10, int(quality_score)))
-        except Exception:
-            summary = response.strip() if response else ""
-            quality_score = None
+        summary = response.strip() if response else ""
+
+        # Get quality score from dedicated service (fail open)
+        quality_score = None
+        if http_client and summary:
+            quality_score = await _score_with_quality_scorer(http_client, summary, title)
+            if quality_score:
+                print(f"[sum-worker] scored {item_id}: {quality_score}/10")
 
         async with async_session_maker() as bg:
             await bg.exec(sa_text(
@@ -2310,3 +2367,131 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
         name=topic.name,
         rails=[HuygensRail(format=ItemFormat(f), items=items) for f, items in rails.items()],
     )
+
+
+# --- Admin: Quality Score Backfill ---
+
+
+class QualityBackfillRequest(BaseModel):
+    limit: int = 100
+    only_null: bool = True
+
+
+class QualityBackfillResponse(BaseModel):
+    processed: int
+    updated: int
+    avg_score: Optional[float] = None
+    error: Optional[str] = None
+
+
+@app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
+async def admin_quality_backfill(
+    request: Request,
+    body: QualityBackfillRequest,
+    background_tasks: BackgroundTasks,
+    session=Depends(get_async_session),
+    user=Depends(require_user)
+):
+    """Batch score items using quality-scorer service.
+
+    If only_null=True (default), only processes items without a quality score.
+    Otherwise processes items with summary but no/any quality score.
+
+    This runs as a background task to avoid timeout issues.
+    """
+    # Get items to process
+    where_clause = "quality_score IS NULL" if body.only_null else "1=1"
+    r = await session.exec(sa_text(f"""
+        SELECT i.id::text, i.title, i.summary, i.transcript, i.description
+        FROM items i
+        WHERE {where_clause}
+        AND (i.summary IS NOT NULL OR i.transcript IS NOT NULL)
+        AND i.summary <> ''
+        LIMIT {body.limit}
+    """))
+    items = r.all()
+
+    if not items:
+        return QualityBackfillResponse(processed=0, updated=0)
+
+    # Prepare items for batch scoring
+    items_for_scoring = []
+    for row in items:
+        item_id, title, summary, transcript, description = row
+        text = summary or transcript or description or ""
+        if text:
+            items_for_scoring.append({
+                "id": item_id,
+                "text": text[:8000],
+                "title": title
+            })
+
+    if not items_for_scoring:
+        return QualityBackfillResponse(processed=len(items), updated=0)
+
+    # Call quality-scorer batch endpoint
+    scores_by_id = await _score_batch_with_quality_scorer(
+        request.app.state.http_client,
+        items_for_scoring
+    )
+
+    if not scores_by_id:
+        return QualityBackfillResponse(
+            processed=len(items),
+            updated=0,
+            error="Quality scorer returned no results"
+        )
+
+    # Update items with scores
+    updated_count = 0
+    total_score = 0
+    for item_id, score in scores_by_id.items():
+        await session.exec(sa_text("""
+            UPDATE items
+            SET quality_score = :score
+            WHERE id = CAST(:id AS uuid)
+        """).bindparams(score=score, id=item_id))
+        updated_count += 1
+        total_score += score
+
+    await session.commit()
+
+    avg_score = total_score / updated_count if updated_count > 0 else None
+
+    return QualityBackfillResponse(
+        processed=len(items),
+        updated=updated_count,
+        avg_score=avg_score
+    )
+
+
+@app.get("/admin/quality-status")
+async def admin_quality_status(
+    session=Depends(get_async_session),
+    user=Depends(require_user)
+):
+    """Get quality score statistics."""
+    r = await session.exec(sa_text("""
+        SELECT
+            COUNT(*) FILTER (WHERE quality_score IS NOT NULL) as has_score,
+            COUNT(*) FILTER (WHERE quality_score IS NULL) as no_score,
+            AVG(quality_score) as avg_score,
+            quality_score as score,
+            COUNT(*) as count
+        FROM items
+        GROUP BY quality_score
+        ORDER BY quality_score
+    """))
+    rows = r.all()
+
+    distribution = {}
+    for row in rows:
+        if row[3] is not None:
+            distribution[row[3]] = row[4]
+
+    return {
+        "has_score": sum(r[0] for r in rows) if rows else 0,
+        "no_score": sum(r[1] for r in rows) if rows else 0,
+        "avg_score": round(rows[0][2], 2) if rows and rows[0][2] else None,
+        "distribution": distribution
+    }
