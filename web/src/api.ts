@@ -136,11 +136,19 @@ export const transcribeItem = (id: string) => postAction(id, 'transcribe');
 export const scheduleItem   = (id: string, scheduled_for: string | null) =>
   postAction(id, 'schedule', { scheduled_for });
 
-export async function updateItemQualityScore(id: string, quality_score: number | null): Promise<ItemDetail> {
+export type ScoreChangeReason = 'auto' | 'wrong_topic' | 'too_many_ads' | 'low_quality' | 'high_quality' | 'personal_interest' | 'not_interesting' | 'other';
+
+export interface QualityScoreUpdate {
+  quality_score: number | null;
+  reason?: ScoreChangeReason;
+  note?: string;
+}
+
+export async function updateItemQualityScore(id: string, update: QualityScoreUpdate): Promise<ItemDetail> {
   const r = await apiFetch(`/api/huygens/items/${id}/quality-score`, {
     method: 'PATCH',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ quality_score }),
+    body: JSON.stringify(update),
   });
   return r.json();
 }
@@ -560,6 +568,106 @@ export async function addItemToTopic(itemId: string, topicSlug: string): Promise
 export async function removeItemTopic(itemId: string, topicSlug: string): Promise<ItemDetail> {
   const r = await apiFetch(`/api/huygens/items/${itemId}/topics/${topicSlug}`, {
     method: 'DELETE',
+  });
+  return r.json();
+}
+
+// --- Quality Scorer Admin ---
+
+export interface QualityScorerTopic {
+  name: string;
+  keywords: string[];
+}
+
+export interface QualityScorerPerson {
+  name: string;
+  keywords: string[];
+}
+
+export async function fetchQualityScorerTopics(): Promise<{ topics: Record<string, string[]>; count: number }> {
+  const r = await apiFetch('/api/admin/quality-scorer/topics');
+  return r.json();
+}
+
+export async function fetchQualityScorerPersons(): Promise<{ persons: Record<string, string[]>; count: number }> {
+  const r = await apiFetch('/api/admin/quality-scorer/persons');
+  return r.json();
+}
+
+export async function createQualityScorerTopic(topic: QualityScorerTopic): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch('/api/admin/quality-scorer/topics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(topic),
+  });
+  return r.json();
+}
+
+export async function updateQualityScorerTopic(name: string, keywords: string[]): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/topics/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords }),
+  });
+  return r.json();
+}
+
+export async function deleteQualityScorerTopic(name: string): Promise<{ status: string; topic: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/topics/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return r.json();
+}
+
+export async function createQualityScorerPerson(person: QualityScorerPerson): Promise<{ status: string; person: string }> {
+  const r = await apiFetch('/api/admin/quality-scorer/persons', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(person),
+  });
+  return r.json();
+}
+
+export async function updateQualityScorerPerson(name: string, keywords: string[]): Promise<{ status: string; person: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/persons/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ keywords }),
+  });
+  return r.json();
+}
+
+export async function deleteQualityScorerPerson(name: string): Promise<{ status: string; person: string }> {
+  const r = await apiFetch(`/api/admin/quality-scorer/persons/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  return r.json();
+}
+
+export async function reloadQualityScorerConfig(): Promise<{ status: string; topics: string[]; persons: string[] }> {
+  const r = await apiFetch('/api/admin/quality-scorer/reload', {
+    method: 'POST',
+  });
+  return r.json();
+}
+
+export interface ExtractedKeyword {
+  term: string;
+  score: number;
+  type: 'bigram' | 'unigram';
+}
+
+export interface ExtractKeywordsResponse {
+  keywords: ExtractedKeyword[];
+  persons_mentioned: string[];
+  topics_matched: string[];
+}
+
+export async function extractKeywords(text: string, title?: string): Promise<ExtractKeywordsResponse> {
+  const r = await apiFetch('/api/admin/quality-scorer/extract-keywords', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text: text.slice(0, 5000), title, max_keywords: 15 }),
   });
   return r.json();
 }

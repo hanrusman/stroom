@@ -60,6 +60,17 @@ class FeedEventType(str, Enum):
     VIEWED = "viewed"
 
 
+class ScoreChangeReason(str, Enum):
+    AUTO = "auto"                          # Automatisch door systeem
+    WRONG_TOPIC = "wrong_topic"            # Verkeerd onderwerp
+    TOO_MANY_ADS = "too_many_ads"          # Te veel reclame
+    LOW_QUALITY = "low_quality"            # Lage technische kwaliteit
+    HIGH_QUALITY = "high_quality"          # Hoge kwaliteit, moet hoger
+    PERSONAL_INTEREST = "personal_interest"  # Persoonlijke interesse
+    NOT_INTERESTING = "not_interesting"    # Niet interessant
+    OTHER = "other"                        # Anders
+
+
 class ItemFormat(str, Enum):
     ARTICLE = "article"
     PODCAST = "podcast"
@@ -124,6 +135,11 @@ class Item(SQLModel, table=True):
     processing_error: Optional[str] = None
     status: ItemStatus = Field(default=ItemStatus.NEW)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Quality score tracking
+    quality_score_updated_at: Optional[datetime] = None
+    quality_score_reason: Optional[ScoreChangeReason] = None
+    quality_score_note: Optional[str] = None
 
     source: Source = Relationship(back_populates="items")
     insights: List["Insight"] = Relationship(back_populates="item")
