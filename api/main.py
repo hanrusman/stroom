@@ -31,6 +31,7 @@ from routers import settings as settings_router
 from routers import admin_topics as admin_topics_router
 from routers import ask as ask_router
 from routers import inbox as inbox_router
+from routers import transcripts as transcripts_router
 
 
 # --- Queue tunables ---
@@ -219,6 +220,11 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/summarize-articles",
     "/admin/cron/digest-topics",
 )
+# Paden die altijd via internal-token auth gaan (geen session-fallback).
+# samenvat-lab praat hier machine-to-machine met Stroom.
+_INTERNAL_TOKEN_PATH_PREFIXES = (
+    "/transcripts",
+)
 INTERNAL_TOKEN = os.environ.get("STROOM_INTERNAL_TOKEN", "")
 if not INTERNAL_TOKEN:
     print("[SECURITY WARNING] STROOM_INTERNAL_TOKEN not set - internal endpoints will only work with session auth")
@@ -253,6 +259,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": "Unauthorized"}, status_code=403)
             # No token provided → fall through to session-cookie auth
 
+        # 3b. Token-only prefix paths (samenvat-lab) — geen session-fallback.
+        if any(path.startswith(p) for p in _INTERNAL_TOKEN_PATH_PREFIXES):
+            from fastapi.responses import JSONResponse
+            tok = request.headers.get("x-stroom-internal-token", "")
+            if not INTERNAL_TOKEN:
+                return JSONResponse({"detail": "Internal endpoints disabled"}, status_code=503)
+            if not tok or tok != INTERNAL_TOKEN:
+                print(f"[SECURITY] Invalid/missing internal token for {path} from {request.client.host}", flush=True)
+                return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+
         # 4. Everything else needs a session cookie
         token = request.cookies.get(SESSION_COOKIE)
         if not token:
@@ -277,6 +294,7 @@ app.include_router(settings_router.router)
 app.include_router(admin_topics_router.router)
 app.include_router(ask_router.router)
 app.include_router(inbox_router.router)
+app.include_router(transcripts_router.router)
 
 
 # --- Auth routes ---
