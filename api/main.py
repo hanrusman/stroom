@@ -56,6 +56,16 @@ MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5m
 # --- Quality Scorer Configuration ---
 QUALITY_SCORER_URL = os.environ.get('QUALITY_SCORER_URL', 'http://quality-scorer:8080')
 QUALITY_SCORER_TIMEOUT = float(os.environ.get('QUALITY_SCORER_TIMEOUT', '5.0'))
+# "keyword" -> /score/interest  (legacy, keyword-match based)
+# "embedding" -> /score/interest_embedding  (cosine-similarity to lessons centroid)
+QUALITY_SCORER_MODE = os.environ.get('QUALITY_SCORER_MODE', 'keyword').strip().lower()
+if QUALITY_SCORER_MODE not in {"keyword", "embedding"}:
+    print(f"[quality-scorer] invalid mode '{QUALITY_SCORER_MODE}', falling back to 'keyword'")
+    QUALITY_SCORER_MODE = "keyword"
+
+
+def _scorer_endpoint() -> str:
+    return "/score/interest_embedding" if QUALITY_SCORER_MODE == "embedding" else "/score/interest"
 
 
 def _available_host_mem_mb() -> int:
@@ -101,13 +111,13 @@ def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
 async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, title: Optional[str] = None) -> Optional[int]:
     """Score text using quality-scorer service. Returns hybrid 1-10 score or None on failure.
 
-    Uses the /score/interest endpoint to get both quality and interest scores,
-    returning the hybrid weighted score (60% interest + 40% quality).
-    Fail open: if service is down or errors, return None so item can proceed.
+    Endpoint depends on QUALITY_SCORER_MODE (keyword | embedding); both return hybrid_score.
+    Fail open: if service is down or errors (incl. 503 when embedding centroid not built),
+    return None so item can proceed.
     """
     try:
         r = await http_client.post(
-            f"{QUALITY_SCORER_URL}/score/interest",
+            f"{QUALITY_SCORER_URL}{_scorer_endpoint()}",
             json={"items": [{"id": "single", "text": text[:8000], "title": title}]},
             timeout=QUALITY_SCORER_TIMEOUT,
         )
@@ -115,6 +125,9 @@ async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, 
             results = r.json().get("results", [])
             if results:
                 return results[0].get("hybrid_score")
+            return None
+        elif r.status_code == 503 and QUALITY_SCORER_MODE == "embedding":
+            print(f"[quality-scorer] embedding centroid not ready (503) — falling back to no-score")
             return None
         else:
             print(f"[quality-scorer] non-200 response: {r.status_code}")
@@ -131,20 +144,29 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
     """Score multiple items using quality-scorer interest batch endpoint.
 
     Returns dict of item_id -> hybrid_score. Failed items are omitted.
-    Uses the /score/interest endpoint to get both quality and interest scores.
+    Endpoint depends on QUALITY_SCORER_MODE (keyword | embedding).
     """
     if not items:
         return {}
 
     try:
         r = await http_client.post(
-            f"{QUALITY_SCORER_URL}/score/interest",
+            f"{QUALITY_SCORER_URL}{_scorer_endpoint()}",
             json={"items": items},
             timeout=QUALITY_SCORER_TIMEOUT * 5,  # More time for batch
         )
         if r.status_code == 200:
             results = r.json().get("results", [])
+            if os.environ.get("QUALITY_SCORER_DEBUG") == "1" and results:
+                scores = sorted((r["id"], r["hybrid_score"]) for r in results)
+                lowest = min(results, key=lambda x: x["hybrid_score"])
+                highest = max(results, key=lambda x: x["hybrid_score"])
+                print(f"[quality-scorer] batch debug: lowest={lowest['hybrid_score']} (id={lowest['id']}), "
+                      f"highest={highest['hybrid_score']} (id={highest['id']}), n={len(results)}")
             return {r["id"]: r["hybrid_score"] for r in results}
+        elif r.status_code == 503 and QUALITY_SCORER_MODE == "embedding":
+            print(f"[quality-scorer] embedding centroid not ready (503) — falling back to no-score")
+            return {}
         else:
             print(f"[quality-scorer] batch non-200 response: {r.status_code}")
             return {}
