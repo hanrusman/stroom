@@ -1506,7 +1506,7 @@ const QualityScorerAdmin = () => {
 
       {/* List */}
       <div className="space-y-2">
-        {Object.entries(data).map(([name, keywords]) => (
+        {(Object.entries(data) as [string, string[]][]).map(([name, keywords]) => (
           <div
             key={name}
             className="flex items-start gap-3 p-3 rounded-xl bg-brand-surface border border-brand-ink/5 hover:border-brand-ink/10 transition"
