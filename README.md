@@ -2,8 +2,6 @@
 
 Personal content curation platform: YouTube / RSS / podcasts → AI summaries → Postgres+pgvector → Obsidian notes, Vikunja todos.
 
-**Deployment target:** `strongbad` (Coloclue VPS), accessed over Tailscale.
-
 ## Stack
 
 | Component | Image / tool | Purpose |
@@ -135,7 +133,7 @@ LITELLM_MASTER_KEY=xxx
 STROOM_INTERNAL_TOKEN=xxx  # For service-to-service callbacks
 
 # Integrations
-VIKUNJA_URL=https://vikunja.c4w.nl/api/v1
+VIKUNJA_URL=
 VIKUNJA_TOKEN=xxx
 OBSIDIAN_API_KEY=xxx         # Optional — for REST API writes
 
@@ -177,5 +175,4 @@ See [PLAN.md](./PLAN.md) for the full rationale.
 
 ## Related Repos
 
-- [hanrusman/vps-stacks](https://github.com/hanrusman/vps-stacks) — Docker Compose infrastructure
 - [hanrusman/samenvat-agent](https://github.com/hanrusman/samenvat-agent) — GPU transcription worker
