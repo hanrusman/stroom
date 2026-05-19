@@ -4,7 +4,7 @@ import {
   AdminSource, AdminSourceUpdate, AdminSourceCreate, SourceKind,
   fetchAdminSources, updateAdminSource, createAdminSource, deleteAdminSource,
   refreshAdminSource, refreshAllAdminSources, fetchAdminQueue, QueueItem,
-  fetchTopics, Topic, ApiError, DigestModel, ModelAction,
+  fetchTopics, Topic, ApiError,
   AdminTopic, fetchAdminTopics, updateTopicOrder, deleteTopic,
   CronResult, cronTranscribePodcasts, cronTranscribeVideos, cronSummarizeArticles, cronDigestTopics,
   removeFromQueue, restartQueue, fetchDigestStatus, DigestStatus,
@@ -14,15 +14,11 @@ import {
   createQualityScorerPerson, updateQualityScorerPerson, deleteQualityScorerPerson,
   reloadQualityScorerConfig, QualityScorerTopic, QualityScorerPerson,
 } from './api';
+import {
+  DigestModel, ModelAction, ALL_MODELS, ALL_ACTIONS,
+  MODEL_LABELS, ACTION_LABELS,
+} from './admin_model_constants';
 import { useSettings } from './settings';
-
-const MODEL_LABELS: Record<DigestModel, string> = { qwen: 'Qwen (lokaal)', sonnet: 'Sonnet', opus: 'Opus' };
-const ACTION_LABELS: Record<ModelAction, string> = {
-  expand: 'Verdiep deze les',
-  distill: 'Meer lessen destilleren',
-  digest: 'Digest genereren',
-  ask: 'Vraag beantwoorden',
-};
 
 const ModelDefaultsPanel = () => {
   const { settings, save } = useSettings();
@@ -33,7 +29,7 @@ const ModelDefaultsPanel = () => {
 
   useEffect(() => { setDraft(settings.model_defaults); }, [settings]);
 
-  const dirty = (['expand','distill','digest','ask'] as ModelAction[]).some(a => draft[a] !== settings.model_defaults[a]);
+  const dirty = ALL_ACTIONS.some(a => draft[a] !== settings.model_defaults[a]);
 
   const onSave = async () => {
     setBusy(true); setErr(null);
@@ -51,14 +47,14 @@ const ModelDefaultsPanel = () => {
     <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
       <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Model-defaults</h2>
       <p className="text-[13px] text-brand-ink/60 mb-5">Welk model wordt gebruikt als je nergens een override hebt ingesteld.</p>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {(['expand','distill','digest','ask'] as ModelAction[]).map(action => (
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {ALL_ACTIONS.map(action => (
           <label key={action} className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">{ACTION_LABELS[action]}</span>
             <select value={draft[action]} disabled={busy}
               onChange={e => setDraft(d => ({ ...d, [action]: e.target.value as DigestModel }))}
               className="px-3 py-2 rounded-xl bg-brand-surface border border-brand-ink/10 text-sm text-brand-ink disabled:opacity-50">
-              {(['qwen','sonnet','opus'] as DigestModel[]).map(m => (
+              {ALL_MODELS.map(m => (
                 <option key={m} value={m}>{MODEL_LABELS[m]}</option>
               ))}
             </select>

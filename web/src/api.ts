@@ -236,7 +236,11 @@ export async function fetchTopicDigest(slug: string, window: DigestWindow = 'dai
   }
 }
 
-export type DigestModel = 'qwen' | 'sonnet' | 'opus';
+// DigestModel + ModelAction zijn verhuisd naar admin_model_constants.ts zodat
+// het frontend de modellen op één plek beheert. Re-export voor backward-compat
+// met bestaande call-sites die ze uit `./api` importeren.
+export type { DigestModel, ModelAction } from './admin_model_constants';
+import type { DigestModel } from './admin_model_constants';
 
 export async function regenerateTopicDigest(slug: string, model: DigestModel = 'opus', window: DigestWindow = 'daily'): Promise<TopicDigest> {
   const r = await apiFetch(`/api/huygens/${slug}/digest?model=${model}&window=${window}`, { method: 'POST' });
@@ -446,13 +450,14 @@ export async function fetchTopicDigestHistory(slug: string, window: 'daily' | 'w
   return r.json();
 }
 
-export type ModelAction = 'expand' | 'distill' | 'digest' | 'ask';
+// ModelAction is verhuisd naar admin_model_constants.ts (zie hierboven).
 
 export interface ModelDefaults {
   expand: DigestModel;
   distill: DigestModel;
   digest: DigestModel;
   ask: DigestModel;
+  score: DigestModel;
 }
 
 export interface AskAnswer {

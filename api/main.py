@@ -125,22 +125,50 @@ def _calculate_hybrid(quality: Optional[int], interest: Optional[int]) -> Option
     return round(quality * _QUALITY_WEIGHT + interest * _INTEREST_WEIGHT)
 
 
+# 60-seconden cache voor de model_defaults.score lookup. Voorkomt een DB-roundtrip
+# per gescord item. Save via admin-UI doet niet meteen door — pas na deze TTL.
+_SCORE_MODEL_CACHE: dict = {"model": None, "ts": 0.0}
+_SCORE_MODEL_CACHE_TTL = 60.0
+
+
+async def _get_score_model() -> Optional[str]:
+    """Lees de gekozen quality-model uit settings.model_defaults.score.
+    None bij faal — quality_service.score_quality valt dan zelf terug op
+    cloud-kimi default."""
+    import time
+    now = time.time()
+    if (now - _SCORE_MODEL_CACHE["ts"]) < _SCORE_MODEL_CACHE_TTL and _SCORE_MODEL_CACHE["model"]:
+        return _SCORE_MODEL_CACHE["model"]
+    try:
+        from core.db import async_session_maker
+        from routers.settings import _load as _load_settings
+        async with async_session_maker() as bg:
+            defaults = await _load_settings(bg)
+        _SCORE_MODEL_CACHE["model"] = defaults.score
+        _SCORE_MODEL_CACHE["ts"] = now
+        return defaults.score
+    except Exception as e:
+        print(f"[score] settings-fetch faalde, fallback default: {e}", flush=True)
+        return None
+
+
 async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, title: Optional[str] = None) -> Optional[int]:
     """Hybride 1-10 score voor een item.
 
-    Quality via cloud-Kimi (LLM), interest via lokaal embedding-model + centroid.
-    Beide via app.state.quality_service. `http_client` blijft in de signature voor
-    backwards-compat van de call-sites; we gebruiken hem niet meer.
-    Fail-open: returnt None bij algehele faal.
+    Quality via een cloud-LLM (model komt uit settings.model_defaults.score,
+    default cloud-kimi), interest via lokaal embedding-model + centroid.
+    `http_client` blijft in de signature voor backwards-compat van de
+    call-sites; we gebruiken hem niet meer. Fail-open: returnt None bij faal.
     """
     try:
         qs = app.state.quality_service
         llm = LLMService(app.state.llm_client)
-        quality, interest = await qs.score_both(llm, text, title)
+        score_model = await _get_score_model()
+        quality, interest = await qs.score_both(llm, text, title, model=score_model)
         hybrid = _calculate_hybrid(quality, interest)
         # Log voor evaluatie tegen de oude (lokale) quality-scorer:
         # te aggregeren via `docker logs stroom-api | grep '\[score\]'`.
-        print(f"[score] q={quality} i={interest} h={hybrid} "
+        print(f"[score] m={score_model or 'default'} q={quality} i={interest} h={hybrid} "
               f"title={(title or '')[:60]!r}", flush=True)
         return hybrid
     except Exception as e:
@@ -159,6 +187,7 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
         return {}
     qs = app.state.quality_service
     llm = LLMService(app.state.llm_client)
+    score_model = await _get_score_model()
     out: dict[str, int] = {}
     for item in items:
         text = (item.get("text") or "")[:8000]
@@ -167,7 +196,7 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
         if not text or not item_id:
             continue
         try:
-            quality, interest = await qs.score_both(llm, text, title)
+            quality, interest = await qs.score_both(llm, text, title, model=score_model)
         except Exception as e:
             print(f"[quality-scorer] batch item {item_id}: {e}", flush=True)
             continue
