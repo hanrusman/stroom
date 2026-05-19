@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import select
+from pathlib import Path
 from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
@@ -63,19 +64,9 @@ LONG_TRANSCRIPT_MAX_CHARS = int(os.environ.get('LONG_TRANSCRIPT_MAX_CHARS', 1500
 LONG_TRANSCRIPT_MODEL = os.environ.get('LONG_TRANSCRIPT_MODEL', 'cloud-kimi')
 LONG_TRANSCRIPT_TIMEOUT_SEC = float(os.environ.get('LONG_TRANSCRIPT_TIMEOUT_SEC', 600))
 
-# --- Quality Scorer Configuration ---
-QUALITY_SCORER_URL = os.environ.get('QUALITY_SCORER_URL', 'http://quality-scorer:8080')
-QUALITY_SCORER_TIMEOUT = float(os.environ.get('QUALITY_SCORER_TIMEOUT', '5.0'))
-# "keyword" -> /score/interest  (legacy, keyword-match based)
-# "embedding" -> /score/interest_embedding  (cosine-similarity to lessons centroid)
-QUALITY_SCORER_MODE = os.environ.get('QUALITY_SCORER_MODE', 'keyword').strip().lower()
-if QUALITY_SCORER_MODE not in {"keyword", "embedding"}:
-    print(f"[quality-scorer] invalid mode '{QUALITY_SCORER_MODE}', falling back to 'keyword'")
-    QUALITY_SCORER_MODE = "keyword"
-
-
-def _scorer_endpoint() -> str:
-    return "/score/interest_embedding" if QUALITY_SCORER_MODE == "embedding" else "/score/interest"
+# Quality + interest scoring zit nu in stroom-api zelf (services/quality_service.py).
+# Geen externe quality-scorer container meer — was: QUALITY_SCORER_URL,
+# QUALITY_SCORER_MODE, _scorer_endpoint(). Verwijderd 2026-05-19.
 
 
 def _available_host_mem_mb() -> int:
@@ -118,71 +109,77 @@ def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
     return True
 
 
-async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, title: Optional[str] = None) -> Optional[int]:
-    """Score text using quality-scorer service. Returns hybrid 1-10 score or None on failure.
+_QUALITY_WEIGHT = float(os.environ.get("QUALITY_HYBRID_QUALITY_WEIGHT", "0.4"))
+_INTEREST_WEIGHT = float(os.environ.get("QUALITY_HYBRID_INTEREST_WEIGHT", "0.6"))
 
-    Endpoint depends on QUALITY_SCORER_MODE (keyword | embedding); both return hybrid_score.
-    Fail open: if service is down or errors (incl. 503 when embedding centroid not built),
-    return None so item can proceed.
+
+def _calculate_hybrid(quality: Optional[int], interest: Optional[int]) -> Optional[int]:
+    """Hybrid score zoals quality-scorer het deed: q*0.4 + i*0.6.
+    Als een van beide ontbreekt, val terug op de andere; beide None → None."""
+    if quality is None and interest is None:
+        return None
+    if quality is None:
+        return interest
+    if interest is None:
+        return quality
+    return round(quality * _QUALITY_WEIGHT + interest * _INTEREST_WEIGHT)
+
+
+async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, title: Optional[str] = None) -> Optional[int]:
+    """Hybride 1-10 score voor een item.
+
+    Quality via cloud-Kimi (LLM), interest via lokaal embedding-model + centroid.
+    Beide via app.state.quality_service. `http_client` blijft in de signature voor
+    backwards-compat van de call-sites; we gebruiken hem niet meer.
+    Fail-open: returnt None bij algehele faal.
     """
     try:
-        r = await http_client.post(
-            f"{QUALITY_SCORER_URL}{_scorer_endpoint()}",
-            json={"items": [{"id": "single", "text": text[:8000], "title": title}]},
-            timeout=QUALITY_SCORER_TIMEOUT,
-        )
-        if r.status_code == 200:
-            results = r.json().get("results", [])
-            if results:
-                return results[0].get("hybrid_score")
-            return None
-        elif r.status_code == 503 and QUALITY_SCORER_MODE == "embedding":
-            print(f"[quality-scorer] embedding centroid not ready (503) — falling back to no-score")
-            return None
-        else:
-            print(f"[quality-scorer] non-200 response: {r.status_code}")
-            return None
-    except httpx.TimeoutException:
-        print(f"[quality-scorer] timeout calling service")
-        return None
+        qs = app.state.quality_service
+        llm = LLMService(app.state.llm_client)
+        quality, interest = await qs.score_both(llm, text, title)
+        hybrid = _calculate_hybrid(quality, interest)
+        # Log voor evaluatie tegen de oude (lokale) quality-scorer:
+        # te aggregeren via `docker logs stroom-api | grep '\[score\]'`.
+        print(f"[score] q={quality} i={interest} h={hybrid} "
+              f"title={(title or '')[:60]!r}", flush=True)
+        return hybrid
     except Exception as e:
-        print(f"[quality-scorer] error: {e}")
+        print(f"[quality-scorer] hybrid faalde: {e}", flush=True)
         return None
 
 
 async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items: List[dict]) -> dict[str, int]:
-    """Score multiple items using quality-scorer interest batch endpoint.
+    """Batch-versie van hybrid scoring.
 
-    Returns dict of item_id -> hybrid_score. Failed items are omitted.
-    Endpoint depends on QUALITY_SCORER_MODE (keyword | embedding).
+    Loopt sequentieel zodat we cloud-Kimi niet overspoelen; gebruikt
+    `score_both` per item zodat quality + interest concurrent gaan per item.
+    Returnt dict id → hybrid_score (faalde items omgeven).
     """
     if not items:
         return {}
-
-    try:
-        r = await http_client.post(
-            f"{QUALITY_SCORER_URL}{_scorer_endpoint()}",
-            json={"items": items},
-            timeout=QUALITY_SCORER_TIMEOUT * 5,  # More time for batch
-        )
-        if r.status_code == 200:
-            results = r.json().get("results", [])
-            if os.environ.get("QUALITY_SCORER_DEBUG") == "1" and results:
-                scores = sorted((r["id"], r["hybrid_score"]) for r in results)
-                lowest = min(results, key=lambda x: x["hybrid_score"])
-                highest = max(results, key=lambda x: x["hybrid_score"])
-                print(f"[quality-scorer] batch debug: lowest={lowest['hybrid_score']} (id={lowest['id']}), "
-                      f"highest={highest['hybrid_score']} (id={highest['id']}), n={len(results)}")
-            return {r["id"]: r["hybrid_score"] for r in results}
-        elif r.status_code == 503 and QUALITY_SCORER_MODE == "embedding":
-            print(f"[quality-scorer] embedding centroid not ready (503) — falling back to no-score")
-            return {}
-        else:
-            print(f"[quality-scorer] batch non-200 response: {r.status_code}")
-            return {}
-    except Exception as e:
-        print(f"[quality-scorer] batch error: {e}")
-        return {}
+    qs = app.state.quality_service
+    llm = LLMService(app.state.llm_client)
+    out: dict[str, int] = {}
+    for item in items:
+        text = (item.get("text") or "")[:8000]
+        title = item.get("title")
+        item_id = item.get("id")
+        if not text or not item_id:
+            continue
+        try:
+            quality, interest = await qs.score_both(llm, text, title)
+        except Exception as e:
+            print(f"[quality-scorer] batch item {item_id}: {e}", flush=True)
+            continue
+        hybrid = _calculate_hybrid(quality, interest)
+        if hybrid is not None:
+            out[item_id] = hybrid
+    if os.environ.get("QUALITY_SCORER_DEBUG") == "1" and out:
+        lo = min(out.items(), key=lambda kv: kv[1])
+        hi = max(out.items(), key=lambda kv: kv[1])
+        print(f"[quality-scorer] batch debug: lowest={lo[1]} (id={lo[0]}), "
+              f"highest={hi[1]} (id={hi[0]}), n={len(out)}")
+    return out
 
 
 @asynccontextmanager
@@ -198,6 +195,20 @@ async def lifespan(app: FastAPI):
         timeout=LLM_HTTP_TIMEOUT_SEC,
         limits=httpx.Limits(max_connections=LLM_MAX_CONCURRENT),
     )
+
+    # Quality scoring (vervangt de zelf-gehoste quality-scorer container):
+    # - quality via cloud-Kimi (LLM-call)
+    # - interest via lokaal sentence-transformer + centroid uit /data
+    # Topics/persons CRUD: direct op /data/topics_config.json.
+    from services.quality_service import QualityService
+    from services.topics_service import TopicsService
+    app.state.quality_service = QualityService()
+    app.state.topics_service = TopicsService(Path("/data/topics_config.json"))
+    try:
+        await asyncio.to_thread(app.state.quality_service.load)
+    except Exception as e:
+        print(f"[lifespan] QualityService.load() faalde, scoring werkt degraded: {e}",
+              flush=True)
 
     from core.db import async_session_maker
     worker_tasks: list[asyncio.Task] = []
@@ -2650,7 +2661,7 @@ async def admin_quality_status(
     }
 
 
-# --- Quality Scorer Admin Proxy ---
+# --- Quality Scorer Admin (lokaal via topics_service, geen externe container) ---
 
 from pydantic import BaseModel
 
@@ -2662,143 +2673,46 @@ class QualityScorerPerson(BaseModel):
     name: str
     keywords: list[str]
 
+
 @app.get("/admin/quality-scorer/topics")
-async def admin_quality_scorer_topics(
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Get all quality scorer topics."""
-    try:
-        r = await request.app.state.http_client.get(
-            f"{QUALITY_SCORER_URL}/admin/topics"
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_topics(request: Request, user=Depends(require_user)):
+    return {"topics": await request.app.state.topics_service.list_topics()}
 
 @app.get("/admin/quality-scorer/persons")
-async def admin_quality_scorer_persons(
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Get all quality scorer persons."""
-    try:
-        r = await request.app.state.http_client.get(
-            f"{QUALITY_SCORER_URL}/admin/persons"
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_persons(request: Request, user=Depends(require_user)):
+    return {"persons": await request.app.state.topics_service.list_persons()}
 
 @app.post("/admin/quality-scorer/topics")
-async def admin_quality_scorer_topics_create(
-    topic: QualityScorerTopic,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Create a new topic."""
-    try:
-        r = await request.app.state.http_client.post(
-            f"{QUALITY_SCORER_URL}/admin/topics",
-            json={"name": topic.name, "keywords": topic.keywords}
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_topics_create(topic: QualityScorerTopic, request: Request, user=Depends(require_user)):
+    return await request.app.state.topics_service.create_topic(topic.name, topic.keywords)
 
 @app.put("/admin/quality-scorer/topics/{topic_name}")
-async def admin_quality_scorer_topics_update(
-    topic_name: str,
-    update: dict,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Update a topic."""
-    try:
-        r = await request.app.state.http_client.put(
-            f"{QUALITY_SCORER_URL}/admin/topics/{topic_name}",
-            json=update
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_topics_update(topic_name: str, update: dict, request: Request, user=Depends(require_user)):
+    keywords = update.get("keywords", [])
+    return await request.app.state.topics_service.update_topic(topic_name, keywords)
 
 @app.delete("/admin/quality-scorer/topics/{topic_name}")
-async def admin_quality_scorer_topics_delete(
-    topic_name: str,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Delete a topic."""
-    try:
-        r = await request.app.state.http_client.delete(
-            f"{QUALITY_SCORER_URL}/admin/topics/{topic_name}"
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_topics_delete(topic_name: str, request: Request, user=Depends(require_user)):
+    return await request.app.state.topics_service.delete_topic(topic_name)
 
 @app.post("/admin/quality-scorer/persons")
-async def admin_quality_scorer_persons_create(
-    person: QualityScorerPerson,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Create a new person."""
-    try:
-        r = await request.app.state.http_client.post(
-            f"{QUALITY_SCORER_URL}/admin/persons",
-            json={"name": person.name, "keywords": person.keywords}
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_persons_create(person: QualityScorerPerson, request: Request, user=Depends(require_user)):
+    return await request.app.state.topics_service.create_person(person.name, person.keywords)
 
 @app.put("/admin/quality-scorer/persons/{person_name}")
-async def admin_quality_scorer_persons_update(
-    person_name: str,
-    update: dict,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Update a person."""
-    try:
-        r = await request.app.state.http_client.put(
-            f"{QUALITY_SCORER_URL}/admin/persons/{person_name}",
-            json=update
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_persons_update(person_name: str, update: dict, request: Request, user=Depends(require_user)):
+    keywords = update.get("keywords", [])
+    return await request.app.state.topics_service.update_person(person_name, keywords)
 
 @app.delete("/admin/quality-scorer/persons/{person_name}")
-async def admin_quality_scorer_persons_delete(
-    person_name: str,
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Delete a person."""
-    try:
-        r = await request.app.state.http_client.delete(
-            f"{QUALITY_SCORER_URL}/admin/persons/{person_name}"
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_persons_delete(person_name: str, request: Request, user=Depends(require_user)):
+    return await request.app.state.topics_service.delete_person(person_name)
 
 @app.post("/admin/quality-scorer/reload")
-async def admin_quality_scorer_reload(
-    request: Request,
-    user=Depends(require_user)
-):
-    """Proxy: Reload quality scorer config."""
-    try:
-        r = await request.app.state.http_client.post(
-            f"{QUALITY_SCORER_URL}/topics/reload"
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+async def admin_quality_scorer_reload(request: Request, user=Depends(require_user)):
+    """Herlaad de centroid uit /data/centroid.npz (na rebuild_centroid.py)."""
+    request.app.state.quality_service.reload_centroid()
+    return {"status": "reloaded"}
 
 
 class ExtractKeywordsRequest(BaseModel):
@@ -2813,12 +2727,21 @@ async def admin_quality_scorer_extract_keywords(
     request: Request,
     user=Depends(require_user)
 ):
-    """Proxy: Extract keywords from text for interest learning."""
-    try:
-        r = await request.app.state.http_client.post(
-            f"{QUALITY_SCORER_URL}/extract-keywords",
-            json={"text": req.text, "title": req.title, "max_keywords": req.max_keywords}
-        )
-        return r.json()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Quality scorer error: {e}")
+    """Extract keywords from text (eenvoudige TF-fallback na quality-scorer-eliminatie).
+
+    Quality-scorer had een TF-IDF + stopwords keyword-extractor. Voor nu een
+    light versie: meest-frequente lowercase woorden, exclusief korte/cijfers.
+    Voldoende voor admin-UI hint-doeleinden; kan later verfijnd worden.
+    """
+    import re as _re
+    from collections import Counter as _Counter
+    blob = f"{req.title or ''} {req.text}".lower()
+    tokens = _re.findall(r"[a-zàâäãåèéêëìíîïòóôöùúûüñç]{4,}", blob)
+    stop = {"deze", "voor", "naar", "over", "maar", "door", "ook", "wel", "kan",
+            "het", "een", "van", "met", "dat", "die", "als", "zijn", "worden",
+            "this", "that", "with", "from", "have", "been", "they", "their",
+            "the", "and", "for", "are", "but", "not", "you", "all", "can",
+            "will", "your", "more", "than", "into", "what", "when", "which"}
+    tokens = [t for t in tokens if t not in stop]
+    top = _Counter(tokens).most_common(req.max_keywords)
+    return {"keywords": [{"keyword": k, "score": float(c)} for k, c in top]}

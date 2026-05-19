@@ -13,3 +13,5 @@ lxml_html_clean>=0.2.0
 kokoro-onnx>=0.3.0
 soundfile>=0.12.1
 numpy>=1.26.0
+# Embedding-based interest scoring (vervangt zelf-gehoste quality-scorer)
+sentence-transformers>=2.7.0,<4.0.0
