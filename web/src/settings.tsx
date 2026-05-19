@@ -1,7 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { AppSettings, DigestModel, ModelAction, fetchSettings, updateSettings } from './api';
 
-const FALLBACK: AppSettings = { model_defaults: { expand: 'qwen', distill: 'qwen', digest: 'opus', ask: 'qwen' } };
+const FALLBACK: AppSettings = { model_defaults: { expand: 'qwen', distill: 'qwen', digest: 'opus', ask: 'qwen', score: 'cloud-kimi' } };
 
 interface Ctx {
   settings: AppSettings;

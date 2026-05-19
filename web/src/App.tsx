@@ -18,6 +18,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
+import { MODEL_LABELS as DIGEST_MODEL_LABELS } from './admin_model_constants';
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -1816,11 +1817,7 @@ export default function App() {
   );
 }
 
-const DIGEST_MODEL_LABELS: Record<DigestModel, string> = {
-  qwen: 'Qwen (lokaal)',
-  sonnet: 'Sonnet',
-  opus: 'Opus',
-};
+// DIGEST_MODEL_LABELS verhuisd naar admin_model_constants.ts (zie import bovenaan).
 
 function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; topicName: string; window: DigestWindow }) {
   const { getDefault } = useSettings();

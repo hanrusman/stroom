@@ -17,11 +17,10 @@ DIGEST_LLM_TIMEOUT = 1200.0  # 20 min per digest — grote weekly + zware topic 
 # met 12 tegelijk overspoelen. Eén tegelijk = elke krijgt z'n eigen tijd, geen race.
 _DIGEST_SEM = asyncio.Semaphore(1)
 
-DIGEST_MODEL_MAP: dict[str, str] = {
-    "qwen": "stroom-bulk",
-    "sonnet": "stroom-sonnet",
-    "opus": "stroom-deep",
-}
+# Mapping van Stroom-namen naar LiteLLM-aliases. Single source of truth in
+# pipeline.digest_model_map; we exposeren 'm hier nog onder de oude naam voor
+# bestaande callers (`DIGEST_MODEL_MAP[model]`).
+from pipeline.digest_model_map import DIGEST_MODEL_TO_LITELLM as DIGEST_MODEL_MAP  # noqa: E402
 
 
 def strip_html(s: Optional[str]) -> str:

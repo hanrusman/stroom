@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 from services.llm_service import LLMService
+from pipeline.digest_model_map import resolve_model
 
 
 QUALITY_LLM_MODEL = "cloud-kimi"
@@ -37,7 +38,12 @@ class QualityService:
             print("Centroid file not found.", flush=True)
             self.centroid = None
 
-    async def score_quality(self, llm_service: LLMService, text: str, title: str | None) -> int | None:
+    async def score_quality(self, llm_service: LLMService, text: str, title: str | None,
+                            model: str | None = None) -> int | None:
+        """`model` is een Stroom-modelnaam (qwen/sonnet/opus/cloud-kimi/...)
+        of None om de default `cloud-kimi` te gebruiken. Wordt via
+        resolve_model() naar de echte LiteLLM-alias vertaald."""
+        resolved = resolve_model(model or QUALITY_LLM_MODEL)
         system_prompt = (
             "Je bent een kwaliteitsbeoordelaar. Geef een score 1-10 voor de inhoudelijke kwaliteit van de tekst. "
             "Schaal: 1=spam/oppervlakkig, 5=gemiddeld, 10=uitstekend/diepgaand. De meeste content scoort 4-6. "
@@ -46,7 +52,7 @@ class QualityService:
         user_prompt = f"Titel: {title or 'Geen titel'}\n\nTekst:\n{text[:8000]}"
         try:
             response = await llm_service.call_llm(
-                model=QUALITY_LLM_MODEL,
+                model=resolved,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.1,
                 timeout=QUALITY_LLM_TIMEOUT_SEC
@@ -79,8 +85,9 @@ class QualityService:
             print(f"Error scoring interest: {e}", flush=True)
             return None
 
-    async def score_both(self, llm_service: LLMService, text: str, title: str | None) -> tuple[int | None, int | None]:
-        q_task = asyncio.create_task(self.score_quality(llm_service, text, title))
+    async def score_both(self, llm_service: LLMService, text: str, title: str | None,
+                         model: str | None = None) -> tuple[int | None, int | None]:
+        q_task = asyncio.create_task(self.score_quality(llm_service, text, title, model))
         i_task = asyncio.create_task(self.score_interest(text))
         quality_score, interest_score = await asyncio.gather(q_task, i_task, return_exceptions=True)
         if isinstance(quality_score, Exception):

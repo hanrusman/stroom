@@ -9,7 +9,11 @@ from core.db import get_async_session
 
 router = APIRouter()
 
-DigestModel = Literal["qwen", "sonnet", "opus"]
+DigestModel = Literal[
+    "qwen", "sonnet", "opus", "long",
+    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
+    "cloud-gpt-20b", "cloud-gemma",
+]
 
 
 class ModelDefaults(BaseModel):
@@ -17,13 +21,16 @@ class ModelDefaults(BaseModel):
     distill: DigestModel
     digest: DigestModel
     ask: DigestModel = "qwen"
+    score: DigestModel = "cloud-kimi"
 
 
 class Settings(BaseModel):
     model_defaults: ModelDefaults
 
 
-DEFAULTS = ModelDefaults(expand="qwen", distill="qwen", digest="opus", ask="qwen")
+DEFAULTS = ModelDefaults(
+    expand="qwen", distill="qwen", digest="opus", ask="qwen", score="cloud-kimi",
+)
 
 
 async def _load(session) -> ModelDefaults:
