@@ -53,6 +53,16 @@ TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 2000))
 SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 500))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
+# Lange transcripties (podcasts, video's > 10 min) gaan via een cloud-model
+# met groot context-window in plaats van de lokale 12k-trim + stroom-bulk.
+# Drempel op duration_seconds (audio-tijd), met char-fallback voor items
+# zonder duration. Bij cloud-faal: graceful fallback naar truncated stroom-bulk.
+LONG_TRANSCRIPT_DURATION_SECONDS = int(os.environ.get('LONG_TRANSCRIPT_DURATION_SECONDS', 600))
+LONG_TRANSCRIPT_CHAR_FALLBACK = int(os.environ.get('LONG_TRANSCRIPT_CHAR_FALLBACK', 20000))
+LONG_TRANSCRIPT_MAX_CHARS = int(os.environ.get('LONG_TRANSCRIPT_MAX_CHARS', 150000))
+LONG_TRANSCRIPT_MODEL = os.environ.get('LONG_TRANSCRIPT_MODEL', 'cloud-kimi')
+LONG_TRANSCRIPT_TIMEOUT_SEC = float(os.environ.get('LONG_TRANSCRIPT_TIMEOUT_SEC', 600))
+
 # --- Quality Scorer Configuration ---
 QUALITY_SCORER_URL = os.environ.get('QUALITY_SCORER_URL', 'http://quality-scorer:8080')
 QUALITY_SCORER_TIMEOUT = float(os.environ.get('QUALITY_SCORER_TIMEOUT', '5.0'))
@@ -553,14 +563,15 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
 
 async def _fetch_item_row(session, item_id: str):
     r = await session.exec(sa_text(
-        "SELECT title, type::text, transcript, description, media_url, processing_status::text "
+        "SELECT title, type::text, transcript, description, media_url, "
+        "       processing_status::text, duration_seconds "
         "FROM items WHERE id = CAST(:i AS uuid)"
     ).bindparams(i=item_id))
     row = r.first()
     if not row:
         raise HTTPException(status_code=404, detail="Item not found")
     return {"title": row[0], "type": row[1], "transcript": row[2], "description": row[3],
-            "media_url": row[4], "processing_status": row[5]}
+            "media_url": row[4], "processing_status": row[5], "duration_seconds": row[6]}
 
 
 @app.post("/huygens/items/{item_id}/status", response_model=HuygensItemDetail)
@@ -886,9 +897,9 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
     if not text:
         raise HTTPException(status_code=400, detail="Geen transcript, media_url of beschrijving om te samenvatten")
 
-    import re
-    cleaned = re.sub(r"<[^>]+>", " ", text)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()[:12000]
+    raw_text = re.sub(r"<[^>]+>", " ", text)
+    route = _pick_summary_route(raw_text, item.get("duration_seconds"))
+    actual_model = route["model"]
 
     await session.exec(sa_text(
         "UPDATE items SET processing_status='summarizing'::processing_status, queued_at=now(), processing_error=NULL "
@@ -898,17 +909,26 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
 
     try:
         llm = LLMService(app.state.http_client)
-        summary = await llm.call_llm("stroom-bulk", [
-            {"role": "system", "content": (
-                "Je bent een curator van hoogwaardige content. Vat de tekst samen in het Nederlands, "
-                "zakelijk maar warm, max 3 zinnen. Geef alleen de samenvatting terug, geen inleiding."
-            )},
-            {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {cleaned}"},
-        ], temperature=0.3)
+        try:
+            summary = await llm.call_llm(route["model"], [
+                {"role": "system", "content": route["system_prompt"]},
+                {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {route['cleaned']}"},
+            ], temperature=0.3, timeout=route["timeout"])
+        except Exception as inner:
+            if not route["is_long"]:
+                raise
+            print(f"[summarize_item] long-context model {route['model']} faalde voor "
+                  f"{item_id}: {inner} — fallback naar stroom-bulk truncated", flush=True)
+            fallback_cleaned = re.sub(r"\s+", " ", raw_text).strip()[:12000]
+            summary = await llm.call_llm("stroom-bulk", [
+                {"role": "system", "content": _SHORT_SUMMARY_SYSTEM},
+                {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {fallback_cleaned}"},
+            ], temperature=0.3, timeout=180.0)
+            actual_model = f"{route['model']}-fallback-bulk"
         await session.exec(sa_text(
-            "UPDATE items SET summary=:s, summary_model='stroom-bulk', summary_generated_at=now(), "
+            "UPDATE items SET summary=:s, summary_model=:m, summary_generated_at=now(), "
             "processing_status='ready'::processing_status WHERE id = CAST(:i AS uuid)"
-        ).bindparams(s=summary.strip(), i=item_id))
+        ).bindparams(s=summary.strip(), m=actual_model, i=item_id))
         await session.commit()
     except Exception as exc:
         await session.exec(sa_text(
@@ -1594,6 +1614,48 @@ from pipeline.articles import (
 
 _INBOX_SOURCE_NAME = "Inbox (handmatig)"
 
+_SHORT_SUMMARY_SYSTEM = (
+    "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
+    "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
+    "Lever alleen de samenvatting, geen extra uitleg of JSON."
+)
+
+_LONG_SUMMARY_SYSTEM = (
+    "Je bent een curator van hoogwaardige content. Vat onderstaande lange transcriptie "
+    "gestructureerd samen in het Nederlands, zakelijk maar warm. Lever platte tekst "
+    "(geen JSON, geen markdown-fences) in deze vorm:\n"
+    "- 1 zin met het hoofdonderwerp\n"
+    "- 3-5 bullets met de belangrijkste subonderwerpen (1 zin per bullet)\n"
+    "- 1 zin met een conclusie of inzicht"
+)
+
+
+def _pick_summary_route(raw: str, duration_seconds: int | None) -> dict:
+    """Kies model + trim + prompt op basis van transcriptie-lengte.
+
+    Lange transcripties (podcast/video > 10 min, of >20k chars als duration
+    onbekend) gaan naar een cloud-model met groot context-window i.p.v. de
+    lokale 12k-trim. Geeft betere samenvattingen voor 3-uur Acquired e.d.
+    """
+    duration = duration_seconds or 0
+    is_long = (duration >= LONG_TRANSCRIPT_DURATION_SECONDS
+               or len(raw) >= LONG_TRANSCRIPT_CHAR_FALLBACK)
+    if is_long:
+        return {
+            "model": LONG_TRANSCRIPT_MODEL,
+            "cleaned": re.sub(r"\s+", " ", raw).strip()[:LONG_TRANSCRIPT_MAX_CHARS],
+            "system_prompt": _LONG_SUMMARY_SYSTEM,
+            "timeout": LONG_TRANSCRIPT_TIMEOUT_SEC,
+            "is_long": True,
+        }
+    return {
+        "model": "stroom-bulk",
+        "cleaned": re.sub(r"\s+", " ", raw).strip()[:12000],
+        "system_prompt": _SHORT_SUMMARY_SYSTEM,
+        "timeout": 180.0,
+        "is_long": False,
+    }
+
 
 async def _summarize_single_item(item_id: str, llm_service, async_session_maker, http_client=None) -> bool:
     """Summarize a single item (article/podcast/video with transcript).
@@ -1608,7 +1670,8 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
     try:
         async with async_session_maker() as bg:
             r = await bg.exec(sa_text("""
-                SELECT i.title, i.transcript, i.description, i.type::text, s.name
+                SELECT i.title, i.transcript, i.description, i.type::text, s.name,
+                       i.duration_seconds
                 FROM items i JOIN sources s ON s.id = i.source_id
                 WHERE i.id = CAST(:i AS uuid)
             """).bindparams(i=item_id))
@@ -1619,6 +1682,7 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             raw = (row[1] or "").strip() or re.sub(r"<[^>]+>", " ", row[2] or "").strip()
             article_body = (row[1] or "").strip()
             source_name = row[4]
+            duration_seconds = row[5]
             if not raw:
                 await bg.exec(sa_text(
                     "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL "
@@ -1627,15 +1691,24 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
                 await bg.commit()
                 return True
 
-        cleaned = re.sub(r"\s+", " ", raw)[:12000]
-        response = await llm_service.call_llm("stroom-bulk", [
-            {"role": "system", "content": (
-                "Je bent een curator van hoogwaardige content. Vat het artikel samen in het "
-                "Nederlands, zakelijk maar warm, max 3 zinnen.\n\n"
-                "Lever alleen de samenvatting, geen extra uitleg of JSON."
-            )},
-            {"role": "user", "content": f"Titel: {title}\n\nTekst: {cleaned}"},
-        ], temperature=0.3)
+        route = _pick_summary_route(raw, duration_seconds)
+        actual_model = route["model"]
+        try:
+            response = await llm_service.call_llm(route["model"], [
+                {"role": "system", "content": route["system_prompt"]},
+                {"role": "user", "content": f"Titel: {title}\n\nTekst: {route['cleaned']}"},
+            ], temperature=0.3, timeout=route["timeout"])
+        except Exception as exc:
+            if not route["is_long"]:
+                raise
+            print(f"[sum-worker] long-context model {route['model']} faalde voor "
+                  f"{item_id}: {exc} — fallback naar stroom-bulk truncated", flush=True)
+            fallback_cleaned = re.sub(r"\s+", " ", raw).strip()[:12000]
+            response = await llm_service.call_llm("stroom-bulk", [
+                {"role": "system", "content": _SHORT_SUMMARY_SYSTEM},
+                {"role": "user", "content": f"Titel: {title}\n\nTekst: {fallback_cleaned}"},
+            ], temperature=0.3, timeout=180.0)
+            actual_model = f"{route['model']}-fallback-bulk"
 
         summary = response.strip() if response else ""
 
@@ -1648,11 +1721,11 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
 
         async with async_session_maker() as bg:
             await bg.exec(sa_text(
-                "UPDATE items SET summary=:s, summary_model='stroom-bulk', "
+                "UPDATE items SET summary=:s, summary_model=:m, "
                 "summary_generated_at=now(), processing_status='ready'::processing_status, "
                 "quality_score=:q, quality_score_reason='auto', quality_score_updated_at=now(), "
                 "queued_at=NULL WHERE id = CAST(:i AS uuid)"
-            ).bindparams(s=summary, i=item_id, q=quality_score))
+            ).bindparams(s=summary, m=actual_model, i=item_id, q=quality_score))
             await bg.commit()
 
         # Inbox-items krijgen ook lesson-distill (was het oude inbox-gedrag).
