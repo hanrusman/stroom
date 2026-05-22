@@ -112,6 +112,43 @@ async def list_all_lessons(rating: Optional[int] = Query(None, description="Filt
     return [_lesson_row(r) for r in result.all()]
 
 
+@router.get("/internal/lessons/search", response_model=List[LessonRead])
+async def search_lessons(
+    q: str = Query("", max_length=200, description="Substring (ILIKE) op title+body+expansion. Leeg = alles."),
+    rating: int = Query(1, description="1 = positief (default), -1 = negatief, 0 = alles."),
+    limit: int = Query(10, ge=1, le=50),
+    session=Depends(get_async_session),
+):
+    """Machine-to-machine zoek over de lessons-corpus.
+
+    Auth via internal-token middleware (zie main.py _INTERNAL_TOKEN_PATH_PREFIXES).
+    Bedoeld voor Okavango's `search_stroom_lessons`-tool.
+    """
+    if rating not in (1, -1, 0):
+        raise HTTPException(status_code=400, detail="rating must be 1, -1, or 0")
+
+    where_parts: list[str] = []
+    params: dict = {"lim": limit}
+
+    if rating in (1, -1):
+        where_parts.append("l.rating = :r")
+        params["r"] = rating
+
+    if q.strip():
+        where_parts.append(
+            "(l.title ILIKE :pat OR l.body ILIKE :pat OR l.expansion ILIKE :pat)"
+        )
+        params["pat"] = f"%{q.strip()}%"
+
+    where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+
+    result = await session.exec(sa_text(
+        f"{_LESSON_SELECT} {where_clause} "
+        "ORDER BY l.rated_at DESC NULLS LAST, l.idx ASC LIMIT :lim"
+    ).bindparams(**params))
+    return [_lesson_row(r) for r in result.all()]
+
+
 @router.post("/lessons/{lesson_id}/rate", response_model=LessonRead)
 async def rate_lesson(lesson_id: str, body: LessonRating, session=Depends(get_async_session)):
     if body.rating not in (None, 1, -1):
