@@ -293,9 +293,11 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/digest-topics",
 )
 # Paden die altijd via internal-token auth gaan (geen session-fallback).
-# samenvat-lab praat hier machine-to-machine met Stroom.
+# samenvat-lab praat hier machine-to-machine met Stroom, Okavango leest hier
+# de lessons-corpus.
 _INTERNAL_TOKEN_PATH_PREFIXES = (
     "/transcripts",
+    "/internal/",
 )
 INTERNAL_TOKEN = os.environ.get("STROOM_INTERNAL_TOKEN", "")
 if not INTERNAL_TOKEN:
