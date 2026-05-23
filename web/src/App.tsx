@@ -1700,7 +1700,14 @@ const ItemDetailView = ({ id, onBack, onOpenSource }: { id: string; onBack: () =
               </button>
             )}
             <div>
-              <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
+              <div className="font-serif font-semibold text-[15px] text-brand-ink">
+                {item.author ? (
+                  item.author
+                ) : (
+                  <button type="button" onClick={() => onOpenSource?.(item.source_id)}
+                    className="hover:text-brand-accent transition-colors">{item.source_name}</button>
+                )}
+              </div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
                 {item.author && (
                   <button type="button" onClick={() => onOpenSource?.(item.source_id)}
