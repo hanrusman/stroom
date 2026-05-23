@@ -43,11 +43,38 @@ export class ApiError extends Error {
   }
 }
 
+// Convert any FastAPI error `detail` (string, array of validation errors, or
+// arbitrary object) into a string that's safe to render as a React child.
+// FastAPI 422 returns `detail: [{type, loc, msg, input, ctx}, ...]`; rendering
+// that array directly would trip React error #31.
+function stringifyDetail(raw: unknown, fallback: string): string {
+  if (raw == null) return fallback;
+  if (typeof raw === 'string') return raw;
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => {
+        if (item && typeof item === 'object' && 'msg' in item) {
+          const loc = Array.isArray((item as { loc?: unknown[] }).loc)
+            ? (item as { loc: unknown[] }).loc.join('.')
+            : '';
+          return loc ? `${loc}: ${(item as { msg: string }).msg}` : (item as { msg: string }).msg;
+        }
+        return typeof item === 'string' ? item : JSON.stringify(item);
+      })
+      .join('; ');
+  }
+  try { return JSON.stringify(raw); } catch { return fallback; }
+}
+
 async function apiFetch(input: RequestInfo, init: RequestInit = {}): Promise<Response> {
   const r = await fetch(input, { credentials: 'include', ...init });
   if (!r.ok) {
-    let detail = `${r.status}`;
-    try { const j = await r.clone().json(); detail = j.detail ?? detail; } catch {}
+    const fallback = `${r.status}`;
+    let detail: string = fallback;
+    try {
+      const j = await r.clone().json();
+      detail = stringifyDetail(j.detail, fallback);
+    } catch {}
     throw new ApiError(r.status, detail);
   }
   return r;

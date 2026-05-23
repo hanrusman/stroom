@@ -850,7 +850,11 @@ async def get_topic_digest(slug: str,
     )
 
 
-DigestModel = Literal["qwen", "sonnet", "opus"]
+DigestModel = Literal[
+    "qwen", "sonnet", "opus", "long",
+    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
+    "cloud-gpt-20b", "cloud-gemma",
+]
 
 
 async def _run_digest_generation(topic_id: str, topic_name: str, slug: str,

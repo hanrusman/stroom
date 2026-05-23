@@ -42,15 +42,16 @@ class LessonRating(BaseModel):
     rating: Optional[int]  # 1, -1, or None
 
 
-DigestModel = Literal["qwen", "sonnet", "opus"]
+DigestModel = Literal[
+    "qwen", "sonnet", "opus", "long",
+    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
+    "cloud-gpt-20b", "cloud-gemma",
+]
 DigestWindow = Literal["daily", "weekly"]
 LessonsDigestFilter = Literal["useful", "not-useful", "all"]
 
-_MODEL_ALIAS: dict[str, str] = {
-    "qwen": "stroom-bulk",
-    "sonnet": "stroom-sonnet",
-    "opus": "stroom-deep",
-}
+# Single source of truth voor model-aliases: pipeline.digest_model_map.
+from pipeline.digest_model_map import DIGEST_MODEL_TO_LITELLM as _MODEL_ALIAS  # noqa: E402
 _WINDOW_HOURS: dict[str, int] = {"daily": 24, "weekly": 168}
 _FILTER_RATING: dict[str, int] = {"useful": 1, "not-useful": -1, "all": 0}
 _DIGEST_GENERATION_STALE_MIN = 10
