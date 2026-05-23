@@ -13,6 +13,7 @@ export interface HuygensItem {
   author: string | null;
   thumbnail_url: string | null;
   media_url: string | null;
+  source_id: string;
   source_name: string;
   source_image_url: string | null;
   published_at: string | null;
@@ -104,6 +105,7 @@ export interface ItemDetail {
   author: string | null;
   media_url: string | null;
   thumbnail_url: string | null;
+  source_id: string;
   source_name: string;
   source_url: string;
   source_image_url: string | null;
@@ -203,14 +205,33 @@ export type ItemFilter = 'all' | 'saved' | 'summarized' | 'scheduled' | 'archive
 export type ItemWindow = 'all' | '24h' | '7d' | '30d';
 
 export async function fetchFilteredItems(opts: {
-  filter?: ItemFilter; window?: ItemWindow; topic?: string; limit?: number;
+  filter?: ItemFilter; window?: ItemWindow; topic?: string;
+  source_id?: string; include_archived?: boolean;
+  limit?: number; offset?: number;
 }): Promise<HuygensItem[]> {
   const p = new URLSearchParams();
   if (opts.filter && opts.filter !== 'all') p.set('filter', opts.filter);
   if (opts.window && opts.window !== 'all') p.set('window', opts.window);
   if (opts.topic) p.set('topic', opts.topic);
+  if (opts.source_id) p.set('source_id', opts.source_id);
+  if (opts.include_archived) p.set('include_archived', 'true');
   p.set('limit', String(opts.limit ?? 100));
+  if (opts.offset) p.set('offset', String(opts.offset));
   const r = await apiFetch(`/api/huygens/items?${p.toString()}`);
+  return r.json();
+}
+
+export interface SourceDetail {
+  id: string;
+  name: string;
+  url: string;
+  kind: 'rss' | 'podcast' | 'youtube';
+  image_url: string | null;
+  item_count: number;
+}
+
+export async function fetchSourceDetail(id: string): Promise<SourceDetail> {
+  const r = await apiFetch(`/api/sources/${id}`);
   return r.json();
 }
 

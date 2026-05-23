@@ -16,9 +16,13 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
+         fetchSourceDetail, SourceDetail,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
 import { MODEL_LABELS as DIGEST_MODEL_LABELS } from './admin_model_constants';
+
+const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
+const useOpenSource = () => React.useContext(OpenSourceContext);
 
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
   article: { label: 'Articles',   icon: FileText },
@@ -61,9 +65,15 @@ const scoreColorClass = (s: number | null | undefined) =>
 const Meta = ({ item }: { item: HuygensItem }) => {
   const score = item.quality_score;
   const scoreColor = scoreColorClass(score);
+  const openSource = useOpenSource();
   return (
     <div className="text-brand-ink/40 mt-3 text-[10px] font-mono uppercase tracking-[0.18em] flex items-center gap-2">
-      <span className="font-medium">{item.source_name}</span>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); openSource?.(item.source_id); }}
+        className="font-medium hover:text-brand-accent transition-colors"
+        title={`Alle items van ${item.source_name}`}
+      >{item.source_name}</button>
       {item.published_at && (<>
         <span className="opacity-30">·</span>
         <span>{new Date(item.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</span>
@@ -393,6 +403,7 @@ const MediaCard = ({ item, format, onOpen, onUpdate, onArchive }: { key?: React.
 
 const ShortCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & CardProps) => {
   const summary = stripHtml(item.description);
+  const openSource = useOpenSource();
   return (
     <motion.article
       onClick={() => onOpen(item.id)}
@@ -401,9 +412,13 @@ const ShortCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & 
     >
       <div className="font-mono text-[10px] uppercase tracking-[0.18em] font-medium text-brand-ink">{item.author ?? item.source_name}</div>
       <p className="font-serif text-[15px] leading-[1.55] text-brand-ink/80 line-clamp-5">{summary}</p>
-      <div className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5">
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); openSource?.(item.source_id); }}
+        className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5 text-left hover:text-brand-accent transition-colors"
+      >
         {item.source_name}
-      </div>
+      </button>
       <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
     </motion.article>
   );
@@ -1545,7 +1560,7 @@ function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; cur
   );
 }
 
-const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
+const ItemDetailView = ({ id, onBack, onOpenSource }: { id: string; onBack: () => void; onOpenSource?: (sourceId: string) => void }) => {
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1674,16 +1689,24 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
           </h1>
           <div className="flex items-center gap-3 mb-10 pb-6 border-b border-brand-ink/10">
             {item.source_image_url ? (
-              <img src={item.source_image_url} alt={item.source_name} className="w-11 h-11 rounded-full object-cover" />
+              <button type="button" onClick={() => onOpenSource?.(item.source_id)} title={`Alle items van ${item.source_name}`}
+                className="shrink-0 hover:opacity-80 transition-opacity">
+                <img src={item.source_image_url} alt={item.source_name} className="w-11 h-11 rounded-full object-cover" />
+              </button>
             ) : (
-              <div className="w-11 h-11 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-sm">
+              <button type="button" onClick={() => onOpenSource?.(item.source_id)} title={`Alle items van ${item.source_name}`}
+                className="w-11 h-11 rounded-full bg-brand-ink/10 flex items-center justify-center font-serif text-brand-ink/45 text-sm hover:bg-brand-ink/20 transition-colors">
                 {initials(item.author ?? item.source_name)}
-              </div>
+              </button>
             )}
             <div>
               <div className="font-serif font-semibold text-[15px] text-brand-ink">{item.author ?? item.source_name}</div>
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-brand-ink/50 mt-0.5">
-                {item.author && <>{item.source_name} · </>}{date}
+                {item.author && (
+                  <button type="button" onClick={() => onOpenSource?.(item.source_id)}
+                    className="hover:text-brand-accent transition-colors">{item.source_name}</button>
+                )}
+                {item.author && <> · </>}{date}
                 <> · <QualityScoreEditor
                   itemId={item.id}
                   score={item.quality_score}
@@ -1722,10 +1745,11 @@ const ItemDetailView = ({ id, onBack }: { id: string; onBack: () => void }) => {
   );
 };
 
-const readUrl = (): { itemId: string | null; topic: string | null; admin: boolean; lessons: boolean } => {
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
+    sourceId: p.get('source'),
     admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
   };
 };
@@ -1976,6 +2000,7 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
 }) {
   const [items, setItems] = useState<HuygensItem[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const openSource = useOpenSource();
   useEffect(() => {
     setItems(null); setErr(null);
     fetchFilteredItems({ filter, window, topic: topicSlug })
@@ -2002,7 +2027,9 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
           {items.map(it => (
             <div key={it.id} onClick={() => onOpen(it.id)}
               className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5 cursor-pointer flex flex-col">
-              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-3">{it.source_name}</div>
+              <button type="button"
+                onClick={(e) => { e.stopPropagation(); openSource?.(it.source_id); }}
+                className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50 mb-3 text-left hover:text-brand-accent transition-colors">{it.source_name}</button>
               <h3 className="font-serif font-semibold text-[18px] text-brand-ink leading-[1.25] line-clamp-3">{it.title}</h3>
               {it.published_at && (
                 <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40 mt-3">
@@ -2015,6 +2042,140 @@ function FilterView({ filter, window, topicSlug, topicName, onOpen }: {
         </div>
       )}
     </>
+  );
+}
+
+const SOURCE_PAGE_SIZE = 30;
+
+const SOURCE_KIND_LABELS: Record<SourceDetail['kind'], string> = {
+  rss: 'Artikel-feed',
+  podcast: 'Podcast',
+  youtube: 'YouTube-kanaal',
+};
+
+function SourceView({ id, onBack, onOpen }: {
+  id: string; onBack: () => void; onOpen: (itemId: string) => void;
+}) {
+  const [source, setSource] = useState<SourceDetail | null>(null);
+  const [items, setItems] = useState<HuygensItem[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [imgFailed, setImgFailed] = useState(false);
+  const currentIdRef = useRef(id);
+
+  useEffect(() => {
+    currentIdRef.current = id;
+    setSource(null); setItems(null); setErr(null); setHasMore(true); setImgFailed(false);
+    let cancelled = false;
+    fetchSourceDetail(id)
+      .then(s => { if (!cancelled) setSource(s); })
+      .catch(e => { if (!cancelled) setErr(e instanceof ApiError ? e.detail : String(e)); });
+    fetchFilteredItems({ source_id: id, include_archived: true, limit: SOURCE_PAGE_SIZE, offset: 0 })
+      .then(fetched => {
+        if (cancelled) return;
+        setItems(fetched);
+        setHasMore(fetched.length === SOURCE_PAGE_SIZE);
+      })
+      .catch(e => { if (!cancelled) setErr(e instanceof ApiError ? e.detail : String(e)); });
+    return () => { cancelled = true; };
+  }, [id]);
+
+  const loadMore = async () => {
+    if (!items || loadingMore || !hasMore) return;
+    setLoadingMore(true);
+    const requestId = id;
+    try {
+      const next = await fetchFilteredItems({
+        source_id: id, include_archived: true,
+        limit: SOURCE_PAGE_SIZE, offset: items.length,
+      });
+      if (currentIdRef.current !== requestId) return;
+      setItems(prev => [...(prev ?? []), ...next]);
+      setHasMore(next.length === SOURCE_PAGE_SIZE);
+    } catch (e) {
+      if (currentIdRef.current === requestId) setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      if (currentIdRef.current === requestId) setLoadingMore(false);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={onBack}
+        className="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-ink/50 hover:text-brand-accent flex items-center gap-2 mb-10">
+        <ArrowLeft size={14} /> Terug
+      </button>
+
+      <header className="flex items-center gap-5 mb-10 pb-8 border-b border-brand-ink/10">
+        {source?.image_url && !imgFailed ? (
+          <img src={source.image_url} alt={source.name} onError={() => setImgFailed(true)}
+            className="w-16 h-16 md:w-20 md:h-20 rounded-2xl object-cover shrink-0" />
+        ) : (
+          <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-brand-ink/10 shrink-0 flex items-center justify-center font-serif text-brand-ink/45 text-lg">
+            {source ? initials(source.name) : ''}
+          </div>
+        )}
+        <div className="min-w-0">
+          <h1 className="font-display font-medium text-3xl md:text-5xl text-brand-ink tracking-[-0.03em] leading-[1.02] min-h-[1em]">
+            {source?.name ?? ' '}
+          </h1>
+          <div className="font-mono text-[11px] uppercase tracking-[0.2em] text-brand-ink/50 mt-2 flex items-center gap-3 flex-wrap">
+            {source && <span>{SOURCE_KIND_LABELS[source.kind] ?? source.kind}</span>}
+            {source && <span className="opacity-30">·</span>}
+            {source && <span>{source.item_count} items</span>}
+            {source && (<>
+              <span className="opacity-30">·</span>
+              <a href={source.url} target="_blank" rel="noreferrer"
+                className="hover:text-brand-accent inline-flex items-center gap-1">
+                <ExternalLink size={11} /> bron
+              </a>
+            </>)}
+          </div>
+        </div>
+      </header>
+
+      {err && <div className="text-red-600 text-sm mb-6">Fout: {err}</div>}
+      {items === null ? (
+        <div className="text-brand-ink/40 italic py-12">Loading…</div>
+      ) : items.length === 0 ? (
+        <div className="text-brand-ink/40 italic py-12">Geen items voor deze source.</div>
+      ) : (
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {items.map(it => (
+              <div key={it.id} onClick={() => onOpen(it.id)}
+                className="text-left p-6 rounded-2xl bg-brand-surface hover:shadow-md transition-all border border-brand-ink/5 cursor-pointer flex flex-col">
+                {it.format && (
+                  <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40 mb-3">{it.format}</div>
+                )}
+                <h3 className="font-serif font-semibold text-[18px] text-brand-ink leading-[1.25] line-clamp-3">{it.title}</h3>
+                {it.published_at && (
+                  <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/40 mt-3">
+                    {new Date(it.published_at).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </div>
+                )}
+                <CardActions item={it} onUpdate={u => setItems(prev => prev?.map(x => x.id === it.id ? { ...x, ...u } : x) ?? prev)} />
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-center mt-12">
+            {hasMore ? (
+              <button onClick={loadMore} disabled={loadingMore}
+                className="px-6 py-3 rounded-full bg-brand-accent text-brand-cream font-mono text-[11px] uppercase tracking-[0.22em] hover:opacity-90 transition disabled:opacity-50 inline-flex items-center gap-2">
+                {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
+                {loadingMore ? 'Laden…' : 'Laad meer'}
+              </button>
+            ) : (
+              <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40">
+                Einde geschiedenis
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -2390,13 +2551,15 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [data, setData] = useState<HuygensTopic | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
+  const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, admin, lessons } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons } = readUrl();
       setItemId(itemId);
+      setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
       if (topic) setActiveSlug(topic);
@@ -2408,10 +2571,12 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const goHome = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('item');
+    url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
     window.history.pushState({}, '', url.toString());
     setItemId(null);
+    setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
     setActiveFilter('all');
@@ -2470,6 +2635,23 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setItemId(null);
   };
 
+  const openSource = (id: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('source', id);
+    url.searchParams.delete('item');
+    window.history.pushState({}, '', url.toString());
+    setSourceId(id);
+    setItemId(null);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const closeSource = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('source');
+    window.history.pushState({}, '', url.toString());
+    setSourceId(null);
+  };
+
   const selectTopic = (slug: string) => {
     setActiveSlug(slug);
     const url = new URL(window.location.href);
@@ -2494,6 +2676,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   }, [activeSlug]);
 
   return (
+    <OpenSourceContext.Provider value={openSource}>
     <div className="min-h-screen relative selection:bg-brand-blue selection:text-brand-cream">
       <div className="fixed inset-0 pointer-events-none z-0 overflow-hidden opacity-40">
         <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[614px] bg-brand-blue/5 rounded-[40%_60%_70%_30%/40%_50%_60%_50%] blur-3xl transform rotate-12" />
@@ -2540,7 +2723,9 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         ) : lessonsView ? (
           <LessonsPage onBack={closeLessons} onOpenItem={openItem} />
         ) : itemId ? (
-          <ItemDetailView id={itemId} onBack={closeItem} />
+          <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource} />
+        ) : sourceId ? (
+          <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
         ) : (
           <>
             <section className="mb-8 space-y-3">
@@ -2619,5 +2804,6 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
 
       {inboxOpen && <InboxModal onClose={() => setInboxOpen(false)} />}
     </div>
+    </OpenSourceContext.Provider>
   );
 }
