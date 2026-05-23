@@ -19,6 +19,7 @@ import os
 import re
 import time
 from datetime import datetime
+from uuid import UUID
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.auth import (
     SESSION_COOKIE, hash_password, verify_password,
@@ -452,6 +453,7 @@ class HuygensItem(BaseModel):
     author: Optional[str]
     thumbnail_url: Optional[str]
     media_url: Optional[str]
+    source_id: str
     source_name: str
     source_image_url: Optional[str]
     published_at: Optional[str]
@@ -487,6 +489,7 @@ class HuygensItemDetail(BaseModel):
     author: Optional[str]
     media_url: Optional[str]
     thumbnail_url: Optional[str]
+    source_id: str
     source_name: str
     source_url: str
     source_image_url: Optional[str]
@@ -561,7 +564,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
             SELECT i.id::text, i.format::text, i.title, i.description, i.summary,
                    i.summary_model,
                    i.transcript, i.author, i.media_url, i.thumbnail_url,
-                   s.name, s.url, s.image_url, i.published_at,
+                   s.id::text, s.name, s.url, s.image_url, i.published_at,
                    COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), '{}') AS topic_names,
                    i.status::text, i.processing_status::text, i.scheduled_for,
                    i.transcript_segments,
@@ -571,7 +574,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
             LEFT JOIN item_topics it ON it.item_id = i.id
             LEFT JOIN topics t ON t.id = it.topic_id
             WHERE i.id = CAST(:iid AS uuid)
-            GROUP BY i.id, s.name, s.url, s.image_url
+            GROUP BY i.id, s.id, s.name, s.url, s.image_url
             """
         ).bindparams(iid=item_id)
     )
@@ -581,7 +584,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
     if not row[1]:
         raise HTTPException(status_code=400, detail="Item has no format")
     queue_pos: Optional[int] = None
-    if row[16] == "queued":
+    if row[17] == "queued":
         qr = await session.exec(sa_text(
             """
             SELECT COUNT(*) + 1 FROM items
@@ -594,17 +597,17 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
     return HuygensItemDetail(
         id=row[0], format=ItemFormat(row[1]), title=row[2],
         description=row[3], summary=row[4], summary_model=row[5],
-        transcript=row[6], transcript_segments=row[18],
+        transcript=row[6], transcript_segments=row[19],
         author=row[7],
         media_url=row[8], thumbnail_url=row[9],
-        source_name=row[10], source_url=row[11], source_image_url=row[12],
-        published_at=str(row[13]) if row[13] else None,
-        topics=list(row[14]),
-        status=ItemStatus(row[15]),
-        processing_status=ProcessingStatus(row[16]),
+        source_id=row[10], source_name=row[11], source_url=row[12], source_image_url=row[13],
+        published_at=str(row[14]) if row[14] else None,
+        topics=list(row[15]),
+        status=ItemStatus(row[16]),
+        processing_status=ProcessingStatus(row[17]),
         queue_position=queue_pos,
-        scheduled_for=str(row[17]) if row[17] else None,
-        quality_score=row[19],
+        scheduled_for=str(row[18]) if row[18] else None,
+        quality_score=row[20],
     )
 
 
@@ -681,11 +684,13 @@ async def list_filtered_items(
     filter: HuygensFilter = Query("all"),
     window: HuygensWindow = Query("all"),
     topic: Optional[str] = Query(None, description="Topic slug to constrain to"),
-    limit: int = Query(100, le=500),
-    offset: int = Query(0),
+    source_id: Optional[UUID] = Query(None, description="Source UUID to constrain to"),
+    include_archived: bool = Query(False, description="Include archived items"),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
     session=Depends(get_async_session),
 ):
-    if filter == "all" and window == "all" and not topic:
+    if filter == "all" and window == "all" and not topic and not source_id:
         raise HTTPException(status_code=400, detail="At least one filter required")
 
     clauses: list[str] = ["s.active = true"]
@@ -704,7 +709,7 @@ async def list_filtered_items(
     elif filter == "inbox":
         clauses.append("s.name = 'Inbox (handmatig)'")
         clauses.append("i.status <> 'archived'::item_status")
-    else:
+    elif not include_archived:
         clauses.append("i.status <> 'archived'::item_status")
 
     if window != "all":
@@ -718,6 +723,10 @@ async def list_filtered_items(
         join_topic = "JOIN item_topics it ON it.item_id = i.id"
         clauses.append("it.topic_id = :tid")
         params["tid"] = topic_row.id
+
+    if source_id:
+        clauses.append("i.source_id = :sid")
+        params["sid"] = source_id
 
     order = "i.scheduled_for ASC" if filter == "scheduled" else "COALESCE(i.published_at, i.created_at) DESC"
     sql = f"""
@@ -735,7 +744,7 @@ async def list_filtered_items(
     sql = f"""
         SELECT i.id::text, i.title, i.description, i.author,
                i.thumbnail_url, i.media_url,
-               s.name, s.image_url, i.published_at, i.scheduled_for,
+               s.id::text, s.name, s.image_url, i.published_at, i.scheduled_for,
                i.format::text, i.status::text, i.processing_status::text,
                (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
                (i.transcript IS NOT NULL AND i.transcript <> '') AS has_transcript,
@@ -744,7 +753,7 @@ async def list_filtered_items(
         JOIN sources s ON s.id = i.source_id
         {join_topic}
         WHERE {" AND ".join(clauses)}
-        GROUP BY i.id, s.name, s.image_url
+        GROUP BY i.id, s.id, s.name, s.image_url
         ORDER BY {order}
         LIMIT :lim OFFSET :off
     """
@@ -754,15 +763,46 @@ async def list_filtered_items(
         HuygensItem(
             id=r[0], title=r[1], description=r[2], author=r[3],
             thumbnail_url=r[4], media_url=r[5],
-            source_name=r[6], source_image_url=r[7],
-            published_at=str(r[8]) if r[8] else None,
-            scheduled_for=str(r[9]) if r[9] else None,
-            format=r[10], status=r[11], processing_status=r[12],
-            has_summary=bool(r[13]), has_transcript=bool(r[14]),
-            quality_score=r[15],
+            source_id=r[6], source_name=r[7], source_image_url=r[8],
+            published_at=str(r[9]) if r[9] else None,
+            scheduled_for=str(r[10]) if r[10] else None,
+            format=r[11], status=r[12], processing_status=r[13],
+            has_summary=bool(r[14]), has_transcript=bool(r[15]),
+            quality_score=r[16],
         )
         for r in rows
     ]
+
+
+# --- Source detail ---
+
+
+class SourceDetail(BaseModel):
+    id: str
+    name: str
+    url: str
+    kind: str
+    image_url: Optional[str]
+    item_count: int
+
+
+@app.get("/sources/{source_id}", response_model=SourceDetail)
+async def get_source_detail(source_id: UUID, session=Depends(get_async_session)):
+    r = await session.exec(sa_text(
+        """
+        SELECT s.id::text, s.name, s.url, s.kind::text, s.image_url,
+               (SELECT COUNT(*) FROM items WHERE source_id = s.id) AS item_count
+        FROM sources s
+        WHERE s.id = :sid
+        """
+    ).bindparams(sid=source_id))
+    row = r.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Source not found")
+    return SourceDetail(
+        id=row[0], name=row[1], url=row[2], kind=row[3],
+        image_url=row[4], item_count=int(row[5]),
+    )
 
 
 # --- Topic digest ---
@@ -2514,7 +2554,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             """
             WITH ranked AS (
               SELECT i.format::text AS fmt, i.id::text AS id, i.title, i.description, i.author,
-                     i.thumbnail_url, i.media_url, s.name AS sname, s.image_url AS simg,
+                     i.thumbnail_url, i.media_url, s.id::text AS sid, s.name AS sname, s.image_url AS simg,
                      i.published_at, i.scheduled_for,
                      i.status::text AS istatus, i.processing_status::text AS pstatus,
                      (i.summary IS NOT NULL AND i.summary <> '') AS has_summary,
@@ -2543,7 +2583,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
                 AND i.status <> 'archived'::item_status
             )
             SELECT fmt, id, title, description, author, thumbnail_url, media_url,
-                   sname, simg, published_at, scheduled_for,
+                   sid, sname, simg, published_at, scheduled_for,
                    istatus, pstatus, has_summary, has_transcript, quality_score
             FROM ranked
             WHERE max_per_rail IS NULL OR rn <= max_per_rail
@@ -2554,13 +2594,14 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
     rows = result.all()
 
     rails: dict[str, List[HuygensItem]] = {f.value: [] for f in ItemFormat}
-    for (fmt, iid, title, desc, author, thumb, media, sname, simg, pub, sched,
+    for (fmt, iid, title, desc, author, thumb, media, sid, sname, simg, pub, sched,
          istatus, pstatus, has_summary, has_transcript, quality_score) in rows:
         if len(rails[fmt]) >= per_rail:
             continue
         rails[fmt].append(HuygensItem(
             id=iid, title=title, description=desc, author=author,
-            thumbnail_url=thumb, media_url=media, source_name=sname,
+            thumbnail_url=thumb, media_url=media,
+            source_id=sid, source_name=sname,
             source_image_url=simg,
             published_at=str(pub) if pub else None,
             scheduled_for=str(sched) if sched else None,
