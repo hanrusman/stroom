@@ -50,8 +50,8 @@ QUEUE_DEPTH_LOG_EVERY_SEC = 60
 # Whisper-medium ~1.6GB piek RAM nodig heeft naast de baseline van andere
 # stacks (n8n, authentik, etc.). MemAvailable uit /proc/meminfo is host-stat,
 # niet cgroup — perfect voor deze use-case.
-TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 2000))
-SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 500))
+TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 500))
+SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 300))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
 # Lange transcripties (podcasts, video's > 10 min) gaan via een cloud-model
@@ -111,6 +111,11 @@ def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
 
 _QUALITY_WEIGHT = float(os.environ.get("QUALITY_HYBRID_QUALITY_WEIGHT", "0.4"))
 _INTEREST_WEIGHT = float(os.environ.get("QUALITY_HYBRID_INTEREST_WEIGHT", "0.6"))
+
+# Quality boost voor huygens ranking: extra seconden per quality punt boven 6
+# Factor 2.0 = 2 dagen extra per punt (86400 * 2 = 172800 seconden)
+_QUALITY_BOOST_FACTOR = float(os.environ.get("QUALITY_BOOST_FACTOR", "2.0"))
+_QUALITY_BOOST_SECONDS = int(_QUALITY_BOOST_FACTOR * 86400)
 
 
 def _calculate_hybrid(quality: Optional[int], interest: Optional[int]) -> Optional[int]:
@@ -2500,9 +2505,10 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
 
-    # Ranking: score = epoch(published_at) + weight * 7d
-    # → weight=10 boost ~70 dagen, weight=1 ~7 dagen. Geen harde override van recency.
+    # Ranking: score = epoch(published_at) + weight * 7d + quality_boost
+    # → weight=10 boost ~70 dagen, weight=1 ~7 dagen. Quality boost: +2d per punt boven 6.
     # Per-source cap via ROW_NUMBER() per source × format.
+    quality_boost_seconds = _QUALITY_BOOST_SECONDS
     result = await session.exec(
         sa_text(
             """
@@ -2517,9 +2523,17 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
                      s.max_per_rail,
                      ROW_NUMBER() OVER (
                        PARTITION BY i.source_id, i.format
-                       ORDER BY (EXTRACT(EPOCH FROM i.published_at) + s.weight * 172800) DESC NULLS LAST
+                       ORDER BY (
+                         EXTRACT(EPOCH FROM i.published_at)
+                         + s.weight * 172800
+                         + GREATEST(0, COALESCE(i.quality_score, 5) - 6) * :qboost
+                       ) DESC NULLS LAST
                      ) AS rn,
-                     (EXTRACT(EPOCH FROM i.published_at) + s.weight * 172800) AS score
+                     (
+                       EXTRACT(EPOCH FROM i.published_at)
+                       + s.weight * 172800
+                       + GREATEST(0, COALESCE(i.quality_score, 5) - 6) * :qboost
+                     ) AS score
               FROM items i
               JOIN item_topics it ON it.item_id = i.id
               JOIN sources s ON s.id = i.source_id
@@ -2535,7 +2549,7 @@ async def huygens_topic(slug: str, per_rail: int = Query(20, le=50),
             WHERE max_per_rail IS NULL OR rn <= max_per_rail
             ORDER BY score DESC NULLS LAST
 """
-        ).bindparams(tid=topic.id)
+        ).bindparams(tid=topic.id, qboost=quality_boost_seconds)
     )
     rows = result.all()
 
@@ -2776,3 +2790,134 @@ async def admin_quality_scorer_extract_keywords(
     tokens = [t for t in tokens if t not in stop]
     top = _Counter(tokens).most_common(req.max_keywords)
     return {"keywords": [{"keyword": k, "score": float(c)} for k, c in top]}
+
+
+# --- TEST: Quality Boost Scoring ---
+
+from pydantic import BaseModel
+
+class QualityBoostTestResponse(BaseModel):
+    topic_slug: str
+    quality_boost_factor: float
+    per_rail: int
+    old_top_items: list[dict]
+    new_top_items: list[dict]
+    quality_distribution: dict[str, int]
+    new_quality_distribution: dict[str, int]
+
+
+@app.get("/admin/test/quality-boost-scoring", response_model=QualityBoostTestResponse)
+async def test_quality_boost_scoring(
+    topic_slug: str = Query(..., description="Topic slug om te testen"),
+    quality_boost_factor: float = Query(2.0, description="Dagen boost per quality punt boven 6"),
+    per_rail: int = Query(20, le=50),
+    session=Depends(get_async_session),
+    user=Depends(require_user)
+):
+    """Vergelijk oude vs nieuwe scoring formule.
+
+    Oude formule: epoch(published_at) + weight * 172800
+    Nieuwe formule: epoch(published_at) + weight * 172800 + max(0, quality-6) * 86400 * boost_factor
+
+    quality_boost_factor bepaalt hoeveel dagen er bij komt per quality punt boven 6.
+    Bij factor=2.0: quality 7 = +2 dagen, quality 8 = +4 dagen, etc.
+    """
+    topic = (await session.exec(select(Topic).where(Topic.slug == topic_slug))).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not found")
+
+    seconds_per_quality_point = 86400 * quality_boost_factor  # dagen -> seconden
+
+    # OUDE SCORING (huidige)
+    old_result = await session.exec(
+        sa_text("""
+            WITH ranked AS (
+              SELECT i.id::text AS id, i.title, s.name AS sname, i.quality_score,
+                     i.published_at, s.weight,
+                     (EXTRACT(EPOCH FROM i.published_at) + s.weight * 172800) AS score
+              FROM items i
+              JOIN item_topics it ON it.item_id = i.id
+              JOIN sources s ON s.id = i.source_id
+              WHERE it.topic_id = :tid
+                AND i.format IS NOT NULL
+                AND s.active = true
+                AND i.status <> 'archived'::item_status
+            )
+            SELECT id, title, sname, quality_score, weight, score, published_at
+            FROM ranked
+            ORDER BY score DESC NULLS LAST
+            LIMIT :limit
+        """).bindparams(tid=topic.id, limit=per_rail * 3)
+    )
+    old_rows = old_result.all()
+
+    # NIEUWE SCORING (met quality boost)
+    new_result = await session.exec(
+        sa_text("""
+            WITH ranked AS (
+              SELECT i.id::text AS id, i.title, s.name AS sname, i.quality_score,
+                     i.published_at, s.weight,
+                     (EXTRACT(EPOCH FROM i.published_at)
+                      + s.weight * 172800
+                      + GREATEST(0, COALESCE(i.quality_score, 5) - 6) * :boost) AS score
+              FROM items i
+              JOIN item_topics it ON it.item_id = i.id
+              JOIN sources s ON s.id = i.source_id
+              WHERE it.topic_id = :tid
+                AND i.format IS NOT NULL
+                AND s.active = true
+                AND i.status <> 'archived'::item_status
+            )
+            SELECT id, title, sname, quality_score, weight, score, published_at
+            FROM ranked
+            ORDER BY score DESC NULLS LAST
+            LIMIT :limit
+        """).bindparams(tid=topic.id, boost=seconds_per_quality_point, limit=per_rail * 3)
+    )
+    new_rows = new_result.all()
+
+    # Formatteer resultaten
+    def format_rows(rows, top_n=per_rail):
+        return [
+            {
+                "rank": idx + 1,
+                "id": r[0],
+                "title": r[1][:60] if r[1] else "",
+                "source": r[2],
+                "quality": r[3],
+                "weight": r[4],
+                "score": round(r[5], 0),
+                "published": str(r[6])[:10] if r[6] else None
+            }
+            for idx, r in enumerate(rows[:top_n])
+        ]
+
+    def count_quality_distribution(rows, top_n=per_rail):
+        dist = {"q5": 0, "q6": 0, "q7": 0, "q8": 0, "q9": 0, "q10": 0, "null": 0}
+        for r in rows[:top_n]:
+            q = r[3]
+            if q is None:
+                dist["null"] += 1
+            elif q <= 5:
+                dist["q5"] += 1
+            elif q == 6:
+                dist["q6"] += 1
+            elif q == 7:
+                dist["q7"] += 1
+            elif q == 8:
+                dist["q8"] += 1
+            elif q == 9:
+                dist["q9"] += 1
+            elif q >= 10:
+                dist["q10"] += 1
+        return dist
+
+    return QualityBoostTestResponse(
+        topic_slug=topic_slug,
+        quality_boost_factor=quality_boost_factor,
+        per_rail=per_rail,
+        old_top_items=format_rows(old_rows),
+        new_top_items=format_rows(new_rows),
+        quality_distribution=count_quality_distribution(old_rows),
+        new_quality_distribution=count_quality_distribution(new_rows)
+    )
