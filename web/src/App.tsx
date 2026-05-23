@@ -16,7 +16,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          fetchMe, login as apiLogin, logout as apiLogout, ApiError,
          submitToInbox, fetchInboxMetadata, fetchInboxTopics,
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
-         fetchSourceDetail, SourceDetail,
+         fetchSourceDetail, SourceDetail, backfillSource,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
 import { MODEL_LABELS as DIGEST_MODEL_LABELS } from './admin_model_constants';
@@ -2060,6 +2060,8 @@ const SOURCE_KIND_LABELS: Record<SourceDetail['kind'], string> = {
   youtube: 'YouTube-kanaal',
 };
 
+const SOURCE_BACKFILL_BATCH = 20;
+
 function SourceView({ id, onBack, onOpen }: {
   id: string; onBack: () => void; onOpen: (itemId: string) => void;
 }) {
@@ -2068,12 +2070,16 @@ function SourceView({ id, onBack, onOpen }: {
   const [err, setErr] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const [feedExhausted, setFeedExhausted] = useState(false);
+  const [backfillMsg, setBackfillMsg] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
   const currentIdRef = useRef(id);
 
   useEffect(() => {
     currentIdRef.current = id;
-    setSource(null); setItems(null); setErr(null); setHasMore(true); setImgFailed(false);
+    setSource(null); setItems(null); setErr(null);
+    setHasMore(true); setFeedExhausted(false); setBackfillMsg(null);
+    setImgFailed(false);
     let cancelled = false;
     fetchSourceDetail(id)
       .then(s => { if (!cancelled) setSource(s); })
@@ -2091,6 +2097,7 @@ function SourceView({ id, onBack, onOpen }: {
   const loadMore = async () => {
     if (!items || loadingMore || !hasMore) return;
     setLoadingMore(true);
+    setBackfillMsg(null);
     const requestId = id;
     try {
       const next = await fetchFilteredItems({
@@ -2100,6 +2107,44 @@ function SourceView({ id, onBack, onOpen }: {
       if (currentIdRef.current !== requestId) return;
       setItems(prev => [...(prev ?? []), ...next]);
       setHasMore(next.length === SOURCE_PAGE_SIZE);
+    } catch (e) {
+      if (currentIdRef.current === requestId) setErr(e instanceof ApiError ? e.detail : String(e));
+    } finally {
+      if (currentIdRef.current === requestId) setLoadingMore(false);
+    }
+  };
+
+  const loadFromFeed = async () => {
+    if (!items || loadingMore || feedExhausted) return;
+    setLoadingMore(true);
+    setBackfillMsg(null);
+    setErr(null);
+    const requestId = id;
+    try {
+      const result = await backfillSource(id, SOURCE_BACKFILL_BATCH);
+      if (currentIdRef.current !== requestId) return;
+      if (result.inserted === 0) {
+        setFeedExhausted(true);
+        setBackfillMsg(`Feed bevat geen oudere items (${result.feed_total} totaal gescand).`);
+        return;
+      }
+      // Confirm the insert immediately so the user sees feedback even if
+      // the follow-up fetch fails.
+      setSource(prev => prev ? { ...prev, item_count: prev.item_count + result.inserted } : prev);
+      setBackfillMsg(`${result.inserted} oudere item${result.inserted === 1 ? '' : 's'} uit feed opgehaald.`);
+      // If backfill returned fewer than requested, or we reached the end of
+      // the feed exactly, the feed is exhausted for further backfills.
+      if (result.inserted < SOURCE_BACKFILL_BATCH || result.checked >= result.feed_total) {
+        setFeedExhausted(true);
+      }
+      // Fetch the newly-inserted older items — they appear after the
+      // current list since they have older published_at.
+      const next = await fetchFilteredItems({
+        source_id: id, include_archived: true,
+        limit: SOURCE_PAGE_SIZE, offset: items.length,
+      });
+      if (currentIdRef.current !== requestId) return;
+      setItems(prev => [...(prev ?? []), ...next]);
     } catch (e) {
       if (currentIdRef.current === requestId) setErr(e instanceof ApiError ? e.detail : String(e));
     } finally {
@@ -2167,16 +2212,27 @@ function SourceView({ id, onBack, onOpen }: {
             ))}
           </div>
 
-          <div className="flex justify-center mt-12">
+          <div className="flex flex-col items-center gap-3 mt-12">
             {hasMore ? (
               <button onClick={loadMore} disabled={loadingMore}
                 className="px-6 py-3 rounded-full bg-brand-accent text-brand-cream font-mono text-[11px] uppercase tracking-[0.22em] hover:opacity-90 transition disabled:opacity-50 inline-flex items-center gap-2">
                 {loadingMore ? <Loader2 size={14} className="animate-spin" /> : null}
                 {loadingMore ? 'Laden…' : 'Laad meer'}
               </button>
+            ) : !feedExhausted ? (
+              <button onClick={loadFromFeed} disabled={loadingMore}
+                className="px-6 py-3 rounded-full bg-brand-surface border border-brand-ink/15 text-brand-ink font-mono text-[11px] uppercase tracking-[0.22em] hover:bg-brand-accent hover:text-brand-cream hover:border-brand-accent transition disabled:opacity-50 inline-flex items-center gap-2">
+                {loadingMore ? <Loader2 size={14} className="animate-spin" /> : <RefreshCw size={12} />}
+                {loadingMore ? `Feed ophalen…` : `Haal ${SOURCE_BACKFILL_BATCH} oudere uit feed`}
+              </button>
             ) : (
               <div className="font-mono text-[10px] uppercase tracking-[0.22em] text-brand-ink/40">
                 Einde geschiedenis
+              </div>
+            )}
+            {backfillMsg && (
+              <div className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">
+                {backfillMsg}
               </div>
             )}
           </div>

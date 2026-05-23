@@ -2001,6 +2001,116 @@ async def admin_refresh_source(source_id: str,
     return {"ok": True, **result}
 
 
+async def _backfill_one(session, src, target_new: int) -> dict:
+    """Parse the full feed and insert up to `target_new` items not yet in DB.
+
+    Unlike _refresh_one which caps at the first 20 feed entries, this iterates
+    every entry — so for feeds that ship the full archive (most podcasts) this
+    pulls older episodes. Stops as soon as `target_new` new items have been
+    inserted; relies on ON CONFLICT DO NOTHING to skip what's already stored.
+    """
+    import feedparser
+    from datetime import datetime, timezone
+
+    # Fetch via httpx so we get a hard timeout (feedparser's default urllib
+    # call can hang on slow podcast hosts).
+    try:
+        resp = await app.state.http_client.get(
+            src.url,
+            headers={"User-Agent": "StroomBot/1.0 (+backfill)"},
+            timeout=30.0, follow_redirects=True,
+        )
+        resp.raise_for_status()
+        feed_bytes = resp.content
+    except Exception as e:
+        return {"inserted": 0, "checked": 0, "feed_total": 0, "error": f"fetch: {e}"}
+
+    feed = await asyncio.get_event_loop().run_in_executor(None, feedparser.parse, feed_bytes)
+    if feed.bozo and not feed.entries:
+        return {"inserted": 0, "checked": 0, "feed_total": 0,
+                "error": str(getattr(feed, "bozo_exception", "unknown"))}
+
+    fmt = KIND_TO_FORMAT.get(src.kind, "article")
+    inserted = 0
+    checked = 0
+    for entry in feed.entries:
+        if inserted >= target_new:
+            break
+        checked += 1
+        ext_id = entry.get("id") or entry.get("link")
+        if not ext_id:
+            continue
+        title = _feed_first_text(entry, "title") or "(untitled)"
+        desc = _feed_first_text(entry, "summary", "description")
+        author = _feed_first_text(entry, "author")
+        published = None
+        st = entry.get("published_parsed") or entry.get("updated_parsed")
+        if st:
+            published = datetime(*st[:6], tzinfo=timezone.utc)
+
+        media = _feed_media_url(entry)
+        thumb = _feed_thumb_url(entry)
+        # Skip og:image scrape during backfill — synchronous and slow.
+
+        r = await session.exec(sa_text(
+            """
+            INSERT INTO items
+                (source_id, external_id, type, format, title, description,
+                 author, media_url, thumbnail_url, published_at,
+                 processing_status, status)
+            VALUES (CAST(:s AS uuid), :e, CAST(:k AS content_kind), CAST(:f AS item_format),
+                    :t, :d, :a, :m, :th, :p, 'ready', 'new')
+            ON CONFLICT (source_id, external_id) DO NOTHING
+            RETURNING id::text
+            """
+        ).bindparams(s=str(src.id), e=ext_id, k=src.kind, f=fmt, t=title, d=desc,
+                     a=author, m=media, th=thumb, p=published))
+        row = r.first()
+        if not row:
+            continue
+        new_item_id = row[0]
+        await session.exec(sa_text(
+            """
+            INSERT INTO item_topics (item_id, topic_id)
+            SELECT CAST(:i AS uuid), st.topic_id
+            FROM source_topics st WHERE st.source_id = CAST(:s AS uuid)
+            """
+        ).bindparams(i=new_item_id, s=str(src.id)))
+        inserted += 1
+
+    return {"inserted": inserted, "checked": checked, "feed_total": len(feed.entries)}
+
+
+class BackfillResult(BaseModel):
+    inserted: int
+    checked: int
+    feed_total: int
+
+
+@app.post("/sources/{source_id}/backfill", response_model=BackfillResult)
+async def backfill_source(source_id: UUID,
+                          count: int = Query(20, ge=1, le=100),
+                          session=Depends(get_async_session),
+                          user=Depends(require_user)):
+    """Fetch the source's feed and insert up to `count` older items not yet in DB.
+
+    Useful for podcasts/feeds that publish their full archive: lets the UI
+    page back beyond what nightly polling has captured.
+    """
+    src = await _admin_source_row(session, str(source_id))
+    result = await _backfill_one(session, src, target_new=count)
+    if "error" in result:
+        # No partial state to commit — _backfill_one returns early on fetch/parse
+        # failure, before any INSERTs run.
+        raise HTTPException(status_code=502, detail=f"Feed error: {result['error']}")
+    await session.commit()
+    return BackfillResult(
+        inserted=result["inserted"],
+        checked=result["checked"],
+        feed_total=result["feed_total"],
+    )
+
+
 REFRESH_THUMB_BACKFILL_LIMIT = 100
 
 

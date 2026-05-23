@@ -235,6 +235,17 @@ export async function fetchSourceDetail(id: string): Promise<SourceDetail> {
   return r.json();
 }
 
+export interface BackfillResult {
+  inserted: number;
+  checked: number;
+  feed_total: number;
+}
+
+export async function backfillSource(id: string, count = 20): Promise<BackfillResult> {
+  const r = await apiFetch(`/api/sources/${id}/backfill?count=${count}`, { method: 'POST' });
+  return r.json();
+}
+
 export interface TopicDigest {
   markdown: string | null;
   item_count: number | null;
