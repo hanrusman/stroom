@@ -205,13 +205,18 @@ async def search_transcripts(
             head = (r[6] or "")[:240].strip()
             if head:
                 snippets = [TranscriptSnippet(text=head + "…")]
+        # Truncate summary to a teaser; full summary is fetchable via
+        # GET /transcripts/{id}. Otherwise response can balloon to >100 KB
+        # for a single search hit (Stroom-summaries can be 30-70 KB markdown).
+        full_summary = r[5] or ""
+        summary_teaser = full_summary[:240].rstrip() + "…" if len(full_summary) > 240 else (full_summary or None)
         hits.append(TranscriptSearchHit(
             id=r[0],
             title=r[1],
             source_name=r[2],
             published_at=r[3].isoformat() if r[3] else None,
             media_url=r[4],
-            summary=r[5],
+            summary=summary_teaser,
             snippets=snippets,
         ))
     return hits
