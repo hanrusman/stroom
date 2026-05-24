@@ -54,57 +54,83 @@ class TranscriptSearchHit(BaseModel):
     snippets: List[TranscriptSnippet]
 
 
+_STOPWORDS = {
+    "de", "het", "een", "en", "of", "in", "op", "aan", "te", "van", "voor",
+    "met", "is", "zijn", "wat", "wie", "hoe", "waar", "die", "dat", "deze",
+    "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "with",
+    "is", "are", "what", "who", "how", "where", "that", "this",
+}
+
+
+def _query_terms(query: str) -> List[str]:
+    """Split query into significant lowercase terms (≥3 chars, no stopwords)."""
+    terms = []
+    for w in query.lower().split():
+        w = "".join(c for c in w if c.isalnum())
+        if len(w) >= 3 and w not in _STOPWORDS:
+            terms.append(w)
+    return terms or [query.strip().lower()]
+
+
 def _extract_snippets(
     transcript: Optional[str],
     segments: Optional[list],
     query: str,
     max_snippets: int = 3,
 ) -> List[TranscriptSnippet]:
-    """Vind tot `max_snippets` fragmenten waar `query` (case-insensitive) in
-    voorkomt. Voorkeur voor `transcript_segments` (timestamped) als die er is;
-    anders substring-extractie met ±120 chars context.
+    """Vind tot `max_snippets` fragmenten die zo veel mogelijk van de
+    significante query-woorden bevatten. Voorkeur voor `transcript_segments`
+    (timestamped) als die er zijn; anders substring-extractie rond de
+    longest matching term.
     """
-    q = query.strip().lower()
-    if not q:
+    terms = _query_terms(query)
+    if not terms:
         return []
 
-    out: List[TranscriptSnippet] = []
-
+    # 1) Score segments by how many distinct terms they contain.
     if segments:
+        scored = []
         for seg in segments:
-            if len(out) >= max_snippets:
-                break
             text = (seg or {}).get("text") or ""
-            if q in text.lower():
-                out.append(TranscriptSnippet(
-                    text=text.strip(),
-                    start_s=seg.get("start"),
-                    end_s=seg.get("end"),
-                ))
+            lower = text.lower()
+            hits = sum(1 for t in terms if t in lower)
+            if hits:
+                scored.append((hits, seg, text))
+        # Sort: most-matching first, ties broken by earliest start.
+        scored.sort(key=lambda s: (-s[0], (s[1] or {}).get("start") or 0))
+        out: List[TranscriptSnippet] = []
+        for _, seg, text in scored[:max_snippets]:
+            out.append(TranscriptSnippet(
+                text=text.strip(),
+                start_s=seg.get("start"),
+                end_s=seg.get("end"),
+            ))
         if out:
             return out
 
-    # Fallback: substring-extractie op de volle transcript (artikelen,
-    # podcasts zonder segments, of segments die geen match hadden).
+    # 2) Fallback: substring-extractie op de volle transcript. Pak de longest
+    # term (meest specifieke) en zoek alle voorkomens.
     text = transcript or ""
     if not text:
-        return out
+        return []
+    primary = max(terms, key=len)
     lower = text.lower()
+    out2: List[TranscriptSnippet] = []
     pos = 0
-    while len(out) < max_snippets:
-        idx = lower.find(q, pos)
+    while len(out2) < max_snippets:
+        idx = lower.find(primary, pos)
         if idx < 0:
             break
         start = max(0, idx - 120)
-        end = min(len(text), idx + len(q) + 200)
+        end = min(len(text), idx + len(primary) + 200)
         snippet = text[start:end].strip()
         if start > 0:
             snippet = "…" + snippet
         if end < len(text):
             snippet = snippet + "…"
-        out.append(TranscriptSnippet(text=snippet))
+        out2.append(TranscriptSnippet(text=snippet))
         pos = end
-    return out
+    return out2
 
 
 # Raw SQL met expliciete kolommen + ::text casts. Stroom's Item-model heeft
