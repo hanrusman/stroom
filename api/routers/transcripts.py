@@ -141,18 +141,22 @@ def _extract_snippets(
 
 @router.get("/transcripts", response_model=List[TranscriptSummary])
 async def list_transcripts(
-    search: Optional[str] = Query(None),
+    search: Optional[str] = Query(None, description="Substring filter op title (ILIKE)."),
+    source: Optional[str] = Query(None, description="Substring filter op source name (ILIKE)."),
     limit: int = Query(50, le=200),
     offset: int = Query(0),
     include_archived: bool = Query(False),
     session=Depends(get_async_session),
 ):
-    """List items met niet-lege transcript voor samenvat-lab."""
+    """List items met niet-lege transcript voor samenvat-lab en Okavango."""
     clauses = ["i.transcript IS NOT NULL", "i.transcript <> ''"]
     params: dict = {"lim": limit, "off": offset}
     if search:
         clauses.append("i.title ILIKE :search")
         params["search"] = f"%{search}%"
+    if source:
+        clauses.append("s.name ILIKE :source")
+        params["source"] = f"%{source}%"
     if not include_archived:
         clauses.append("i.status <> 'archived'::item_status")
 
