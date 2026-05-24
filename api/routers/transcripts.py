@@ -38,6 +38,75 @@ class TranscriptDetail(BaseModel):
     summary_generated_at: Optional[str]
 
 
+class TranscriptSnippet(BaseModel):
+    text: str
+    start_s: Optional[float] = None  # seconds from start, if from segment
+    end_s: Optional[float] = None
+
+
+class TranscriptSearchHit(BaseModel):
+    id: str
+    title: str
+    source_name: str
+    published_at: Optional[str]
+    media_url: Optional[str]
+    summary: Optional[str]
+    snippets: List[TranscriptSnippet]
+
+
+def _extract_snippets(
+    transcript: Optional[str],
+    segments: Optional[list],
+    query: str,
+    max_snippets: int = 3,
+) -> List[TranscriptSnippet]:
+    """Vind tot `max_snippets` fragmenten waar `query` (case-insensitive) in
+    voorkomt. Voorkeur voor `transcript_segments` (timestamped) als die er is;
+    anders substring-extractie met ±120 chars context.
+    """
+    q = query.strip().lower()
+    if not q:
+        return []
+
+    out: List[TranscriptSnippet] = []
+
+    if segments:
+        for seg in segments:
+            if len(out) >= max_snippets:
+                break
+            text = (seg or {}).get("text") or ""
+            if q in text.lower():
+                out.append(TranscriptSnippet(
+                    text=text.strip(),
+                    start_s=seg.get("start"),
+                    end_s=seg.get("end"),
+                ))
+        if out:
+            return out
+
+    # Fallback: substring-extractie op de volle transcript (artikelen,
+    # podcasts zonder segments, of segments die geen match hadden).
+    text = transcript or ""
+    if not text:
+        return out
+    lower = text.lower()
+    pos = 0
+    while len(out) < max_snippets:
+        idx = lower.find(q, pos)
+        if idx < 0:
+            break
+        start = max(0, idx - 120)
+        end = min(len(text), idx + len(q) + 200)
+        snippet = text[start:end].strip()
+        if start > 0:
+            snippet = "…" + snippet
+        if end < len(text):
+            snippet = snippet + "…"
+        out.append(TranscriptSnippet(text=snippet))
+        pos = end
+    return out
+
+
 # Raw SQL met expliciete kolommen + ::text casts. Stroom's Item-model heeft
 # een bekende enum-deserialisatie-bug (ContentKind: DB-waarde 'rss', enum-
 # member 'RSS') die `select(Item)` doet falen — daarom raw SQL net als
@@ -90,6 +159,62 @@ async def list_transcripts(
         )
         for r in rows
     ]
+
+
+@router.get("/internal/transcripts/search", response_model=List[TranscriptSearchHit])
+async def search_transcripts(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = Query(5, ge=1, le=20),
+    session=Depends(get_async_session),
+):
+    """Machine-to-machine FTS over transcript-corpus, met snippet-extractie.
+
+    Gebruikt de bestaande `search_tsv` GIN-index (gegenereerde kolom over
+    title+summary+transcript+description). Per hit max 3 snippets — bij
+    voorkeur timestamped segments, anders ±120 chars context rond elke match.
+
+    Auth via internal-token middleware (prefix `/internal/`). Bedoeld voor
+    Okavango's `search_stroom_transcripts`-tool.
+    """
+    sql = sa_text("""
+        SELECT i.id::text,
+               i.title,
+               s.name AS source_name,
+               i.published_at,
+               i.media_url,
+               i.summary,
+               i.transcript,
+               i.transcript_segments,
+               ts_rank(i.search_tsv, plainto_tsquery('simple', :q)) AS rank
+        FROM items i
+        JOIN sources s ON s.id = i.source_id
+        WHERE i.transcript IS NOT NULL
+          AND i.transcript <> ''
+          AND i.search_tsv @@ plainto_tsquery('simple', :q)
+        ORDER BY rank DESC, i.published_at DESC NULLS LAST
+        LIMIT :lim
+    """).bindparams(q=q, lim=limit)
+    rows = (await session.exec(sql)).all()
+
+    hits: List[TranscriptSearchHit] = []
+    for r in rows:
+        snippets = _extract_snippets(r[6], r[7], q)
+        if not snippets:
+            # Match was alleen op title/summary/description — fallback naar
+            # de eerste 240 chars van de transcript zodat de LLM tóch context heeft.
+            head = (r[6] or "")[:240].strip()
+            if head:
+                snippets = [TranscriptSnippet(text=head + "…")]
+        hits.append(TranscriptSearchHit(
+            id=r[0],
+            title=r[1],
+            source_name=r[2],
+            published_at=r[3].isoformat() if r[3] else None,
+            media_url=r[4],
+            summary=r[5],
+            snippets=snippets,
+        ))
+    return hits
 
 
 @router.get("/transcripts/{item_id}", response_model=TranscriptDetail)
