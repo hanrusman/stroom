@@ -8,7 +8,7 @@ from pipeline.digest_model_map import resolve_model
 
 
 QUALITY_LLM_MODEL = "cloud-kimi"
-QUALITY_LLM_TIMEOUT_SEC = 20.0
+QUALITY_LLM_TIMEOUT_SEC = 60.0
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-small"
 CENTROID_PATH = Path("/data/centroid.npz")
 EMBEDDING_SIM_LOW = 0.83
