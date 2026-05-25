@@ -132,22 +132,35 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
   if (isEditing) {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+        <div className="bg-brand-cream rounded-lg shadow-xl max-w-md w-full p-6">
           <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
 
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Score (1-10)</label>
-              <select
-                value={newScore ?? ''}
-                onChange={(e) => setNewScore(e.target.value === '' ? null : parseInt(e.target.value, 10))}
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink"
-              >
-                <option value="">— Geen score —</option>
+              <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
+              <div className="grid grid-cols-10 gap-1">
                 {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
-                  <option key={n} value={n}>{n}/10</option>
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => setNewScore(n)}
+                    className={`py-2 text-sm font-medium rounded transition-colors ${
+                      newScore === n
+                        ? 'bg-brand-accent text-white'
+                        : 'bg-brand-surface text-brand-ink hover:bg-brand-surface-low'
+                    }`}
+                  >
+                    {n}
+                  </button>
                 ))}
-              </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => setNewScore(null)}
+                className={`mt-1 text-xs transition-colors ${newScore === null ? 'text-brand-ink/70 font-medium' : 'text-brand-ink/30 hover:text-brand-ink/50'}`}
+              >
+                Geen score
+              </button>
             </div>
 
             <div>
@@ -155,53 +168,47 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
               <select
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink"
+                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream"
               >
                 {Object.entries(reasonLabels).map(([key, label]) => (
                   <option key={key} value={key}>{label}</option>
                 ))}
               </select>
-            </div>
-
-            {reason === 'personal_interest' && title && (
-              <div className="bg-amber-50 border border-amber-200 rounded p-3">
-                <p className="text-sm text-amber-800 mb-2">
-                  Ontdek waarom dit item interessant is voor jou
-                </p>
+              {reason === 'personal_interest' && title && (
                 <button
                   onClick={() => setShowInterestLearner(true)}
-                  className="text-sm px-3 py-1.5 bg-amber-500 text-white rounded hover:bg-amber-600 transition-colors flex items-center gap-1"
+                  className="mt-1.5 text-xs text-brand-accent hover:underline flex items-center gap-1"
                 >
-                  <span>Ontdek interesses</span>
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  Ontdek je interesses voor dit item
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
                 </button>
-              </div>
-            )}
+              )}
+            </div>
 
             <div>
               <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
               <textarea
                 value={note}
                 onChange={(e) => setNote(e.target.value)}
-                placeholder="Waarom deze score?"
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink text-sm"
+                placeholder="Aanvullende context..."
+                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream text-sm"
                 rows={3}
               />
             </div>
           </div>
 
-          <div className="flex gap-3 mt-6">
+          <div className="flex items-center justify-end gap-3 mt-6">
             <button
               onClick={handleCancel}
               disabled={busy}
-              className="flex-1 px-4 py-2 border border-brand-ink/20 rounded text-brand-ink hover:bg-brand-surface transition-colors"
+              className="px-4 py-2 text-sm text-brand-ink/60 hover:text-brand-ink transition-colors"
             >
               Annuleren
             </button>
             <button
               onClick={handleSave}
               disabled={busy || newScore === null}
-              className="flex-1 px-4 py-2 bg-brand-accent text-white rounded hover:opacity-90 transition-colors disabled:opacity-50"
+              className="px-5 py-2 bg-brand-accent text-white rounded text-sm font-medium hover:opacity-90 transition-colors disabled:opacity-50"
             >
               {busy ? 'Opslaan...' : 'Opslaan'}
             </button>
