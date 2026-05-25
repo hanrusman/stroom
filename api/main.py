@@ -2747,6 +2747,26 @@ class QualityBackfillResponse(BaseModel):
     error: Optional[str] = None
 
 
+async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> None:
+    """Background worker: score items en sla op. Eigen session per run."""
+    from core.db import async_session_maker
+    scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
+    if not scores_by_id:
+        print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
+        return
+    async with async_session_maker() as session:
+        for item_id, score in scores_by_id.items():
+            await session.exec(sa_text("""
+                UPDATE items
+                SET quality_score = :score,
+                    quality_score_reason = 'auto',
+                    quality_score_updated_at = NOW()
+                WHERE id = CAST(:id AS uuid)
+            """).bindparams(score=score, id=item_id))
+        await session.commit()
+    print(f"[quality-backfill] klaar: {len(scores_by_id)}/{len(items_for_scoring)} gescored", flush=True)
+
+
 @app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
 async def admin_quality_backfill(
     request: Request,
@@ -2754,14 +2774,8 @@ async def admin_quality_backfill(
     background_tasks: BackgroundTasks,
     session=Depends(get_async_session)
 ):
-    """Batch score items using quality-scorer service.
-
-    If only_null=True (default), only processes items without a quality score.
-    Otherwise processes items with summary but no/any quality score.
-
-    This runs as a background task to avoid timeout issues.
-    """
-    # Get items to process
+    """Batch score items using quality-scorer service. Retourneert direct;
+    scoring en DB-updates lopen als background task."""
     where_clause = "quality_score IS NULL" if body.only_null else "1=1"
     r = await session.exec(sa_text(f"""
         SELECT i.id::text, i.title, i.summary, i.transcript, i.description
@@ -2777,56 +2791,23 @@ async def admin_quality_backfill(
     if not items:
         return QualityBackfillResponse(processed=0, updated=0)
 
-    # Prepare items for batch scoring
     items_for_scoring = []
     for row in items:
         item_id, title, summary, transcript, description = row
         text = summary or transcript or description or ""
         if text:
-            items_for_scoring.append({
-                "id": item_id,
-                "text": text[:8000],
-                "title": title
-            })
+            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title})
 
     if not items_for_scoring:
         return QualityBackfillResponse(processed=len(items), updated=0)
 
-    # Call quality-scorer batch endpoint
-    scores_by_id = await _score_batch_with_quality_scorer(
-        request.app.state.http_client,
-        items_for_scoring
-    )
-
-    if not scores_by_id:
-        return QualityBackfillResponse(
-            processed=len(items),
-            updated=0,
-            error="Quality scorer returned no results"
-        )
-
-    # Update items with scores
-    updated_count = 0
-    total_score = 0
-    for item_id, score in scores_by_id.items():
-        await session.exec(sa_text("""
-            UPDATE items
-            SET quality_score = :score,
-                quality_score_reason = 'auto',
-                quality_score_updated_at = NOW()
-            WHERE id = CAST(:id AS uuid)
-        """).bindparams(score=score, id=item_id))
-        updated_count += 1
-        total_score += score
-
-    await session.commit()
-
-    avg_score = total_score / updated_count if updated_count > 0 else None
+    background_tasks.add_task(_run_quality_backfill, items_for_scoring, request.app.state.http_client)
+    print(f"[quality-backfill] gestart voor {len(items_for_scoring)} items", flush=True)
 
     return QualityBackfillResponse(
         processed=len(items),
-        updated=updated_count,
-        avg_score=avg_score
+        updated=0,
+        avg_score=None
     )
 
 
