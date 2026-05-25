@@ -1567,7 +1567,7 @@ function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; cur
   );
 }
 
-const ItemDetailView = ({ id, onBack, onOpenSource }: { id: string; onBack: () => void; onOpenSource?: (sourceId: string) => void }) => {
+const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; onBack: () => void; onArchive?: () => void; onOpenSource?: (sourceId: string) => void }) => {
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1677,7 +1677,7 @@ const ItemDetailView = ({ id, onBack, onOpenSource }: { id: string; onBack: () =
           <QuietAction icon={Archive} label="Archive" active={item.status === 'archived'} busy={busy === 'archived'} onClick={async () => {
             const wasArchived = item.status === 'archived';
             await toggle('archived');
-            if (!wasArchived) onBack();
+            if (!wasArchived) { onArchive?.(); onBack(); }
           }} />
         </div>
       </div>
@@ -2793,7 +2793,8 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         ) : lessonsView ? (
           <LessonsPage onBack={closeLessons} onOpenItem={openItem} />
         ) : itemId ? (
-          <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource} />
+          <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource}
+            onArchive={() => setData(d => d ? { ...d, rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== itemId) })) } : d)} />
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
         ) : (
