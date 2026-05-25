@@ -297,6 +297,7 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/transcribe-videos",
     "/admin/cron/summarize-articles",
     "/admin/cron/digest-topics",
+    "/admin/quality-backfill",
 )
 # Paden die altijd via internal-token auth gaan (geen session-fallback).
 # samenvat-lab praat hier machine-to-machine met Stroom, Okavango leest hier
