@@ -2752,8 +2752,7 @@ async def admin_quality_backfill(
     request: Request,
     body: QualityBackfillRequest,
     background_tasks: BackgroundTasks,
-    session=Depends(get_async_session),
-    user=Depends(require_user)
+    session=Depends(get_async_session)
 ):
     """Batch score items using quality-scorer service.
 
