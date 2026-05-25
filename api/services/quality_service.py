@@ -45,11 +45,17 @@ class QualityService:
         resolve_model() naar de echte LiteLLM-alias vertaald."""
         resolved = resolve_model(model or QUALITY_LLM_MODEL)
         system_prompt = (
-            "Je bent een kwaliteitsbeoordelaar. Geef een score 1-10 voor de inhoudelijke kwaliteit van de tekst. "
-            "Schaal: 1=spam/oppervlakkig, 5=gemiddeld, 10=uitstekend/diepgaand. De meeste content scoort 4-6. "
-            "Output ALLEEN het cijfer (1-10). Geen uitleg, geen markdown, geen JSON, geen intro."
+            "You are a content quality rater. Score the intellectual quality of the text on a 1-10 scale. "
+            "Use the full range: "
+            "1-2=spam, clickbait, or pure advertisement; "
+            "3-4=shallow overview, obvious points, low signal; "
+            "5-6=decent but unremarkable, standard trade-press level; "
+            "7-8=well-argued, specific insights, worth reading; "
+            "9-10=exceptional depth, original analysis, or rare expertise. "
+            "Be discriminating — reward genuine depth, penalise vagueness. "
+            "Output ONLY the single digit or '10'. No explanation, no markdown."
         )
-        user_prompt = f"Titel: {title or 'Geen titel'}\n\nTekst:\n{text[:8000]}"
+        user_prompt = f"Title: {title or 'No title'}\n\nText:\n{text[:8000]}"
         try:
             response = await llm_service.call_llm(
                 model=resolved,
