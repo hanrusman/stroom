@@ -61,7 +61,8 @@ class QualityService:
                 model=resolved,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.1,
-                timeout=QUALITY_LLM_TIMEOUT_SEC
+                timeout=QUALITY_LLM_TIMEOUT_SEC,
+                max_tokens=16000,
             )
             match = re.search(r"\b([1-9]|10)\b", response.strip())
             if match:

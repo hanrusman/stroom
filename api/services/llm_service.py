@@ -18,12 +18,15 @@ class LLMService:
         temperature: float = 0.7,
         response_format: str = "text",
         timeout: float = 180.0,
+        max_tokens: int | None = None,
     ):
         payload = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
         }
+        if max_tokens is not None:
+            payload["max_tokens"] = max_tokens
         if response_format == "json_object":
             payload["response_format"] = {"type": "json_object"}
 
@@ -40,7 +43,12 @@ class LLMService:
                 detail=f"LiteLLM error: {response.text}",
             )
 
-        content = response.json()["choices"][0]["message"].get("content")
+        msg = response.json()["choices"][0]["message"]
+        content = msg.get("content") or ""
+        if not content:
+            # Reasoning models (Kimi K2.5, Qwen3) verbruiken soms alle tokens aan
+            # <think>-traces en leveren geen content. Val terug op reasoning_content.
+            content = msg.get("reasoning_content") or msg.get("reasoning") or ""
         if not content:
             raise HTTPException(
                 status_code=502,
