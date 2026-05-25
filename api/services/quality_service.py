@@ -7,7 +7,7 @@ from services.llm_service import LLMService
 from pipeline.digest_model_map import resolve_model
 
 
-QUALITY_LLM_MODEL = "cloud-kimi"
+QUALITY_LLM_MODEL = "cloud-gpt-120b"
 QUALITY_LLM_TIMEOUT_SEC = 60.0
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-small"
 CENTROID_PATH = Path("/data/centroid.npz")
@@ -62,7 +62,6 @@ class QualityService:
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.1,
                 timeout=QUALITY_LLM_TIMEOUT_SEC,
-                max_tokens=16000,
             )
             match = re.search(r"\b([1-9]|10)\b", response.strip())
             if match:
