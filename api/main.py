@@ -2769,6 +2769,7 @@ async def admin_quality_backfill(
         WHERE {where_clause}
         AND (i.summary IS NOT NULL OR i.transcript IS NOT NULL)
         AND i.summary <> ''
+        ORDER BY i.created_at DESC
         LIMIT {body.limit}
     """))
     items = r.all()
