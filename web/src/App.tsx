@@ -1780,7 +1780,7 @@ const LoginScreen = ({ onLoggedIn }: { onLoggedIn: (u: User) => void }) => {
       <form onSubmit={submit}
         className="w-full max-w-sm bg-brand-surface/80 backdrop-blur rounded-3xl p-10 shadow-sm border border-brand-ink/10">
         <div className="flex items-center gap-3 mb-8">
-          <img src="/logo.png" alt="Stroom" className="w-10 h-10 rounded-lg object-cover" />
+          <img src="/logo.png" alt="Stroom" className="w-11 h-11 rounded-lg object-cover" />
           <span className="font-display italic font-light text-brand-ink text-2xl tracking-[-0.02em]">Stroom</span>
         </div>
         <label className="block mb-4">
