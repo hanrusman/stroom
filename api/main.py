@@ -239,10 +239,15 @@ async def lifespan(app: FastAPI):
     from services.topics_service import TopicsService
     app.state.quality_service = QualityService()
     app.state.topics_service = TopicsService(Path("/data/topics_config.json"))
-    try:
-        await asyncio.to_thread(app.state.quality_service.load)
-    except Exception as e:
-        print(f"[lifespan] QualityService.load() faalde, scoring werkt degraded: {e}",
+    if os.environ.get("QUALITY_EMBEDDING_ENABLED", "true").lower() in ("true", "1", "yes"):
+        try:
+            await asyncio.to_thread(app.state.quality_service.load)
+        except Exception as e:
+            print(f"[lifespan] QualityService.load() faalde, scoring werkt degraded: {e}",
+                  flush=True)
+    else:
+        print("[lifespan] QualityService.load() overgeslagen "
+              "(QUALITY_EMBEDDING_ENABLED=false) — interest-score geeft None terug",
               flush=True)
 
     from core.db import async_session_maker
