@@ -2234,25 +2234,42 @@ async def admin_refresh_all(background_tasks: BackgroundTasks,
 CRON_WEIGHT_MIN = 5
 CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
 CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
-CRON_STUCK_MIN = 5  # liveness window: no heartbeat from samenvat-agent for N min → stuck
+CRON_STUCK_ACTIVE_MIN = 5   # heartbeat liveness window voor actief-werkende items
+CRON_STUCK_QUEUED_MIN = 60  # max wachttijd in queue (queued/*_queued) voor er iets is misgegaan
 CRON_NIGHTLY_HOURS = 24 * 7  # nightly kijkt 7 dagen terug — vangnet voor items die door piek/restart gemist zijn
 
 
 async def _cron_unstuck(session) -> int:
-    """Reset items that have been stuck in queues/processing too long."""
-    # Reset items stuck in processing queues
-    r = await session.exec(sa_text(f"""
+    """Reset items stuck in queues/processing.
+
+    Onderscheid actief-bezig (meet op heartbeat, kort venster) van wachten
+    in queue (meet op queued_at, langer venster). Zonder dat onderscheid
+    zou normale queue-wachttijd bij semaphore=1 + lange podcasts false-
+    positive 'stuck' geven."""
+    # Actief-bezig items: liveness-check via heartbeat
+    r_active = await session.exec(sa_text(f"""
         UPDATE items SET
           processing_status = 'failed'::processing_status,
-          processing_error = 'stuck > {CRON_STUCK_MIN} min — auto-reset by cron'
+          processing_error = 'no heartbeat > {CRON_STUCK_ACTIVE_MIN} min — auto-reset by cron'
+        WHERE processing_status IN
+              ('transcribing'::processing_status, 'summarizing'::processing_status)
+          AND queued_at IS NOT NULL
+          AND COALESCE(last_progress_at, queued_at) < now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
+    """))
+    n_active = r_active.rowcount or 0
+
+    # In-queue items: meet op queued_at met langer venster
+    r_queued = await session.exec(sa_text(f"""
+        UPDATE items SET
+          processing_status = 'failed'::processing_status,
+          processing_error = 'queue wait > {CRON_STUCK_QUEUED_MIN} min — auto-reset by cron'
         WHERE processing_status IN
               ('queued'::processing_status, 'transcribe_queued'::processing_status,
-               'summarize_queued'::processing_status, 'transcribing'::processing_status,
-               'summarizing'::processing_status)
+               'summarize_queued'::processing_status)
           AND queued_at IS NOT NULL
-          AND COALESCE(last_progress_at, queued_at) < now() - interval '{CRON_STUCK_MIN} minutes'
+          AND queued_at < now() - interval '{CRON_STUCK_QUEUED_MIN} minutes'
     """))
-    n = r.rowcount or 0
+    n = n_active + (r_queued.rowcount or 0)
 
     # Reset topic digests stuck in queue (worker crasht voordat generatie begint)
     # Dit kan gebeuren als de API herstart terwijl een digest in de wachtrij staat
