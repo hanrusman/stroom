@@ -292,6 +292,7 @@ _PUBLIC_PATHS = {"/", "/health", "/openapi.json", "/docs", "/redoc",
                  "/auth/login", "/auth/me", "/auth/logout"}
 _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/transcribe-callback",
+    "/heartbeat",
     "/admin/cron/nightly",
     "/admin/cron/transcribe-podcasts",
     "/admin/cron/transcribe-videos",
@@ -1336,6 +1337,18 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
     return await huygens_item(item_id, session)
 
 
+@app.post("/huygens/items/{item_id}/heartbeat")
+async def heartbeat(item_id: str, session=Depends(get_async_session)):
+    """Liveness-ping van samenvat-agent tijdens lange transcribes.
+    Update last_progress_at zodat _cron_unstuck dit item NIET reset
+    zolang er progress is. Geen logging — komt elke 30s per actief item."""
+    await session.exec(sa_text(
+        "UPDATE items SET last_progress_at = now() WHERE id = CAST(:i AS uuid)"
+    ).bindparams(i=item_id))
+    await session.commit()
+    return {"ok": True}
+
+
 # --- Item Topics ---
 
 class AddItemTopicRequest(BaseModel):
@@ -2198,7 +2211,7 @@ async def admin_refresh_all(background_tasks: BackgroundTasks,
 CRON_WEIGHT_MIN = 5
 CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
 CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
-CRON_STUCK_MIN = 30  # items in queued/transcribing/summarizing > N min → reset to failed
+CRON_STUCK_MIN = 5  # liveness window: no heartbeat from samenvat-agent for N min → stuck
 CRON_NIGHTLY_HOURS = 24  # nightly kijkt 24u terug (niet meer)
 
 
@@ -2214,7 +2227,7 @@ async def _cron_unstuck(session) -> int:
                'summarize_queued'::processing_status, 'transcribing'::processing_status,
                'summarizing'::processing_status)
           AND queued_at IS NOT NULL
-          AND queued_at < now() - interval '{CRON_STUCK_MIN} minutes'
+          AND COALESCE(last_progress_at, queued_at) < now() - interval '{CRON_STUCK_MIN} minutes'
     """))
     n = r.rowcount or 0
 
