@@ -2235,7 +2235,7 @@ CRON_WEIGHT_MIN = 5
 CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
 CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
 CRON_STUCK_MIN = 5  # liveness window: no heartbeat from samenvat-agent for N min → stuck
-CRON_NIGHTLY_HOURS = 24  # nightly kijkt 24u terug (niet meer)
+CRON_NIGHTLY_HOURS = 24 * 7  # nightly kijkt 7 dagen terug — vangnet voor items die door piek/restart gemist zijn
 
 
 async def _cron_unstuck(session) -> int:
