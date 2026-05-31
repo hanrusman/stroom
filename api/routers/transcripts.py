@@ -148,7 +148,7 @@ async def list_transcripts(
     include_archived: bool = Query(False),
     session=Depends(get_async_session),
 ):
-    """List items met niet-lege transcript voor samenvat-lab en Okavango."""
+    """List items with a non-empty transcript (internal corpus consumer)."""
     clauses = ["i.transcript IS NOT NULL", "i.transcript <> ''"]
     params: dict = {"lim": limit, "off": offset}
     if search:
@@ -203,8 +203,8 @@ async def search_transcripts(
     title+summary+transcript+description). Per hit max 3 snippets — bij
     voorkeur timestamped segments, anders ±120 chars context rond elke match.
 
-    Auth via internal-token middleware (prefix `/internal/`). Bedoeld voor
-    Okavango's `search_stroom_transcripts`-tool.
+    Auth via internal-token middleware (prefix `/internal/`). Intended for
+    machine-to-machine consumers that need to grep the transcript corpus.
     """
     sql = sa_text("""
         SELECT i.id::text,

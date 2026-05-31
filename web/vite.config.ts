@@ -19,7 +19,12 @@ export default defineConfig(({mode}) => {
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== "true",
-      allowedHosts: ['stroom.c4w.nl', 'localhost', '10.100.0.252'],
+      // Comma-separated hostnames the dev server accepts. Add your own public
+      // hostname via VITE_ALLOWED_HOSTS=foo.example.com,bar.example.com.
+      allowedHosts: [
+        'localhost',
+        ...((env.VITE_ALLOWED_HOSTS || '').split(',').map(h => h.trim()).filter(Boolean)),
+      ],
       proxy: { "/api": { target: "http://127.0.0.1:8100", changeOrigin: true, rewrite: (p) => p.replace(/^\/api/, "") } },
     },
   };

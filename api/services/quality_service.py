@@ -7,8 +7,8 @@ from services.llm_service import LLMService
 from pipeline.digest_model_map import resolve_model
 
 
-QUALITY_LLM_MODEL = "cloud-kimi"
-QUALITY_LLM_TIMEOUT_SEC = 20.0
+QUALITY_LLM_MODEL = "cloud-gpt-120b"
+QUALITY_LLM_TIMEOUT_SEC = 60.0
 EMBED_MODEL_NAME = "intfloat/multilingual-e5-small"
 CENTROID_PATH = Path("/data/centroid.npz")
 EMBEDDING_SIM_LOW = 0.83
@@ -45,17 +45,23 @@ class QualityService:
         resolve_model() naar de echte LiteLLM-alias vertaald."""
         resolved = resolve_model(model or QUALITY_LLM_MODEL)
         system_prompt = (
-            "Je bent een kwaliteitsbeoordelaar. Geef een score 1-10 voor de inhoudelijke kwaliteit van de tekst. "
-            "Schaal: 1=spam/oppervlakkig, 5=gemiddeld, 10=uitstekend/diepgaand. De meeste content scoort 4-6. "
-            "Output ALLEEN het cijfer (1-10). Geen uitleg, geen markdown, geen JSON, geen intro."
+            "You are a content quality rater. Score the intellectual quality of the text on a 1-10 scale. "
+            "Use the full range: "
+            "1-2=spam, clickbait, or pure advertisement; "
+            "3-4=shallow overview, obvious points, low signal; "
+            "5-6=decent but unremarkable, standard trade-press level; "
+            "7-8=well-argued, specific insights, worth reading; "
+            "9-10=exceptional depth, original analysis, or rare expertise. "
+            "Be discriminating — reward genuine depth, penalise vagueness. "
+            "Output ONLY the single digit or '10'. No explanation, no markdown."
         )
-        user_prompt = f"Titel: {title or 'Geen titel'}\n\nTekst:\n{text[:8000]}"
+        user_prompt = f"Title: {title or 'No title'}\n\nText:\n{text[:8000]}"
         try:
             response = await llm_service.call_llm(
                 model=resolved,
                 messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
                 temperature=0.1,
-                timeout=QUALITY_LLM_TIMEOUT_SEC
+                timeout=QUALITY_LLM_TIMEOUT_SEC,
             )
             match = re.search(r"\b([1-9]|10)\b", response.strip())
             if match:

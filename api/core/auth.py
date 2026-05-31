@@ -39,6 +39,20 @@ def hash_password(password: str) -> str:
     return f"scrypt${SCRYPT_N}${base64.b64encode(salt).decode()}${base64.b64encode(h).decode()}"
 
 
+# Pre-computed dummy hash so verify_password can be called against a constant
+# cost even when the user doesn't exist. Prevents user-enumeration via timing.
+_DUMMY_HASH = hash_password("dummy-password-for-timing-equalization")
+
+
+def verify_password_or_dummy(password: str, stored: Optional[str]) -> bool:
+    """Like verify_password but always performs a scrypt hash to keep timing
+    constant for missing users."""
+    if not stored:
+        verify_password(password, _DUMMY_HASH)
+        return False
+    return verify_password(password, stored)
+
+
 def verify_password(password: str, stored: str) -> bool:
     try:
         scheme, n_str, salt_b64, hash_b64 = stored.split("$")

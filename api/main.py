@@ -14,6 +14,7 @@ from models.base import (
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
 import asyncio
+import hmac
 import httpx
 import os
 import re
@@ -22,7 +23,7 @@ from datetime import datetime
 from uuid import UUID
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.auth import (
-    SESSION_COOKIE, hash_password, verify_password,
+    SESSION_COOKIE, hash_password, verify_password, verify_password_or_dummy,
     check_login_rate_limit, reset_login_rate_limit,
     create_session, delete_session, get_session_user,
     set_session_cookie, clear_session_cookie, require_user,
@@ -45,6 +46,11 @@ LLM_HTTP_TIMEOUT_SEC = float(os.environ.get('LLM_HTTP_TIMEOUT_SEC', 60))
 LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
 WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
 QUEUE_DEPTH_LOG_EVERY_SEC = 60
+
+# Transcription service (WhisperX wrapper) reachable from the api container.
+# Override via TRANSCRIBE_AGENT_URL=http://your-host:port. Default points at a
+# sibling container named `transcribe-agent` on the same docker network.
+TRANSCRIBE_AGENT_URL = os.environ.get('TRANSCRIBE_AGENT_URL', 'http://transcribe-agent:8080')
 
 # Memory-gate: workers weigeren nieuwe items te claimen als de host-RAM
 # headroom onder deze drempel zakt. Voorkomt OOM op kleine VPS waar
@@ -270,15 +276,24 @@ async def lifespan(app: FastAPI):
     await app.state.llm_client.aclose()
 
 
-app = FastAPI(title="Stroom API", lifespan=lifespan, root_path="/api")
+# OpenAPI docs zijn handig in dev maar lekken endpoint-structuur in productie.
+# Default: dicht. Zet STROOM_ENABLE_DOCS=1 om ze aan te zetten.
+_DOCS_ENABLED = os.environ.get("STROOM_ENABLE_DOCS") == "1"
+app = FastAPI(
+    title="Stroom API",
+    lifespan=lifespan,
+    root_path="/api",
+    docs_url="/docs" if _DOCS_ENABLED else None,
+    redoc_url="/redoc" if _DOCS_ENABLED else None,
+    openapi_url="/openapi.json" if _DOCS_ENABLED else None,
+)
 
 _DEFAULT_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:8101",
-    "http://10.100.0.252:8101",
-    "https://stroom.c4w.nl",
-    "http://stroom.c4w.nl",
 ]
+# Add deployed origins (Tailscale IP, public hostname) via env var, comma-separated:
+#   STROOM_ALLOWED_ORIGINS=https://stroom.example.com,http://10.0.0.5:8101
 _extra = [o.strip() for o in os.environ.get("STROOM_ALLOWED_ORIGINS", "").split(",") if o.strip()]
 _ALLOWED_ORIGINS = list(dict.fromkeys(_DEFAULT_ORIGINS + _extra))
 
@@ -293,8 +308,10 @@ app.add_middleware(
 
 # --- Auth: middleware whitelist + CSRF Origin-check ---
 
-_PUBLIC_PATHS = {"/", "/health", "/openapi.json", "/docs", "/redoc",
+_PUBLIC_PATHS = {"/", "/health",
                  "/auth/login", "/auth/me", "/auth/logout"}
+if _DOCS_ENABLED:
+    _PUBLIC_PATHS |= {"/openapi.json", "/docs", "/redoc"}
 _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/transcribe-callback",
     "/heartbeat",
@@ -303,10 +320,10 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/transcribe-videos",
     "/admin/cron/summarize-articles",
     "/admin/cron/digest-topics",
+    "/admin/quality-backfill",
 )
-# Paden die altijd via internal-token auth gaan (geen session-fallback).
-# samenvat-lab praat hier machine-to-machine met Stroom, Okavango leest hier
-# de lessons-corpus.
+# Paths that ALWAYS go through internal-token auth (no session-fallback).
+# Used by sibling services that read transcripts / lessons machine-to-machine.
 _INTERNAL_TOKEN_PATH_PREFIXES = (
     "/transcripts",
     "/internal/",
@@ -333,25 +350,25 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
-        # 3. Internal-token paths (samenvat-agent callback, cron) — accept token
+        # 3. Internal-token paths (transcribe-agent callback, cron) — accept token
         # OR fall through to session-cookie auth (admin user kicking the cron from UI).
         if any(path.endswith(s) for s in _INTERNAL_TOKEN_PATH_SUFFIXES):
             tok = request.headers.get("x-stroom-internal-token", "")
             if INTERNAL_TOKEN and tok:
-                if tok == INTERNAL_TOKEN:
+                if hmac.compare_digest(tok, INTERNAL_TOKEN):
                     return await call_next(request)
                 # Invalid token - log for security monitoring
                 print(f"[SECURITY] Invalid internal token attempt from {request.client.host} to {path}", flush=True)
                 return JSONResponse({"detail": "Unauthorized"}, status_code=403)
             # No token provided → fall through to session-cookie auth
 
-        # 3b. Token-only prefix paths (samenvat-lab) — geen session-fallback.
+        # 3b. Token-only prefix paths (machine-to-machine) — no session-fallback.
         if any(path.startswith(p) for p in _INTERNAL_TOKEN_PATH_PREFIXES):
             from fastapi.responses import JSONResponse
             tok = request.headers.get("x-stroom-internal-token", "")
             if not INTERNAL_TOKEN:
                 return JSONResponse({"detail": "Internal endpoints disabled"}, status_code=503)
-            if not tok or tok != INTERNAL_TOKEN:
+            if not tok or not hmac.compare_digest(tok, INTERNAL_TOKEN):
                 print(f"[SECURITY] Invalid/missing internal token for {path} from {request.client.host}", flush=True)
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
             return await call_next(request)
@@ -407,7 +424,8 @@ async def auth_login(body: LoginBody, request: Request, response: Response,
         "SELECT id::text, email, password_hash FROM users WHERE email = :e"
     ).bindparams(e=email))
     row = r.first()
-    if not row or not verify_password(password, row[2]):
+    stored_hash = row[2] if row else None
+    if not verify_password_or_dummy(password, stored_hash) or not row:
         raise HTTPException(status_code=401, detail="Ongeldige inloggegevens")
 
     reset_login_rate_limit(rate_key)
@@ -1089,7 +1107,7 @@ async def _claim_next_transcribe(session) -> Optional[tuple[str, str, str]]:
     """Atomair één transcribe_queued item claimen — single GPU.
 
     Geeft (item_id, media_url, type) of None.
-    Caller is verantwoordelijk voor het posten naar samenvat-agent.
+    Caller is verantwoordelijk voor het posten naar de transcribe-agent.
 
     Mem-gate: weigert te claimen als host-RAM onder TRANSCRIBE_MIN_FREE_MB
     zit. Whisper-medium piekt op ~1.6GB host-RAM (model + alignment + audio
@@ -1162,13 +1180,13 @@ async def _transcribe_worker(async_session_maker) -> None:
             try:
                 source_type = "podcast" if item_type == "podcast" else "general"
                 r = await app.state.http_client.post(
-                    "http://samenvat-agent:8080/process",
+                    f"{TRANSCRIBE_AGENT_URL.rstrip('/')}/process",
                     json={"url": media_url, "source_type": source_type,
                           "model_name": "medium", "stroom_item_id": item_id},
                     timeout=10.0,
                 )
                 if r.status_code >= 400:
-                    raise RuntimeError(f"samenvat-agent {r.status_code}: {r.text[:200]}")
+                    raise RuntimeError(f"transcribe-agent {r.status_code}: {r.text[:200]}")
             except Exception as exc:
                 async with async_session_maker() as bg:
                     await bg.exec(sa_text(
@@ -1322,7 +1340,7 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
           transcript = COALESCE(NULLIF(:t, ''), transcript),
           transcript_segments = COALESCE(CAST(:segs AS jsonb), transcript_segments),
           summary = COALESCE(NULLIF(:s, ''), summary),
-          summary_model = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN 'samenvat-agent' ELSE summary_model END,
+          summary_model = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN 'transcribe-agent' ELSE summary_model END,
           summary_generated_at = CASE WHEN NULLIF(:s, '') IS NOT NULL THEN now() ELSE summary_generated_at END,
           processing_status = CAST(:ns AS processing_status),
           processing_error = NULL
@@ -2630,25 +2648,31 @@ async def admin_bulk_archive(body: BulkArchiveRequest,
         raise HTTPException(status_code=400, detail="Minstens 1 format vereist")
     if body.older_than_days < 1:
         raise HTTPException(status_code=400, detail="older_than_days moet >= 1 zijn")
+    if not (1 <= body.weight_max <= 10):
+        raise HTTPException(status_code=400, detail="weight_max moet 1-10 zijn")
+    _ALLOWED_FORMATS = {"article", "podcast", "video", "short"}
+    if any(f not in _ALLOWED_FORMATS for f in body.formats):
+        raise HTTPException(status_code=400, detail=f"format moet een van {_ALLOWED_FORMATS}")
 
-    # Format values als literals voor SQL
-    format_literals = ", ".join([f"'{f}'::item_format" for f in body.formats])
-    topic_literals = ", ".join([f"'{s}'" for s in body.topic_slugs])
-
-    result = await session.exec(sa_text(f"""
+    result = await session.exec(sa_text("""
         UPDATE items i
         SET status = 'archived'::item_status
         FROM sources s
         JOIN source_topics st ON st.source_id = s.id
         JOIN topics t ON t.id = st.topic_id
         WHERE i.source_id = s.id
-          AND t.slug IN ({topic_literals})
-          AND i.format IN ({format_literals})
+          AND t.slug = ANY(:topic_slugs)
+          AND i.format::text = ANY(:formats)
           AND i.status != 'archived'::item_status
-          AND i.created_at < now() - interval '{body.older_than_days} days'
-          AND s.weight <= {body.weight_max}
+          AND i.created_at < now() - (:older_days * interval '1 day')
+          AND s.weight <= :weight_max
         RETURNING i.id
-    """))
+    """).bindparams(
+        topic_slugs=list(body.topic_slugs),
+        formats=list(body.formats),
+        older_days=body.older_than_days,
+        weight_max=body.weight_max,
+    ))
     archived_ids = result.all()
     await session.commit()
     return BulkArchiveResponse(archived=len(archived_ids))
@@ -2764,86 +2788,69 @@ class QualityBackfillResponse(BaseModel):
     error: Optional[str] = None
 
 
+async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> None:
+    """Background worker: score items en sla op. Eigen session per run."""
+    from core.db import async_session_maker
+    scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
+    if not scores_by_id:
+        print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
+        return
+    async with async_session_maker() as session:
+        for item_id, score in scores_by_id.items():
+            await session.exec(sa_text("""
+                UPDATE items
+                SET quality_score = :score,
+                    quality_score_reason = 'auto',
+                    quality_score_updated_at = NOW()
+                WHERE id = CAST(:id AS uuid)
+            """).bindparams(score=score, id=item_id))
+        await session.commit()
+    print(f"[quality-backfill] klaar: {len(scores_by_id)}/{len(items_for_scoring)} gescored", flush=True)
+
+
 @app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
 async def admin_quality_backfill(
     request: Request,
     body: QualityBackfillRequest,
     background_tasks: BackgroundTasks,
-    session=Depends(get_async_session),
-    user=Depends(require_user)
+    session=Depends(get_async_session)
 ):
-    """Batch score items using quality-scorer service.
-
-    If only_null=True (default), only processes items without a quality score.
-    Otherwise processes items with summary but no/any quality score.
-
-    This runs as a background task to avoid timeout issues.
-    """
-    # Get items to process
-    where_clause = "quality_score IS NULL" if body.only_null else "1=1"
+    """Batch score items using quality-scorer service. Retourneert direct;
+    scoring en DB-updates lopen als background task."""
+    if not (1 <= body.limit <= 10000):
+        raise HTTPException(status_code=400, detail="limit moet 1-10000 zijn")
+    where_clause = "i.quality_score IS NULL" if body.only_null else "TRUE"
     r = await session.exec(sa_text(f"""
         SELECT i.id::text, i.title, i.summary, i.transcript, i.description
         FROM items i
         WHERE {where_clause}
         AND (i.summary IS NOT NULL OR i.transcript IS NOT NULL)
         AND i.summary <> ''
-        LIMIT {body.limit}
-    """))
+        ORDER BY i.created_at DESC
+        LIMIT :lim
+    """).bindparams(lim=body.limit))
     items = r.all()
 
     if not items:
         return QualityBackfillResponse(processed=0, updated=0)
 
-    # Prepare items for batch scoring
     items_for_scoring = []
     for row in items:
         item_id, title, summary, transcript, description = row
         text = summary or transcript or description or ""
         if text:
-            items_for_scoring.append({
-                "id": item_id,
-                "text": text[:8000],
-                "title": title
-            })
+            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title})
 
     if not items_for_scoring:
         return QualityBackfillResponse(processed=len(items), updated=0)
 
-    # Call quality-scorer batch endpoint
-    scores_by_id = await _score_batch_with_quality_scorer(
-        request.app.state.http_client,
-        items_for_scoring
-    )
-
-    if not scores_by_id:
-        return QualityBackfillResponse(
-            processed=len(items),
-            updated=0,
-            error="Quality scorer returned no results"
-        )
-
-    # Update items with scores
-    updated_count = 0
-    total_score = 0
-    for item_id, score in scores_by_id.items():
-        await session.exec(sa_text("""
-            UPDATE items
-            SET quality_score = :score,
-                quality_score_reason = 'auto',
-                quality_score_updated_at = NOW()
-            WHERE id = CAST(:id AS uuid)
-        """).bindparams(score=score, id=item_id))
-        updated_count += 1
-        total_score += score
-
-    await session.commit()
-
-    avg_score = total_score / updated_count if updated_count > 0 else None
+    background_tasks.add_task(_run_quality_backfill, items_for_scoring, request.app.state.http_client)
+    print(f"[quality-backfill] gestart voor {len(items_for_scoring)} items", flush=True)
 
     return QualityBackfillResponse(
         processed=len(items),
-        updated=updated_count,
-        avg_score=avg_score
+        updated=0,
+        avg_score=None
     )
 
 

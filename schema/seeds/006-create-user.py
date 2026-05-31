@@ -1,13 +1,16 @@
 """Create or update a Stroom login user.
 
-Usage (inside docker, via Bash):
+Usage (run inside the compose network):
 
-    docker run --rm --network personal_net \\
-      -v /opt/stacks/vps-stacks/stroom-src/schema/seeds:/seeds:ro \\
+    docker run --rm --network <your-compose-network> \\
+      -v "$(pwd)/schema/seeds:/seeds:ro" \\
       -e PGHOST=stroom-db -e PGUSER=stroom -e PGDATABASE=stroom \\
-      -e PGPASSWORD=$STROOM_DB_PASSWORD \\
-      -e SEED_EMAIL=han@hanrusman.nl -e SEED_PASSWORD='supersecret' \\
+      -e PGPASSWORD="$STROOM_DB_PASSWORD" \\
+      -e SEED_EMAIL=you@example.com \\
+      -e SEED_PASSWORD="$(openssl rand -base64 24)" \\
       python:3.12-slim sh -c "pip install -q 'psycopg[binary]' && python /seeds/006-create-user.py"
+
+Never commit the SEED_PASSWORD. The password is scrypt-hashed before storage.
 """
 import base64
 import hashlib
