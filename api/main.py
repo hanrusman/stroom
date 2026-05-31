@@ -2234,18 +2234,24 @@ async def admin_refresh_all(background_tasks: BackgroundTasks,
 CRON_WEIGHT_MIN = 5
 CRON_MAX_TRANSCRIBE_ATTEMPTS = 3
 CRON_SKIP_ATTEMPTS = 99  # sentinel: items met deze waarde worden nooit meer geprobeerd
-CRON_STUCK_ACTIVE_MIN = 5   # heartbeat liveness window voor actief-werkende items
-CRON_STUCK_QUEUED_MIN = 60  # max wachttijd in queue (queued/*_queued) voor er iets is misgegaan
+CRON_STUCK_ACTIVE_MIN = 5  # heartbeat-timeout: actief item zonder ping voor N min = écht hangend.
+                           # Hergebruikt als minimum-leeftijd voor queue-items vóór ze als 'stalled'
+                           # kunnen tellen (anders zou net-binnen-gequeued tijdens een API-restart-blip
+                           # direct gefaald worden).
 CRON_NIGHTLY_HOURS = 24 * 7  # nightly kijkt 7 dagen terug — vangnet voor items die door piek/restart gemist zijn
 
 
 async def _cron_unstuck(session) -> int:
     """Reset items stuck in queues/processing.
 
-    Onderscheid actief-bezig (meet op heartbeat, kort venster) van wachten
-    in queue (meet op queued_at, langer venster). Zonder dat onderscheid
-    zou normale queue-wachttijd bij semaphore=1 + lange podcasts false-
-    positive 'stuck' geven."""
+    Strategie:
+    - Actief-bezig items (transcribing/summarizing): meet liveness via heartbeat.
+      Geen ping voor N min = hangend.
+    - In-queue items: wachten is OK zolang er ergens een actief item is met
+      verse heartbeat. Pas als de pipeline werkelijk stil staat (geen enkele
+      heartbeat in N min) gelden queue-items als 'stalled'. Dit voorkomt
+      false-positives bij grote batches/lange podcasts waar semaphore=1 een
+      uur queue-wachttijd makkelijk legitiem maakt."""
     # Actief-bezig items: liveness-check via heartbeat
     r_active = await session.exec(sa_text(f"""
         UPDATE items SET
@@ -2258,16 +2264,26 @@ async def _cron_unstuck(session) -> int:
     """))
     n_active = r_active.rowcount or 0
 
-    # In-queue items: meet op queued_at met langer venster
+    # In-queue items: alleen 'stalled' als er geen enkel actief item is met
+    # verse heartbeat. CRON_STUCK_ACTIVE_MIN doet dubbele dienst als
+    # minimum-leeftijd voor queue-items, anders zou net-binnen-gequeued
+    # tijdens een API-restart direct gefaald worden.
     r_queued = await session.exec(sa_text(f"""
         UPDATE items SET
           processing_status = 'failed'::processing_status,
-          processing_error = 'queue wait > {CRON_STUCK_QUEUED_MIN} min — auto-reset by cron'
+          processing_error = 'queue stalled (no active workers) — auto-reset by cron'
         WHERE processing_status IN
               ('queued'::processing_status, 'transcribe_queued'::processing_status,
                'summarize_queued'::processing_status)
           AND queued_at IS NOT NULL
-          AND queued_at < now() - interval '{CRON_STUCK_QUEUED_MIN} minutes'
+          AND queued_at < now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
+          AND NOT EXISTS (
+            SELECT 1 FROM items active
+            WHERE active.processing_status IN
+                  ('transcribing'::processing_status, 'summarizing'::processing_status)
+              AND active.last_progress_at IS NOT NULL
+              AND active.last_progress_at > now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
+          )
     """))
     n = n_active + (r_queued.rowcount or 0)
 
