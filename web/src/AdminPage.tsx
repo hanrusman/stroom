@@ -555,14 +555,14 @@ const CronPanel = () => {
 
   const buttons: { id: CronJob; label: string; icon: React.ComponentType<{ size?: number }>;
                    action: () => Promise<CronResult>; sub: string }[] = [
-    { id: 'podcasts', label: 'Podcasts (24u)', icon: Mic,
-      action: () => cronTranscribePodcasts(24),
+    { id: 'podcasts', label: 'Podcasts (7d)', icon: Mic,
+      action: () => cronTranscribePodcasts(),
       sub: 'transcribeer alle podcasts ≥ weight 5' },
-    { id: 'videos', label: 'Videos (24u)', icon: PlayCircle,
-      action: () => cronTranscribeVideos(24),
+    { id: 'videos', label: 'Videos (7d)', icon: PlayCircle,
+      action: () => cronTranscribeVideos(),
       sub: 'transcribeer alle YouTube ≥ weight 5' },
-    { id: 'articles', label: 'Artikelen (24u)', icon: Sparkles,
-      action: () => cronSummarizeArticles(24),
+    { id: 'articles', label: 'Artikelen (7d)', icon: Sparkles,
+      action: () => cronSummarizeArticles(),
       sub: 'samenvatting voor articles ≥ weight 5' },
     { id: 'digest', label: 'Topic-digests', icon: BookOpen,
       action: () => cronDigestTopics('daily', getDefault('digest')),

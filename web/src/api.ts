@@ -437,15 +437,15 @@ export interface CronResult {
   [key: string]: unknown;
 }
 
-export async function cronTranscribePodcasts(hours = 24): Promise<CronResult> {
+export async function cronTranscribePodcasts(hours = 168): Promise<CronResult> {
   const r = await apiFetch(`/api/admin/cron/transcribe-podcasts?hours=${hours}`, { method: 'POST' });
   return r.json();
 }
-export async function cronTranscribeVideos(hours = 24): Promise<CronResult> {
+export async function cronTranscribeVideos(hours = 168): Promise<CronResult> {
   const r = await apiFetch(`/api/admin/cron/transcribe-videos?hours=${hours}`, { method: 'POST' });
   return r.json();
 }
-export async function cronSummarizeArticles(hours = 24): Promise<CronResult> {
+export async function cronSummarizeArticles(hours = 168): Promise<CronResult> {
   const r = await apiFetch(`/api/admin/cron/summarize-articles?hours=${hours}`, { method: 'POST' });
   return r.json();
 }

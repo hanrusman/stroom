@@ -2511,7 +2511,7 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
 
 
 @app.post("/admin/cron/transcribe-podcasts")
-async def admin_cron_transcribe_podcasts(hours: int = Query(24, ge=1, le=720),
+async def admin_cron_transcribe_podcasts(hours: int = Query(CRON_NIGHTLY_HOURS, ge=1, le=720),
                                          session=Depends(get_async_session)):
     await _cron_unstuck(session)
     n = await _cron_queue_transcribes(session, content_kind="podcast", hours=hours)
@@ -2519,7 +2519,7 @@ async def admin_cron_transcribe_podcasts(hours: int = Query(24, ge=1, le=720),
 
 
 @app.post("/admin/cron/transcribe-videos")
-async def admin_cron_transcribe_videos(hours: int = Query(24, ge=1, le=720),
+async def admin_cron_transcribe_videos(hours: int = Query(CRON_NIGHTLY_HOURS, ge=1, le=720),
                                        session=Depends(get_async_session)):
     await _cron_unstuck(session)
     n = await _cron_queue_transcribes(session, content_kind="youtube", hours=hours)
@@ -2527,7 +2527,7 @@ async def admin_cron_transcribe_videos(hours: int = Query(24, ge=1, le=720),
 
 
 @app.post("/admin/cron/summarize-articles")
-async def admin_cron_summarize_articles(hours: int = Query(24, ge=1, le=720),
+async def admin_cron_summarize_articles(hours: int = Query(CRON_NIGHTLY_HOURS, ge=1, le=720),
                                         session=Depends(get_async_session)):
     await _cron_unstuck(session)
     article_ids = await _cron_pick_articles_for_summary(session, hours=hours)
