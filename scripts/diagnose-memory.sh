@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stroom memory/connection diagnostic — read-only.
-# Bedoeld om op strongbad te draaien voordat we Kimi's "memory optimization"
-# voorstellen implementeren. Geen mutaties, alleen metingen.
+# Run on the docker host to gather a snapshot before tuning memory/pool settings.
+# No mutations, measurements only.
 #
-# Gebruik:
+# Usage:
 #   bash diagnose-memory.sh                     # auto-detect containers
 #   API=stroom-api PG=stroom-postgres bash diagnose-memory.sh   # override
 #
@@ -118,6 +118,5 @@ docker logs "$API" --since 24h 2>&1 \
 section "7. Host RAM"
 free -h 2>/dev/null || vm_stat 2>/dev/null || echo "  (free/vm_stat niet beschikbaar)"
 
-section "Klaar"
-echo "Deel de output van dit script terug — daarmee bepalen we per Kimi-voorstel"
-echo "of het echt nodig is of premature optimization."
+section "Done"
+echo "Use the output above to decide whether memory/pool tuning is actually needed."

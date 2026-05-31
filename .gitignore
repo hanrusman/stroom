@@ -26,3 +26,10 @@ dist/
 
 *.archive-*
 *.archive-*/
+
+# Internal review/working files — not for public history.
+SECURITY-FINDINGS.md
+PUBLICATION-CHECKLIST.md
+implementation_plan.md
+.claude/
+docs/internal/

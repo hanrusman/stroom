@@ -1,178 +1,159 @@
 # Stroom
 
-Personal content curation platform: YouTube / RSS / podcasts → AI summaries → Postgres+pgvector → Obsidian notes, Vikunja todos.
+A personal content-curation platform. RSS, YouTube, and podcasts come in;
+AI-summarized, topic-classified items come out, queryable in Postgres+pgvector
+and pushable to Obsidian and Vikunja.
 
-## Stack
+The name is the Dutch word for *stream* — the continuous flow of content
+coming in.
+
+> **Status:** personal-use software. Single-user auth, single deploy target.
+> Useful as a reference for building a similar tool — not a turnkey SaaS.
+> See [SECURITY.md](./SECURITY.md) for what you need to change before
+> exposing it anywhere beyond `localhost`.
+
+## What it does
+
+- **Aggregates** RSS, Atom, YouTube and podcast feeds on a schedule.
+- **Transcribes** audio/video items via an external WhisperX service.
+- **Summarizes** items via a configurable mix of local (Ollama) and cloud
+  (Anthropic, Gemini) models, routed through a LiteLLM proxy.
+- **Classifies** items into user-configured topics (ML + keywords).
+- **Scores** items on quality and personal interest using local embeddings
+  and an LLM judge.
+- **Digests** items per topic into a daily/weekly summary.
+- **Exports** insights to an Obsidian vault and tasks to Vikunja.
+
+## Architecture
 
 | Component | Image / tool | Purpose |
 |-----------|--------------|---------|
-| `stroom-api` | FastAPI + SQLModel | Core API — items, sources, topics, insights, queue management |
-| `stroom-web` | React + Vite | Frontend — inbox, sources, topics, player, admin |
+| `stroom-api` | FastAPI + SQLModel | Core API — items, sources, topics, queue, scoring |
+| `stroom-web` | React + Vite | Inbox, sources, topics, audio player, admin |
 | `stroom-db` | `pgvector/pgvector:pg16` | Source of truth — tables, embeddings, full-text search |
-| `stroom-media` | `nginx:alpine` | Serves audio/video blobs |
-| `stroom-rss-bridge` | `rssbridge/rss-bridge` | RSS feed generation for sources without native RSS |
-| `litellm` | `ghcr.io/berriai/litellm` | OpenAI-compatible gateway to all models |
-| `samenvat-agent` | Custom FastAPI | GPU worker — WhisperX transcription + summarization |
-| Ollama | external | Runs `qwen3.6` + `nomic-embed-text` via llama.cpp |
+| `stroom-media` | `nginx:alpine` | Static-serves audio/video blobs |
+| `stroom-rss-bridge` | `rssbridge/rss-bridge` | Generates RSS for sources without a native feed |
+| `litellm` | `ghcr.io/berriai/litellm` | OpenAI-compatible gateway to local + cloud models |
+| `transcribe-agent` | sibling service | WhisperX wrapper for podcast/video transcription |
+| Ollama | external (host) | Local model runtime — referenced via `OLLAMA_BASE_URL` |
 
-## Features
+The API is the source of truth. The web client is a thin React UI. The
+transcribe-agent is a separate service you provide (any HTTP service that
+accepts `POST /process` with `{url, source_type, model_name,
+stroom_item_id}` and POSTs back to `/huygens/items/{id}/transcribe-callback`).
 
-- **Feed aggregation**: RSS, Atom, YouTube, podcast feeds
-- **Queue-based processing**: Memory-gated workers for transcription/summarization
-- **Topic classification**: ML-based categorization with user-configurable topics
-- **Quality + interest scoring**: Embedding-based (local) + LLM-based (cloud) scoring
-- **Insights**: LLM-generated insights from content clusters
-- **Huygens**: Per-topic digest generation (async via BackgroundTasks)
-- **Obsidian integration**: Direct vault writes via REST API
-- **Vikunja integration**: Todo creation from insights/items
-- **Audio player**: Persistent player with queue support
+## Getting started
 
-## Getting Started
+You'll need: Docker, an Ollama install with `qwen3.6` and `nomic-embed-text`
+pulled (or equivalent models), and API keys for whichever cloud providers you
+want to enable.
 
-See [PLAN.md](./PLAN.md) for the full build plan and architecture decisions.
+```bash
+# Clone
+git clone https://github.com/hanrusman/stroom.git
+cd stroom
 
-See [TASKS.md](./TASKS.md) for implementation tasks and progress.
+# Configure
+cp .env.example .env
+# edit .env: set STROOM_DB_PASSWORD, LITELLM_MASTER_KEY,
+# STROOM_INTERNAL_TOKEN, and any API keys you want
+
+# Apply schema (assumes a running Postgres reachable via DATABASE_URL)
+psql "$DATABASE_URL" < schema/stroom-schema.sql
+
+# Seed a login user (one-off, see schema/seeds/006-create-user.py for usage)
+
+# Run the API
+cd api
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8100
+
+# Run the web client (in another terminal)
+cd web
+npm install
+npm run dev  # Vite dev server on :8102
+```
+
+A `docker-compose.yml` is not shipped in this repo — you wire the services
+together to match your environment. See [`.env.example`](./.env.example) for
+the variables the API expects.
 
 ## Layout
 
 ```
-├── docker-compose.yml          # Stack definition (in vps-stacks/stroom/)
+├── .env.example                # Required environment variables
 ├── litellm/
-│   └── config.yaml             # Model routing aliases
+│   └── config.yaml             # LiteLLM model aliases (stroom-bulk, etc.)
 ├── schema/
-│   ├── stroom-schema.sql       # Database schema (Postgres + pgvector)
-│   └── seeds/                  # Starter data
+│   ├── stroom-schema.sql       # Postgres schema (pgvector, FTS, enums)
+│   ├── migrations/             # Forward-only schema migrations
+│   └── seeds/                  # Topics, initial sources, login user
 ├── media/                      # Audio/video blob storage (nginx-served)
-├── api/                        # FastAPI application
-│   ├── main.py                 # App entry, queue workers, memory gates
-│   ├── core/                   # DB, config, auth
+├── api/                        # FastAPI service
+│   ├── main.py                 # App entry, middleware, queue workers
+│   ├── core/                   # Auth, DB, config
 │   ├── models/                 # SQLModel models
-│   ├── routers/                # API endpoints
-│   │   ├── lessons.py          # Items, sources, topics
-│   │   ├── inbox.py            # Queue management
-│   │   ├── ask.py              # Chat/ask endpoints
-│   │   ├── admin_topics.py     # Topic management, digest generation
-│   │   ├── settings.py         # User preferences
-│   │   └── transcripts.py      # Transcript retrieval
-│   └── services/               # Business logic
-│       ├── llm_service.py      # LiteLLM client
-│       ├── quality_service.py  # Quality + interest scoring
-│       ├── topics_service.py   # Topic classification
-│       ├── obsidian_service.py # Vault integration
-│       └── vikunja_service.py  # Todo integration
-└── web/                        # React frontend
+│   ├── routers/                # API endpoints (lessons, inbox, ask, …)
+│   └── services/               # LLM, scoring, Obsidian, Vikunja
+└── web/                        # React + Vite client
     ├── src/
-    │   ├── App.tsx             # Main application
-    │   ├── AdminPage.tsx       # Admin interface
-    │   ├── InterestLearner.tsx # Topic interest feedback
-    │   ├── StickyPlayer.tsx    # Persistent audio player
-    │   └── api.ts              # API client
+    │   ├── App.tsx
+    │   ├── AdminPage.tsx
+    │   ├── api.ts              # TypeScript API client
+    │   └── …
     └── package.json
 ```
 
-## Ports
+## Configuration
 
-All bound to `127.0.0.1` (access via Tailscale SSH port-forwarding):
+All configuration is via environment variables. See [`.env.example`](./.env.example)
+for the full list. The minimum you need to set:
 
-| Port | Service | Description |
-|------|---------|-------------|
-| `8100` | stroom-api | FastAPI backend |
-| `8102` | stroom-web | React dev server / dist |
-| `5433` | stroom-db | Postgres (exposed for debugging) |
-| `8090` | stroom-media | Nginx media server |
-| `8091` | stroom-rss-bridge | RSS-Bridge |
-| `4000` | litellm | LLM proxy (via vps-stacks) |
+| Variable | Why |
+|----------|-----|
+| `STROOM_DB_PASSWORD` | Postgres password for the `stroom` user. |
+| `DATABASE_URL`, `ASYNC_DATABASE_URL` | Connection strings for the API. |
+| `LITELLM_MASTER_KEY` | Auth for the LiteLLM proxy. |
+| `STROOM_INTERNAL_TOKEN` | Shared secret for machine-to-machine endpoints. |
+| `STROOM_ALLOWED_ORIGINS` | Comma-separated extra CORS origins. |
+| `OLLAMA_BASE_URL` | Where the LiteLLM proxy can reach Ollama. |
 
-## API Overview
+For local AI calls you'll also want one or more of `ANTHROPIC_API_KEY`,
+`GEMINI_API_KEY`, and whichever model aliases you wire into `litellm/config.yaml`.
 
-### Core Endpoints
+## Key design decisions
 
-```
-GET    /sources                    # List all sources
-POST   /sources                    # Create new source
-GET    /sources/{id}/items         # Get items for source
-GET    /items                      # List items (with filters)
-POST   /items/{id}/summarize      # Trigger summarization
-POST   /items/{id}/transcribe     # Trigger transcription
+1. **Queue with memory gates.** Items flow `pending → processing → ready`.
+   Workers refuse to claim new work if the host has less RAM available than
+   `TRANSCRIBE_MIN_FREE_MB` / `SUMMARIZE_MIN_FREE_MB`. Avoids OOM on small
+   VPSes where Whisper-medium and the baseline together blow the RAM ceiling.
 
-# Inbox & Queue
-GET    /inbox                     # Get inbox items
-POST   /inbox/claim               # Claim next item for processing
-POST   /inbox/{id}/release        # Release item back to queue
+2. **Async digests via BackgroundTasks.** Topic and lessons digests don't
+   block the request — the API kicks off a task, the UI polls until
+   `is_generating=false`. Simple, no Redis required.
 
-# Topics & Insights
-GET    /topics                    # List topics
-GET    /topics/{slug}/items       # Get items by topic
-POST   /topics/{slug}/digest      # Generate topic digest (async)
-GET    /topics/{slug}/digest      # Get latest digest
-GET    /insights                  # List generated insights
+3. **Local-first scoring.** Personal-interest scoring uses a local
+   sentence-transformer + a centroid you maintain. Quality scoring is
+   pluggable: a local embedding heuristic or a cloud LLM judge.
 
-# Admin
-POST   /admin/cron/nightly         # Trigger nightly cron
-GET    /admin/stats                # System stats
-POST   /admin/rebuild-centroid     # Rebuild interest centroid
+4. **Long transcripts route to long-context.** Transcripts over ~10 min
+   skip the bulk model and go to a long-context cloud model so the whole
+   thing fits in one prompt.
 
-# Callbacks (internal)
-POST   /huygens/items/{id}/transcribe-callback  # samenvat-agent callback
-```
+5. **No multi-tenant, no public sign-up.** Single user, password-hashed
+   with scrypt, session cookies with `HttpOnly + SameSite=Lax + Secure`.
+   CSRF protection via Origin check plus the SameSite cookie. If you want to
+   share Stroom with friends, see [SECURITY.md](./SECURITY.md) for what to
+   harden first.
 
-See [api.ts](./web/src/api.ts) for the full TypeScript client.
+## Security
 
-## Environment Variables
+See [SECURITY.md](./SECURITY.md). The short version: scrypt passwords,
+session cookies, CSRF Origin check, parameterized SQL, sanitized markdown
+rendering via DOMPurify with an explicit tag/attribute allowlist. Two known
+follow-ups (SSRF in `/inbox/fetch`, path-prefix edge case in the auth
+middleware) are tracked there.
 
-```bash
-# Database
-DATABASE_URL=postgresql://stroom:xxx@stroom-db:5432/stroom
-ASYNC_DATABASE_URL=postgresql+asyncpg://stroom:xxx@stroom-db:5432/stroom
+## License
 
-# LLM
-LITELLM_URL=http://litellm:4000/v1/chat/completions
-LITELLM_MASTER_KEY=xxx
-
-# Auth
-STROOM_INTERNAL_TOKEN=xxx  # For service-to-service callbacks
-
-# Integrations
-VIKUNJA_URL=
-VIKUNJA_TOKEN=xxx
-OBSIDIAN_API_KEY=xxx         # Optional — for REST API writes
-
-# Quality Scoring
-QUALITY_SCORER_MODE=embedding  # embedding (local) | cloud (via kimi)
-HF_HOME=/data/hf-cache         # Persistent HuggingFace cache
-```
-
-## Development
-
-```bash
-# Start the stack (from vps-stacks/)
-cd ../stroom && docker compose up -d
-
-# Run API locally (with DB from docker)
-cd api
-pip install -r requirements.txt
-uvicorn main:app --reload --port 8000
-
-# Run web dev server
-cd web
-npm install
-npm run dev          # Vite dev server on :8102
-```
-
-## Key Design Decisions
-
-See [PLAN.md](./PLAN.md) for the full rationale.
-
-1. **Queue-based processing**: Items flow through `pending` → `processing` → `completed` states. Workers claim items with memory gates (min 2GB free RAM for transcription).
-
-2. **Async digest generation**: Topic digests use FastAPI `BackgroundTasks` with polling pattern. UI polls every 4s until `is_generating=false`.
-
-3. **Embedding-based scoring**: Quality + interest scoring moved from external container into `stroom-api` (2026-05-19). Uses local sentence-transformer for interest, cloud-Kimi for quality.
-
-4. **Memory gates**: Workers refuse new items when host RAM is low. Prevents OOM on small VPS.
-
-5. **Long transcript handling**: Transcripts >10min go to `cloud-kimi` (200K context) instead of local `stroom-bulk` (12K trimmed).
-
-## Related Repos
-
-- [hanrusman/samenvat-agent](https://github.com/hanrusman/samenvat-agent) — GPU transcription worker
+[MIT](./LICENSE).
