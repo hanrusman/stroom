@@ -61,6 +61,12 @@ TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 500))
 SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 300))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
+# Transient DNS/connect-fouten naar samenvat-agent moeten niet meteen 'failed'
+# opleveren — Docker's embedded DNS resolver kan kort flappen bij churn op
+# personal_net. Requeue tot N pogingen voordat we echt opgeven.
+TRANSCRIBE_TRIGGER_MAX_TRIES = int(os.environ.get('TRANSCRIBE_TRIGGER_MAX_TRIES', 3))
+_TRANSCRIBE_TRIGGER_ATTEMPTS: dict[str, int] = {}
+
 # Lange transcripties (podcasts, video's > 10 min) gaan via een cloud-model
 # met groot context-window in plaats van de lokale 12k-trim + stroom-bulk.
 # Drempel op duration_seconds (audio-tijd), met char-fallback voor items
@@ -1167,8 +1173,15 @@ async def _summarize_worker(idx: int, async_session_maker) -> None:
 
 
 async def _transcribe_worker(async_session_maker) -> None:
-    """Single worker voor de transcribe-queue (single GPU)."""
+    """Single worker voor de transcribe-queue (single GPU).
+
+    Gebruikt een eigen httpx-client (niet `app.state.http_client`) zodat een
+    eventueel kapotte connection-pool of DNS-cache-staat in de gedeelde
+    client geen invloed heeft op deze hot path. Een DNS-flap op personal_net
+    leek de gedeelde pool in een permanent fail-state te dwingen.
+    """
     print("[trans-worker] started", flush=True)
+    client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=2))
     while True:
         try:
             async with async_session_maker() as s:
@@ -1179,7 +1192,7 @@ async def _transcribe_worker(async_session_maker) -> None:
             item_id, media_url, item_type = claim
             try:
                 source_type = "podcast" if item_type == "podcast" else "general"
-                r = await app.state.http_client.post(
+                r = await client.post(
                     f"{TRANSCRIBE_AGENT_URL.rstrip('/')}/process",
                     json={"url": media_url, "source_type": source_type,
                           "model_name": "medium", "stroom_item_id": item_id},
@@ -1187,15 +1200,32 @@ async def _transcribe_worker(async_session_maker) -> None:
                 )
                 if r.status_code >= 400:
                     raise RuntimeError(f"transcribe-agent {r.status_code}: {r.text[:200]}")
+                _TRANSCRIBE_TRIGGER_ATTEMPTS.pop(item_id, None)
             except Exception as exc:
-                async with async_session_maker() as bg:
-                    await bg.exec(sa_text(
-                        "UPDATE items SET processing_status='failed'::processing_status, "
-                        "processing_error=:e WHERE id = CAST(:i AS uuid)"
-                    ).bindparams(e=f"transcribe trigger failed: {exc}"[:500], i=item_id))
-                    await bg.commit()
-                print(f"[trans-worker] kon transcribe niet starten voor {item_id}: {exc}",
-                      flush=True)
+                transient = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+                attempts = _TRANSCRIBE_TRIGGER_ATTEMPTS.get(item_id, 0) + 1
+                if transient and attempts < TRANSCRIBE_TRIGGER_MAX_TRIES:
+                    _TRANSCRIBE_TRIGGER_ATTEMPTS[item_id] = attempts
+                    async with async_session_maker() as bg:
+                        await bg.exec(sa_text(
+                            "UPDATE items SET processing_status='transcribe_queued'::processing_status, "
+                            "processing_error=NULL WHERE id = CAST(:i AS uuid)"
+                        ).bindparams(i=item_id))
+                        await bg.commit()
+                    print(f"[trans-worker] transient trigger fail voor {item_id} "
+                          f"(poging {attempts}/{TRANSCRIBE_TRIGGER_MAX_TRIES}): {exc} — requeued",
+                          flush=True)
+                    await asyncio.sleep(5)
+                else:
+                    _TRANSCRIBE_TRIGGER_ATTEMPTS.pop(item_id, None)
+                    async with async_session_maker() as bg:
+                        await bg.exec(sa_text(
+                            "UPDATE items SET processing_status='failed'::processing_status, "
+                            "processing_error=:e WHERE id = CAST(:i AS uuid)"
+                        ).bindparams(e=f"transcribe trigger failed: {exc}"[:500], i=item_id))
+                        await bg.commit()
+                    print(f"[trans-worker] kon transcribe niet starten voor {item_id}: {exc}",
+                          flush=True)
         except asyncio.CancelledError:
             print("[trans-worker] shutting down", flush=True)
             return
