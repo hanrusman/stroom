@@ -34,6 +34,19 @@ const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{
 const stripHtml = (s: string | null) =>
   (s ?? '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 
+// Security: only allow http(s) URLs as link targets. Feed-supplied media/source
+// URLs are rendered as <a href>, and React does not sanitize href — a
+// `javascript:` URL would otherwise execute on click (DOM XSS).
+const safeHref = (url: string | null | undefined): string | undefined => {
+  if (!url) return undefined;
+  try {
+    const u = new URL(url, window.location.origin);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? url : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 // Security: sanitize markdown output before rendering with dangerouslySetInnerHTML
 const sanitizeMarkdown = (content: string | null | undefined, options?: { async?: boolean; breaks?: boolean }): string => {
   if (!content) return '';
@@ -702,8 +715,8 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
               <LessonExpansion lesson={l} onUpdate={onUpdateLesson} />
               <div className="mt-1.5 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40 flex items-center gap-2 flex-wrap">
                 <span>uit: {l.source_name} · {l.item_title}</span>
-                {l.media_url && (
-                  <a href={l.media_url} target="_blank" rel="noreferrer"
+                {safeHref(l.media_url) && (
+                  <a href={safeHref(l.media_url)} target="_blank" rel="noreferrer"
                     className="text-brand-accent hover:underline inline-flex items-center gap-1">
                     <ExternalLink size={10} /> bron
                   </a>
@@ -1745,8 +1758,8 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; o
             <ArticleBody item={item} />
           )}
 
-          {item.media_url && (
-            <a href={item.media_url} target="_blank" rel="noreferrer"
+          {safeHref(item.media_url) && (
+            <a href={safeHref(item.media_url)} target="_blank" rel="noreferrer"
                className="inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.2em] text-brand-accent hover:opacity-70 mt-16 pt-8 border-t border-brand-ink/10 w-full">
               View original at {item.source_name} ↗
             </a>
@@ -2183,9 +2196,9 @@ function SourceView({ id, onBack, onOpen }: {
             {source && <span>{SOURCE_KIND_LABELS[source.kind] ?? source.kind}</span>}
             {source && <span className="opacity-30">·</span>}
             {source && <span>{source.item_count} items</span>}
-            {source && (<>
+            {source && safeHref(source.url) && (<>
               <span className="opacity-30">·</span>
-              <a href={source.url} target="_blank" rel="noreferrer"
+              <a href={safeHref(source.url)} target="_blank" rel="noreferrer"
                 className="hover:text-brand-accent inline-flex items-center gap-1">
                 <ExternalLink size={11} /> bron
               </a>
@@ -2588,8 +2601,8 @@ function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (
                       className="hover:text-brand-accent transition-colors text-left">
                       {l.source_name} · {l.item_title}
                     </button>
-                    {l.media_url && (
-                      <a href={l.media_url} target="_blank" rel="noreferrer"
+                    {safeHref(l.media_url) && (
+                      <a href={safeHref(l.media_url)} target="_blank" rel="noreferrer"
                         className="text-brand-accent hover:underline inline-flex items-center gap-1">
                         <ExternalLink size={10} /> bron
                       </a>

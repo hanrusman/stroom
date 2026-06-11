@@ -209,7 +209,7 @@ async def delete_question(item_id: str, question_id: str,
           AND item_id = CAST(:iid AS uuid)
           AND user_id = CAST(:uid AS uuid)
         RETURNING id
-    """), {"qid": question_id, "iid": item_id, "uid": str(user.id)})
+    """), {"qid": question_id, "iid": item_id, "uid": str(user["id"])})
     await session.commit()
 
     if not result.first():

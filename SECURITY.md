@@ -54,6 +54,10 @@ Out of scope:
 - The login rate-limiter is in-memory per process. It works for a
   single-worker deployment; behind a multi-worker uvicorn it will be looser
   than the documented 5 attempts / 15 min.
-- The `/inbox/fetch` endpoint fetches user-supplied URLs server-side. It is
-  auth-gated but does not currently blocklist private IP ranges (SSRF).
-  Do not expose the API to untrusted users without adding that blocklist.
+- Server-side fetches of user/feed-supplied URLs (`/inbox/fetch`,
+  `/inbox/submit` article extraction, og:image scraping, and feed polling)
+  run through an SSRF guard (`api/core/url_guard.py`) that resolves the
+  hostname and rejects private/loopback/link-local/reserved addresses,
+  re-validating on every redirect hop. The guard is *not* applied to
+  operator-configured internal integrations (Obsidian, Vikunja, LiteLLM),
+  which intentionally point at private hosts — keep those URLs trusted.
