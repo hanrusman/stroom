@@ -7,9 +7,9 @@ export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   return {
     plugins: [react(), tailwindcss()],
-    define: {
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-    },
+    // Note: never inject API keys (e.g. GEMINI_API_KEY) via `define` — Vite
+    // bakes them into the public client bundle. Cloud LLM calls go through the
+    // server-side LiteLLM proxy, so the browser never needs a provider key.
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

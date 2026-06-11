@@ -150,9 +150,9 @@ For local AI calls you'll also want one or more of `ANTHROPIC_API_KEY`,
 
 See [SECURITY.md](./SECURITY.md). The short version: scrypt passwords,
 session cookies, CSRF Origin check, parameterized SQL, sanitized markdown
-rendering via DOMPurify with an explicit tag/attribute allowlist. Two known
-follow-ups (SSRF in `/inbox/fetch`, path-prefix edge case in the auth
-middleware) are tracked there.
+rendering via DOMPurify with an explicit tag/attribute allowlist, an SSRF
+guard on server-side URL fetches, and http(s)-only validation on feed-supplied
+link targets in the UI. See SECURITY.md for remaining known limitations.
 
 ## License
 

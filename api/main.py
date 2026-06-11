@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
 from core.config import settings
+from core.url_guard import UnsafeURLError, assert_public_url, safe_get as _safe_get
 from models.base import (
     Item, ItemStatus, ProcessingStatus,
     Topic, ItemFormat, Source,
@@ -1957,10 +1958,11 @@ async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]
     if not url:
         return None
     try:
-        r = await client.get(
+        r = await _safe_get(
+            client,
             url,
             headers={"User-Agent": "StroomBot/1.0 (+image-ingest)"},
-            timeout=8.0, follow_redirects=True,
+            timeout=8.0,
         )
         if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
             return None
@@ -1984,6 +1986,17 @@ async def _refresh_one(session, src) -> dict:
     """Fetch src's feed, upsert items, return {inserted, checked, error?}."""
     import feedparser
     from datetime import datetime, timezone
+
+    # SSRF-guard: feedparser fetcht src.url zelf (eigen urllib). Valideer het
+    # adres vooraf zodat een feed-URL niet naar een intern adres kan wijzen.
+    try:
+        await assert_public_url(src.url)
+    except UnsafeURLError as exc:
+        await session.exec(sa_text(
+            "UPDATE sources SET last_polled_at = now(), last_poll_status = :st "
+            "WHERE id = CAST(:i AS uuid)"
+        ).bindparams(st=f"error: {str(exc)[:120]}", i=str(src.id)))
+        return {"inserted": 0, "checked": 0, "error": str(exc)}
 
     feed = await asyncio.get_event_loop().run_in_executor(None, feedparser.parse, src.url)
     if feed.bozo and not feed.entries:
@@ -2085,10 +2098,11 @@ async def _backfill_one(session, src, target_new: int) -> dict:
     # Fetch via httpx so we get a hard timeout (feedparser's default urllib
     # call can hang on slow podcast hosts).
     try:
-        resp = await app.state.http_client.get(
+        resp = await _safe_get(
+            app.state.http_client,
             src.url,
             headers={"User-Agent": "StroomBot/1.0 (+backfill)"},
-            timeout=30.0, follow_redirects=True,
+            timeout=30.0,
         )
         resp.raise_for_status()
         feed_bytes = resp.content

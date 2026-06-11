@@ -12,6 +12,7 @@ from sqlalchemy import text as sa_text
 
 from core.auth import require_user
 from core.db import get_async_session
+from core.url_guard import UnsafeURLError, assert_public_url, safe_get
 
 router = APIRouter()
 
@@ -54,10 +55,11 @@ async def _extract_article_body(client, url: str) -> Optional[str]:
     """Best-effort full-article extractie via trafilatura."""
     try:
         import trafilatura
-        r = await client.get(
+        r = await safe_get(
+            client,
             url,
             headers={"User-Agent": "StroomBot/1.0 (+article-ingest)"},
-            timeout=12.0, follow_redirects=True,
+            timeout=12.0,
         )
         if r.status_code != 200:
             return None
@@ -225,10 +227,11 @@ async def _fetch_url_metadata(client, url: str) -> InboxFetchResponse:
 
     # For articles and other content, use trafilatura
     try:
-        r = await client.get(
+        r = await safe_get(
+            client,
             url,
             headers={"User-Agent": "StroomBot/1.0 (+inbox-fetch)"},
-            timeout=10.0, follow_redirects=True,
+            timeout=10.0,
         )
         if r.status_code != 200:
             return InboxFetchResponse(url=url, format=fmt)
@@ -316,10 +319,11 @@ async def _fetch_youtube_metadata(client, url: str) -> InboxFetchResponse:
             if match:
                 video_id = match.group(1)
 
-        r = await client.get(
+        r = await safe_get(
+            client,
             url,
             headers={"User-Agent": "Mozilla/5.0 (compatible; StroomBot/1.0)"},
-            timeout=10.0, follow_redirects=True,
+            timeout=10.0,
         )
         if r.status_code != 200:
             return InboxFetchResponse(url=url, format="video")
@@ -378,6 +382,10 @@ async def inbox_fetch(
     url = (body.url or "").strip()
     if not url or not url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="Ongeldige URL (moet http:// of https:// zijn)")
+    try:
+        await assert_public_url(url)
+    except UnsafeURLError:
+        raise HTTPException(status_code=400, detail="URL wijst naar een niet-publiek adres")
 
     http_client = request.app.state.http_client
     return await _fetch_url_metadata(http_client, url)

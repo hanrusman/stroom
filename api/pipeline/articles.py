@@ -12,6 +12,8 @@ from typing import Optional
 import httpx
 from sqlalchemy import text as sa_text
 
+from core.url_guard import safe_get
+
 
 async def extract_article_body(client: httpx.AsyncClient, url: str) -> Optional[str]:
     """Best-effort full-article extractie. Returnt platte tekst (>=100 woorden)
@@ -19,10 +21,11 @@ async def extract_article_body(client: httpx.AsyncClient, url: str) -> Optional[
     if not url:
         return None
     try:
-        r = await client.get(
+        r = await safe_get(
+            client,
             url,
             headers={"User-Agent": "StroomBot/1.0 (+article-ingest)"},
-            timeout=12.0, follow_redirects=True,
+            timeout=12.0,
         )
         if r.status_code != 200:
             return None
