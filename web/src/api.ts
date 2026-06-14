@@ -515,6 +515,7 @@ export interface ModelDefaults {
   expand: DigestModel;
   distill: DigestModel;
   digest: DigestModel;
+  digest_weekly: DigestModel;
   ask: DigestModel;
   score: DigestModel;
 }
