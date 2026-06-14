@@ -10,6 +10,7 @@ from sqlalchemy import text as sa_text
 
 DIGEST_MAX_ITEMS = 40
 DIGEST_PER_ITEM_CHARS = 600
+WEEKLY_SOURCE_DAYS = 7  # weekly componeert uit de laatste N dag-digests
 DIGEST_GENERATION_STALE_MIN = 30  # bg-task is dood als hij na N min nog 'is_generating' is
 DIGEST_LLM_TIMEOUT = 1200.0  # 20 min per digest — grote weekly + zware topic kan zo lang duren
 
@@ -133,12 +134,16 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
             ).bindparams(tid=topic_id, w=window_hours))
             await bg.commit()
 
-            # Weekly (>=168u) componeert uit de laatste dag-digests (RAPTOR-laag dag→week):
-            # goedkoop en zonder de 19u-hang die 7 dagen ruwe items op de lokale GPU gaf.
-            # Geen dag-history (vers topic)? Dan val terug op het ruwe-items-pad.
-            is_weekly = window_hours >= 168
-            daily_rows = []
-            if is_weekly:
+            # Kies corpus + prompt. Weekly (>=168u) componeert uit de laatste
+            # WEEKLY_SOURCE_DAYS dag-digests (RAPTOR-laag dag→week): klein corpus,
+            # geen 19u-hang die 7 dagen ruwe items op de lokale GPU gaf.
+            # system_prompt blijft None tot we een bruikbaar corpus hebben; is het
+            # daarna nog None, dan valt het door naar het ruwe-items-pad (daily, of
+            # weekly zonder bruikbare dag-history).
+            system_prompt = user_prompt = None
+            base_temp = 0.4
+
+            if window_hours >= 168:
                 daily_rows = (await bg.exec(sa_text(
                     """
                     SELECT generated_at, markdown
@@ -146,22 +151,20 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
                     WHERE topic_id = CAST(:tid AS uuid) AND window_hours = 24
                       AND markdown IS NOT NULL AND markdown <> ''
                     ORDER BY generated_at DESC
-                    LIMIT 7
+                    LIMIT :lim
                     """
-                ).bindparams(tid=topic_id))).all()
-
-            if is_weekly and daily_rows:
-                blocks = build_weekly_corpus_from_dailies(daily_rows)
-                base_temp = 0.3
+                ).bindparams(tid=topic_id, lim=WEEKLY_SOURCE_DAYS))).all()
+                blocks = build_weekly_corpus_from_dailies(daily_rows) if daily_rows else []
                 if blocks:
+                    base_temp = 0.3
                     corpus = "\n\n---\n\n".join(blocks)
                     system_prompt, user_prompt = build_weekly_digest_prompt(topic_name, corpus)
-            else:
-                blocks = []
+                    if len(blocks) < WEEKLY_SOURCE_DAYS:
+                        print(f"[digest bg] {slug} weekly — slechts {len(blocks)} dag-digests "
+                              f"beschikbaar (<{WEEKLY_SOURCE_DAYS})", flush=True)
 
-            if not (is_weekly and blocks):
+            if system_prompt is None:
                 # Ruwe-items-pad: daily, óf weekly-fallback zonder bruikbare dag-history.
-                base_temp = 0.4
                 rows = (await bg.exec(sa_text(
                     f"""
                     SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
