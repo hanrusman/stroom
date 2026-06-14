@@ -3,7 +3,7 @@ export type DigestModel =
   | 'cloud-kimi' | 'cloud-qwen-coder' | 'cloud-gpt-120b'
   | 'cloud-gpt-20b' | 'cloud-gemma';
 
-export type ModelAction = 'expand' | 'distill' | 'digest' | 'ask' | 'score';
+export type ModelAction = 'expand' | 'distill' | 'digest' | 'digest_weekly' | 'ask' | 'score';
 
 export const ALL_MODELS: DigestModel[] = [
   'qwen','sonnet','opus','long',
@@ -22,12 +22,13 @@ export const MODEL_LABELS: Record<DigestModel, string> = {
   'cloud-gemma': 'Gemma3 27B (cloud)',
 };
 
-export const ALL_ACTIONS: ModelAction[] = ['expand','distill','digest','ask','score'];
+export const ALL_ACTIONS: ModelAction[] = ['expand','distill','digest','digest_weekly','ask','score'];
 
 export const ACTION_LABELS: Record<ModelAction, string> = {
   expand: 'Verdiep deze les',
   distill: 'Meer lessen destilleren',
-  digest: 'Digest genereren',
+  digest: 'Dagdigest genereren',
+  digest_weekly: 'Weekdigest genereren',
   ask: 'Vraag beantwoorden',
   score: 'Quality-score (1-10)',
 };

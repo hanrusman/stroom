@@ -851,6 +851,11 @@ class TopicDigest(BaseModel):
 
 DigestWindow = Literal["daily", "weekly"]
 DIGEST_WINDOWS: dict[str, int] = {"daily": 24, "weekly": 168}
+
+# Nightly draait elke nacht; de weekdigest hoeft maar ~wekelijks. We regenereren
+# 'm pas als de bestaande ouder is dan dit (6,5 dag) → zelfherstellend, geen
+# 28-uurs backfill-cascade. Weekly componeert uit dag-digests, dus goedkoop.
+WEEKLY_MIN_AGE_HOURS: float = 156.0
 from pipeline.digest import (
     DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS, DIGEST_MODEL_MAP,
     DIGEST_GENERATION_STALE_MIN,
@@ -2473,12 +2478,16 @@ async def _cron_pick_articles_for_summary(session, *,
 
 
 async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
-                                   window: str = "daily") -> int:
-    """For every topic, mark its daily digest as is_generating and kick a bg task.
+                                   window: str = "daily",
+                                   min_age_hours: Optional[float] = None) -> int:
+    """For every topic, mark its digest as is_generating and kick a bg task.
 
     Note: generation_started_at wordt pas gezet wanneer de task daadwerkelijk
     begint (binnen de semaphore), niet hier. Dit voorkomt false-positive stale
-    detectie wanneer veel topics in de wachtrij staan."""
+    detectie wanneer veel topics in de wachtrij staan.
+
+    min_age_hours: sla een topic over als z'n digest recenter dan dit is. Zo
+    draait de weekdigest ~wekelijks ondanks de dagelijkse cron (zelfherstellend)."""
     window_hours = DIGEST_WINDOWS[window]
     rows = (await session.exec(sa_text(
         "SELECT id::text, slug, name FROM topics ORDER BY sort_order, name"
@@ -2486,7 +2495,7 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
     started = 0
     for tid, slug, name in rows:
         existing = (await session.exec(sa_text(
-            "SELECT is_generating, generation_started_at FROM topic_digests "
+            "SELECT is_generating, generation_started_at, generated_at FROM topic_digests "
             "WHERE topic_id = CAST(:tid AS uuid) AND window_hours = :w"
         ).bindparams(tid=tid, w=window_hours))).first()
         # Skip als er al een digest bezig is of in de wachtrij staat:
@@ -2494,11 +2503,16 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
         # - is_generating=true EN generation_started_at < 30 min geleden → actief bezig, skip
         # - is_generating=true EN generation_started_at > 30 min geleden → echte stale, mag opnieuw
         if existing and existing[0]:
-            started = existing[1]
-            if started is None:
+            started_at = existing[1]
+            if started_at is None:
                 continue  # In wachtrij, andere worker pakt 'm
-            if (datetime.now(started.tzinfo) - started).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
+            if (datetime.now(started_at.tzinfo) - started_at).total_seconds() < DIGEST_GENERATION_STALE_MIN * 60:
                 continue  # Actief bezig
+        # Nog vers genoeg? Sla over (gebruikt voor de ~wekelijkse weekdigest).
+        elif existing and min_age_hours is not None and existing[2] is not None:
+            age_s = (datetime.now(existing[2].tzinfo) - existing[2]).total_seconds()
+            if age_s < min_age_hours * 3600:
+                continue
         if existing:
             # is_generating=true zetten, maar generation_started_at pas in de worker
             await session.exec(sa_text(
@@ -2554,8 +2568,15 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
 
     from routers.settings import _load as _load_settings
-    digest_default = (await _load_settings(session)).digest
-    digests_started = await _cron_kick_topic_digests(session, model=digest_default, window="daily")
+    _settings = await _load_settings(session)
+    digests_started = await _cron_kick_topic_digests(session, model=_settings.digest, window="daily")
+    # Weekdigest hoeft maar ~wekelijks: alleen (re)genereren als de bestaande
+    # ouder is dan WEEKLY_MIN_AGE_HOURS. Componeert uit de dag-digests (goedkoop),
+    # dus dit kan veilig elke nacht meeliften zonder de oude 19u-hang.
+    weekly_model = _settings.digest_weekly or _settings.digest
+    weekly_started = await _cron_kick_topic_digests(
+        session, model=weekly_model, window="weekly", min_age_hours=WEEKLY_MIN_AGE_HOURS,
+    )
 
     return {
         "ok": True,
@@ -2567,6 +2588,7 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
         "videos_queued": videos_queued,
         "articles_summarize_kicked": len(article_ids),
         "digests_started": digests_started,
+        "weekly_started": weekly_started,
     }
 
 
