@@ -10,6 +10,7 @@ from sqlalchemy import text as sa_text
 
 DIGEST_MAX_ITEMS = 40
 DIGEST_PER_ITEM_CHARS = 600
+WEEKLY_SOURCE_DAYS = 7  # weekly componeert uit de laatste N dag-digests
 DIGEST_GENERATION_STALE_MIN = 30  # bg-task is dood als hij na N min nog 'is_generating' is
 DIGEST_LLM_TIMEOUT = 1200.0  # 20 min per digest — grote weekly + zware topic kan zo lang duren
 
@@ -63,6 +64,49 @@ def build_corpus(rows) -> list[str]:
     return blocks
 
 
+def build_weekly_corpus_from_dailies(daily_rows) -> list[str]:
+    """Bouw het weekly-corpus uit de laatste dag-digests (RAPTOR-laag dag→week).
+
+    daily_rows: (generated_at, markdown) van de recentste dag-digests, nieuw→oud.
+    We presenteren ze oud→nieuw zodat het weekbeeld chronologisch leest."""
+    blocks: list[str] = []
+    for generated_at, markdown in reversed(list(daily_rows)):
+        body = (markdown or "").strip()
+        if not body:
+            continue
+        day = str(generated_at)[:10] if generated_at else ""
+        blocks.append(f"### Dagsamenvatting {day}\n\n{body}")
+    return blocks
+
+
+def build_weekly_digest_prompt(topic_name: str, corpus: str) -> tuple[str, str]:
+    """Citatie-gebonden, lage-temperatuur prompt voor de synthese-laag.
+
+    De anti-drift-hefboom is hier de citatie-binding: het model mag alleen
+    samenvatten wat in de dag-samenvattingen staat en de bestaande bronlinks
+    overnemen — geen nieuwe feiten of URLs verzinnen."""
+    system_prompt = (
+        f"Je bent een redacteur die een persoonlijke weeksamenvatting schrijft over het thema "
+        f"'{topic_name}'. Je krijgt de losse DAG-samenvattingen van de afgelopen dagen en vat ze "
+        "samen tot één weekbeeld in het Nederlands.\n"
+        "REGELS (belangrijk tegen parafrase-drift):\n"
+        "- Baseer je UITSLUITEND op de onderstaande dag-samenvattingen. Verzin geen feiten, "
+        "cijfers of gebeurtenissen die er niet in staan.\n"
+        "- Neem de markdown-links/bronnen exact over zoals ze in de dag-samenvattingen staan; "
+        "verzin NOOIT nieuwe URLs.\n"
+        "- Elke claim moet herleidbaar zijn tot een dag-samenvatting hieronder.\n\n"
+        "Structuur:\n"
+        "1. Korte intro (2 zinnen): de grote lijn van de week.\n"
+        "2. Per thema-cluster een H3-kop, dan 2-4 zinnen die de rode draad over de dagen heen "
+        "uitleggen, met de bronlinks die er al waren: [Bronnaam](URL).\n"
+        "3. Een '## Verder lezen' lijst (max 5) met items uit de dag-samenvattingen — "
+        "elke regel als `- [Titel](URL) — korte reden waarom (1 zin).`\n"
+        "Wees scherp, geen marketingtaal. Als dagen elkaar tegenspreken, benoem de ontwikkeling."
+    )
+    user_prompt = f"Dag-samenvattingen van de afgelopen week (oud → nieuw):\n\n{corpus}"
+    return system_prompt, user_prompt
+
+
 async def run_digest_generation(topic_id: str, topic_name: str, slug: str,
                                 model: str, window_hours: int,
                                 async_session_maker, llm_service):
@@ -90,43 +134,74 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
             ).bindparams(tid=topic_id, w=window_hours))
             await bg.commit()
 
-            rows = (await bg.exec(sa_text(
-                f"""
-                SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
-                FROM items i
-                JOIN item_topics it ON it.item_id = i.id
-                JOIN sources s ON s.id = i.source_id
-                WHERE it.topic_id = CAST(:tid AS uuid)
-                  AND i.published_at >= now() - INTERVAL '{window_hours} hours'
-                  AND s.active = true
-                  AND i.status <> 'archived'::item_status
-                ORDER BY i.published_at DESC
-                LIMIT {DIGEST_MAX_ITEMS}
-                """
-            ).bindparams(tid=topic_id))).all()
+            # Kies corpus + prompt. Weekly (>=168u) componeert uit de laatste
+            # WEEKLY_SOURCE_DAYS dag-digests (RAPTOR-laag dag→week): klein corpus,
+            # geen 19u-hang die 7 dagen ruwe items op de lokale GPU gaf.
+            # system_prompt blijft None tot we een bruikbaar corpus hebben; is het
+            # daarna nog None, dan valt het door naar het ruwe-items-pad (daily, of
+            # weekly zonder bruikbare dag-history).
+            system_prompt = user_prompt = None
+            base_temp = 0.4
 
-            if not rows:
-                msg = f"Geen nieuwe items voor dit topic in de afgelopen {window_hours // 24} dag(en)."
-                await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error=NULL, "
-                    "markdown=:m, item_count=0, model=NULL, generated_at=now() "
-                    "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(m=msg, tid=topic_id, w=window_hours))
-                await bg.commit()
-                print(f"[digest bg] {slug} {window_hours}u klaar — 0 items (geen content)", flush=True)
-                return
+            if window_hours >= 168:
+                daily_rows = (await bg.exec(sa_text(
+                    """
+                    SELECT generated_at, markdown
+                    FROM topic_digest_runs
+                    WHERE topic_id = CAST(:tid AS uuid) AND window_hours = 24
+                      AND markdown IS NOT NULL AND markdown <> ''
+                    ORDER BY generated_at DESC
+                    LIMIT :lim
+                    """
+                ).bindparams(tid=topic_id, lim=WEEKLY_SOURCE_DAYS))).all()
+                blocks = build_weekly_corpus_from_dailies(daily_rows) if daily_rows else []
+                if blocks:
+                    base_temp = 0.3
+                    corpus = "\n\n---\n\n".join(blocks)
+                    system_prompt, user_prompt = build_weekly_digest_prompt(topic_name, corpus)
+                    if len(blocks) < WEEKLY_SOURCE_DAYS:
+                        print(f"[digest bg] {slug} weekly — slechts {len(blocks)} dag-digests "
+                              f"beschikbaar (<{WEEKLY_SOURCE_DAYS})", flush=True)
 
-            blocks = build_corpus(rows)
-            if not blocks:
-                await bg.exec(sa_text(
-                    "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' "
-                    "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
-                ).bindparams(tid=topic_id, w=window_hours))
-                await bg.commit()
-                return
+            if system_prompt is None:
+                # Ruwe-items-pad: daily, óf weekly-fallback zonder bruikbare dag-history.
+                rows = (await bg.exec(sa_text(
+                    f"""
+                    SELECT i.title, i.format::text, s.name, i.summary, i.description, i.published_at, i.media_url
+                    FROM items i
+                    JOIN item_topics it ON it.item_id = i.id
+                    JOIN sources s ON s.id = i.source_id
+                    WHERE it.topic_id = CAST(:tid AS uuid)
+                      AND i.published_at >= now() - INTERVAL '{window_hours} hours'
+                      AND s.active = true
+                      AND i.status <> 'archived'::item_status
+                    ORDER BY i.published_at DESC
+                    LIMIT {DIGEST_MAX_ITEMS}
+                    """
+                ).bindparams(tid=topic_id))).all()
 
-            corpus = "\n\n---\n\n".join(blocks)
-            system_prompt, user_prompt = build_digest_prompt(topic_name, window_hours, corpus)
+                if not rows:
+                    msg = f"Geen nieuwe items voor dit topic in de afgelopen {window_hours // 24} dag(en)."
+                    await bg.exec(sa_text(
+                        "UPDATE topic_digests SET is_generating=false, error=NULL, "
+                        "markdown=:m, item_count=0, model=NULL, generated_at=now() "
+                        "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
+                    ).bindparams(m=msg, tid=topic_id, w=window_hours))
+                    await bg.commit()
+                    print(f"[digest bg] {slug} {window_hours}u klaar — 0 items (geen content)", flush=True)
+                    return
+
+                blocks = build_corpus(rows)
+                if not blocks:
+                    await bg.exec(sa_text(
+                        "UPDATE topic_digests SET is_generating=false, error='Items hebben geen tekst' "
+                        "WHERE topic_id=CAST(:tid AS uuid) AND window_hours=:w"
+                    ).bindparams(tid=topic_id, w=window_hours))
+                    await bg.commit()
+                    return
+
+                corpus = "\n\n---\n\n".join(blocks)
+                system_prompt, user_prompt = build_digest_prompt(topic_name, window_hours, corpus)
             markdown = ""
             last_err: Optional[Exception] = None
             for attempt in range(2):
@@ -134,7 +209,8 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
                     markdown = await llm_service.call_llm(llm_alias, [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
-                    ], temperature=0.4 if attempt == 0 else 0.6, timeout=DIGEST_LLM_TIMEOUT)
+                    ], temperature=base_temp if attempt == 0 else min(base_temp + 0.2, 0.7),
+                       timeout=DIGEST_LLM_TIMEOUT)
                     if markdown and markdown.strip():
                         break
                 except Exception as e:

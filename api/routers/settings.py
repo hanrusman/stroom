@@ -20,6 +20,9 @@ class ModelDefaults(BaseModel):
     expand: DigestModel
     distill: DigestModel
     digest: DigestModel
+    # Aparte synthese-laag voor de weekdigest. Drift-knop: kies hier een ander
+    # (bv. niet-reasoning) model dan de dag-digest. Default = opus (gelijk aan digest).
+    digest_weekly: DigestModel = "opus"
     ask: DigestModel = "qwen"
     score: DigestModel = "cloud-kimi"
 
@@ -29,7 +32,8 @@ class Settings(BaseModel):
 
 
 DEFAULTS = ModelDefaults(
-    expand="qwen", distill="qwen", digest="opus", ask="qwen", score="cloud-kimi",
+    expand="qwen", distill="qwen", digest="opus", digest_weekly="opus",
+    ask="qwen", score="cloud-kimi",
 )
 
 
