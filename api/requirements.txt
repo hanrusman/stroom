@@ -13,5 +13,5 @@ lxml_html_clean>=0.2.0
 kokoro-onnx>=0.3.0
 soundfile>=0.12.1
 numpy>=1.26.0
-# Embedding-based interest scoring (vervangt zelf-gehoste quality-scorer)
-sentence-transformers>=2.7.0,<4.0.0
+# Interest-embeddings draaien sinds 2026-06 in de losse stroom-embed sidecar
+# (ONNX-int8 e5-small) — geen in-process sentence-transformers/torch meer hier.

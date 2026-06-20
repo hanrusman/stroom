@@ -3,6 +3,11 @@
 Run binnen stroom-api container:
     python /app/scripts/rebuild_centroid.py
 
+Embeddings komen sinds 2026-06 van de stroom-embed sidecar (ONNX-int8 e5-small),
+niet meer uit een in-process sentence-transformer. Zo embedden centroid (hier,
+prefix=passage) en query (quality_service, prefix=query) via exact hetzelfde
+model — geen fp32/int8-drift in de cosine-vergelijking.
+
 Output: /data/centroid.npz (atomisch via tmp + os.replace).
 """
 import os
@@ -11,14 +16,16 @@ import asyncio
 from pathlib import Path
 
 import numpy as np
+import httpx
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
-from sentence_transformers import SentenceTransformer
 
 sys.path.insert(0, "/app")
 from core.config import settings  # noqa: E402
 
-EMBED_MODEL_NAME = "intfloat/multilingual-e5-small"
+EMBED_SERVICE_URL = os.environ.get("EMBED_SERVICE_URL", "").rstrip("/")
+EMBED_TIMEOUT_SEC = float(os.environ.get("EMBED_TIMEOUT_SEC", "30.0"))
+EMBED_BATCH = 32  # sidecar accepteert max 64 per call
 OUTPUT_PATH = Path(os.environ.get("CENTROID_PATH", "/data/centroid.npz"))
 
 
@@ -34,7 +41,28 @@ async def fetch_lessons() -> list[tuple[str, str]]:
         await engine.dispose()
 
 
+async def embed_corpus(corpus: list[str]) -> np.ndarray:
+    """Vraag de sidecar om passage-embeddings, in batches."""
+    vectors: list[list[float]] = []
+    async with httpx.AsyncClient(timeout=EMBED_TIMEOUT_SEC) as client:
+        for start in range(0, len(corpus), EMBED_BATCH):
+            batch = corpus[start:start + EMBED_BATCH]
+            resp = await client.post(
+                f"{EMBED_SERVICE_URL}/embed",
+                json={"texts": batch, "prefix": "passage"},
+            )
+            resp.raise_for_status()
+            vectors.extend(resp.json()["vectors"])
+            print(f"[rebuild-centroid] embedded {len(vectors)}/{len(corpus)}", flush=True)
+    return np.asarray(vectors, dtype=np.float32)
+
+
 async def main() -> int:
+    if not EMBED_SERVICE_URL:
+        print("[rebuild-centroid] EMBED_SERVICE_URL leeg — sidecar onbereikbaar, afbreken",
+              flush=True)
+        return 2
+
     try:
         rows = await fetch_lessons()
     except Exception as exc:
@@ -45,21 +73,14 @@ async def main() -> int:
         print("[rebuild-centroid] geen lessons met rating=1, niets te doen", flush=True)
         return 1
 
-    print(f"[rebuild-centroid] {len(rows)} lessons gevonden — model laden...", flush=True)
-    model = SentenceTransformer(EMBED_MODEL_NAME, device="cpu")
-
-    corpus = [f"passage: {title}\n{body}"[:8000] for title, body in rows]
-    print(f"[rebuild-centroid] embeddings berekenen ({len(corpus)} items)...", flush=True)
+    # Raw title\nbody; de sidecar prepend zelf de "passage: "-prefix.
+    corpus = [f"{title}\n{body}"[:8000] for title, body in rows]
+    print(f"[rebuild-centroid] {len(corpus)} lessons — embeddings via sidecar...", flush=True)
 
     try:
-        embeddings = model.encode(
-            corpus,
-            batch_size=16,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
+        embeddings = await embed_corpus(corpus)
     except Exception as exc:
-        print(f"[rebuild-centroid] encode faalde: {exc}", flush=True)
+        print(f"[rebuild-centroid] embed faalde: {exc}", flush=True)
         return 2
 
     centroid = np.mean(embeddings, axis=0).astype(np.float32)
