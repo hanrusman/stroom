@@ -1,21 +1,12 @@
 # syntax=docker/dockerfile:1
-# --- builder: exporteert + quantizeert het model (heeft torch nodig) ---
-FROM python:3.12-slim AS builder
-
-WORKDIR /build
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# torch CPU-only eerst, zodat optimum geen CUDA-wheel binnentrekt.
-RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
-COPY requirements-build.txt .
-RUN pip install --no-cache-dir -r requirements-build.txt
-
-COPY export_model.py .
-RUN python export_model.py
-
-# --- runtime: slank, geen torch ---
+# Canonieke build: slank, GEEN torch. Kopieert het vooraf-gequantizeerde
+# int8-model uit _artifacts/ (gegenereerd door build-embed.sh, gitignored).
+#
+# Waarom niet torch-at-build: de export/quantisatie piekt >2.8 GB en OOM't
+# kleine hosts (Strongbad = 3.7 GB). Zie build-embed.sh + Dockerfile.model-export.
+#
+# Op een verse clone zonder _artifacts/ faalt deze build SCHOON op de COPY
+# (geen OOM) — draai eerst `./build-embed.sh`.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -29,9 +20,10 @@ RUN adduser --disabled-password --gecos '' appuser
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Alleen de gequantizeerde onnx + tokenizer.json zijn nodig op runtime.
-COPY --from=builder /model/model_quantized.onnx /model/model_quantized.onnx
-COPY --from=builder /model/tokenizer.json /model/tokenizer.json
+# Vooraf gebouwd door build-embed.sh (off-build, gecapt). Niet in git (gitignored);
+# back-up als GitHub-release-asset. tokenizer.json hoort bij model_quantized.onnx.
+COPY _artifacts/model_quantized.onnx /model/model_quantized.onnx
+COPY _artifacts/tokenizer.json /model/tokenizer.json
 COPY app.py .
 
 RUN chown -R appuser:appuser /app /model
