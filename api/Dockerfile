@@ -14,12 +14,6 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -g 1000 appuser && \
     useradd -r -u 1000 -g appuser appuser
 
-# Install torch CPU-only first so sentence-transformers doesn't pull the
-# multi-GB CUDA wheel as a transitive dep. Suitable for a CPU-only host.
-RUN pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
-        torch==2.4.1+cpu
-
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
