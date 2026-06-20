@@ -1,4 +1,8 @@
-export type ItemFormat = 'article' | 'podcast' | 'video' | 'short';
+// TODO 2026-06-20: 'short' uitgecommentarieerd. Short-form items worden
+// niet meer ondersteund. Om terug te zetten: 'short' weer toevoegen aan
+// deze union + RAIL_META.short + FORMAT_BADGE.short in App.tsx +
+// ShortCard-component + 'short' branch in ItemCard.
+export type ItemFormat = 'article' | 'podcast' | 'video'; // | 'short';
 
 export interface Topic {
   slug: string;

@@ -72,10 +72,17 @@ class ScoreChangeReason(str, Enum):
 
 
 class ItemFormat(str, Enum):
-    ARTICLE = "article"
+    # Volgorde is bewust podcast → video → article → short: dit bepaalt de
+    # rij-volgorde van de rails op de tijdlijn-pagina (de frontend rendert
+    # ze in de volgorde waarin ze uit de backend komen — zie main.py:_build_rails).
+    # TODO 2026-06-20: short is uitgecommentarieerd. Short-form items
+    # worden niet meer ondersteund; als we 'm later terug willen zetten,
+    # SHORT weer uncommenten + in App.tsx de ShortCard / RAIL_META.short
+    # / FORMAT_BADGE.short weer aanzetten (zie TODO-commentaar aldaar).
     PODCAST = "podcast"
     VIDEO = "video"
-    SHORT = "short"
+    ARTICLE = "article"
+    # SHORT = "short"
 
 
 class Topic(SQLModel, table=True):

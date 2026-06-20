@@ -10,9 +10,17 @@ from core.db import get_async_session
 router = APIRouter()
 
 DigestModel = Literal[
+    # Lokale Ollama modellen
     "qwen", "sonnet", "opus", "long",
-    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
+    "mistral", "llama", "gemma", "phi",
+    # Cloud modellen
+    "cloud-kimi", "cloud-kimi-latest",
+    "cloud-qwen-coder", "cloud-gpt-120b",
     "cloud-gpt-20b", "cloud-gemma",
+    "cloud-minimax", "cloud-glm-5.1",
+    "cloud-gemini-flash", "cloud-nemotron",
+    "cloud-deepseek", "cloud-deepseek-reasoner",
+    "cloud-mistral-large", "cloud-mistral-medium", "cloud-codestral",
 ]
 
 

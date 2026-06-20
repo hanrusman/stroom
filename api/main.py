@@ -327,6 +327,8 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/transcribe-videos",
     "/admin/cron/summarize-articles",
     "/admin/cron/digest-topics",
+    "/admin/cron/last-result",
+    "/admin/sources/backfill-stale",
     "/admin/quality-backfill",
 )
 # Paths that ALWAYS go through internal-token auth (no session-fallback).
@@ -887,9 +889,17 @@ async def get_topic_digest(slug: str,
 
 
 DigestModel = Literal[
+    # Lokale Ollama modellen
     "qwen", "sonnet", "opus", "long",
-    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
+    "mistral", "llama", "gemma", "phi",
+    # Cloud modellen
+    "cloud-kimi", "cloud-kimi-latest",
+    "cloud-qwen-coder", "cloud-gpt-120b",
     "cloud-gpt-20b", "cloud-gemma",
+    "cloud-minimax", "cloud-glm-5.1",
+    "cloud-gemini-flash", "cloud-nemotron",
+    "cloud-deepseek", "cloud-deepseek-reasoner",
+    "cloud-mistral-large", "cloud-mistral-medium", "cloud-codestral",
 ]
 
 
@@ -2244,40 +2254,145 @@ async def _bg_backfill_thumbnails(limit: int):
 async def admin_refresh_all(background_tasks: BackgroundTasks,
                             session=Depends(get_async_session),
                             user=Depends(require_user)):
-    """Refresh every active source. Schedules thumbnail-backfill als achtergrondtaak."""
-    r = await session.exec(sa_text(
-        "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
-    ))
-    rows = r.all()
-    total_inserted = 0
-    total_checked = 0
-    errors = 0
-    per_source = []
-    for row in rows:
-        src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
+    """Refresh every active source. Schedules thumbnail-backfill als achtergrondtaak.
+
+    Zelfde watchdogs als /admin/cron/nightly: per-bron 90s + globale 1800s.
+    Voorkomt dat één hangende feed de hele admin-actie bevriest (wat eerder
+    gebeurde en de DB-pool liet vollopen met idle-in-transaction zombies).
+    """
+    async def _run() -> dict:
+        r = await session.exec(sa_text(
+            "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
+        ))
+        rows = r.all()
+        total_inserted = 0
+        total_checked = 0
+        errors = 0
+        per_source = []
+        for row in rows:
+            src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
+            try:
+                res = await asyncio.wait_for(_refresh_one(session, src), timeout=90.0)
+                await session.commit()
+            except asyncio.TimeoutError:
+                await session.rollback()
+                res = {"inserted": 0, "checked": 0, "error": "timeout na 90s"}
+                print(f"[refresh-all] {row[1]} timeout na 90s — overgeslagen", flush=True)
+            except Exception as e:
+                await session.rollback()
+                res = {"inserted": 0, "checked": 0, "error": str(e)[:200]}
+            if "error" in res:
+                errors += 1
+            total_inserted += res.get("inserted", 0)
+            total_checked += res.get("checked", 0)
+            per_source.append({"name": row[1], **res})
+
+        background_tasks.add_task(_bg_backfill_thumbnails, REFRESH_THUMB_BACKFILL_LIMIT)
+
+        return {
+            "ok": True,
+            "sources": len(rows),
+            "errors": errors,
+            "inserted": total_inserted,
+            "checked": total_checked,
+            "thumbnails_scheduled": REFRESH_THUMB_BACKFILL_LIMIT,
+            "per_source": per_source,
+        }
+
+    try:
+        return await asyncio.wait_for(_run(), timeout=1800.0)
+    except asyncio.TimeoutError:
         try:
-            res = await _refresh_one(session, src)
-            await session.commit()
-        except Exception as e:
             await session.rollback()
-            res = {"inserted": 0, "checked": 0, "error": str(e)[:200]}
-        if "error" in res:
-            errors += 1
-        total_inserted += res["inserted"]
-        total_checked += res["checked"]
-        per_source.append({"name": row[1], **res})
+        except Exception:
+            pass
+        print("[refresh-all] timeout na 1800s — afgekapt", flush=True)
+        return {
+            "ok": False,
+            "error": "timeout: refresh-all exceeded 1800 seconds",
+        }
 
-    background_tasks.add_task(_bg_backfill_thumbnails, REFRESH_THUMB_BACKFILL_LIMIT)
 
-    return {
-        "ok": True,
-        "sources": len(rows),
-        "errors": errors,
-        "inserted": total_inserted,
-        "checked": total_checked,
-        "thumbnails_scheduled": REFRESH_THUMB_BACKFILL_LIMIT,
-        "per_source": per_source,
-    }
+@app.post("/admin/sources/backfill-stale")
+async def admin_sources_backfill_stale(stale_days: int = Query(5, ge=1, le=90),
+                                       session=Depends(get_async_session)):
+    """Ververs álle actieve bronnen waarvan last_polled_at ouder is dan
+    `stale_days` dagen (of NULL — nog nooit gepolld). Bedoeld als
+    'inhaalronde' nadat de nightly een tijd niet heeft gedraaid (zoals
+    het 2026-06-20 incident). Per-bron 90s watchdog + globale 1800s —
+    dezelfde bescherming als /admin/cron/nightly.
+
+    In tegenstelling tot /admin/cron/nightly doet deze endpoint géén
+    transcribe/summarize/digest-stappen: alleen feed-pull, items
+    invoegen, last_polled_at bijwerken. De workers pikken de nieuwe
+    'ready'/'new' items vanzelf op bij de volgende nightly-kick, of je
+    draait daarna apart /admin/cron/summarize-articles etc.
+
+    Auth: internal token (zelfde als nightly).
+    """
+    threshold_days = stale_days
+
+    async def _run() -> dict:
+        rows = (await session.exec(sa_text(f"""
+            SELECT id, name, kind::text, url,
+                   EXTRACT(EPOCH FROM (now() - last_polled_at))::int AS age_s
+            FROM sources
+            WHERE active
+              AND (last_polled_at IS NULL
+                   OR last_polled_at < now() - interval '{threshold_days} days')
+            ORDER BY last_polled_at NULLS FIRST, name
+        """))).all()
+        refreshed = 0
+        errors = 0
+        inserted_total = 0
+        skipped_recent = 0
+        per_source = []
+        for row in rows:
+            src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
+            try:
+                res = await asyncio.wait_for(_refresh_one(session, src), timeout=90.0)
+                await session.commit()
+                refreshed += 1
+                inserted_total += res.get("inserted", 0)
+                if "error" in res:
+                    errors += 1
+            except asyncio.TimeoutError:
+                await session.rollback()
+                errors += 1
+                print(f"[backfill-stale] {row[1]} timeout na 90s — overgeslagen", flush=True)
+            except Exception as exc:
+                await session.rollback()
+                errors += 1
+                print(f"[backfill-stale] {row[1]} faalde: {exc}", flush=True)
+            per_source.append({
+                "name": row[1],
+                "kind": row[2],
+                "age_seconds_before": row[4],
+                **({"inserted": res.get("inserted", 0)} if "res" in locals() else {"error": "timeout"}),
+            })
+
+        return {
+            "ok": True,
+            "stale_days": threshold_days,
+            "candidates": len(rows),
+            "sources_refreshed": refreshed,
+            "refresh_errors": errors,
+            "new_items_inserted": inserted_total,
+            "per_source": per_source,
+        }
+
+    try:
+        return await asyncio.wait_for(_run(), timeout=1800.0)
+    except asyncio.TimeoutError:
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+        print("[backfill-stale] timeout na 1800s — afgekapt", flush=True)
+        return {
+            "ok": False,
+            "error": "timeout: backfill-stale exceeded 1800 seconds",
+        }
 
 
 CRON_WEIGHT_MIN = 5
@@ -2300,7 +2415,46 @@ async def _cron_unstuck(session) -> int:
       verse heartbeat. Pas als de pipeline werkelijk stil staat (geen enkele
       heartbeat in N min) gelden queue-items als 'stalled'. Dit voorkomt
       false-positives bij grote batches/lange podcasts waar semaphore=1 een
-      uur queue-wachttijd makkelijk legitiem maakt."""
+      uur queue-wachttijd makkelijk legitiem maakt.
+
+    Self-clean: aan het begin terminaten we andere stroom-api connecties die
+    langer dan 5 min in 'idle in transaction' zitten. Dat zijn zombies van
+    vorige cron-runs die ergens halverwege _refresh_one zijn blijven hangen
+    (bv. door een langzame feed-HTTP-call of een crash mid-request). Zonder
+    deze stap lekken ze elke nacht opnieuw een connectie en na een paar dagen
+    zit de pool vol — exact het probleem dat 2026-06-20 tot een vastgelopen
+    nightly leidde. De eigen connectie wordt expliciet uitgesloten.
+    """
+    try:
+        r_zombies = await session.exec(sa_text("""
+            SELECT count(*) FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND state = 'idle in transaction'
+              AND query_start < now() - interval '5 minutes'
+        """))
+        n_zombies = r_zombies.scalar() or 0
+        if n_zombies:
+            print(f"[cron-unstuck] terminating {n_zombies} zombie "
+                  f"idle-in-transaction sessie(s) ouder dan 5 min", flush=True)
+            await session.exec(sa_text("""
+                SELECT pg_terminate_backend(pid) FROM pg_stat_activity
+                WHERE datname = current_database()
+                  AND pid <> pg_backend_pid()
+                  AND state = 'idle in transaction'
+                  AND query_start < now() - interval '5 minutes'
+            """))
+            await session.commit()
+    except Exception as exc:
+        # pg_terminate mag de rest van _cron_unstuck nooit breken — als de
+        # postgres-versie geen current_database() kent of perms ontbreken,
+        # log het en ga door met de echte unstuck-stappen.
+        print(f"[cron-unstuck] zombie-clean faalde (genegeerd): {exc}", flush=True)
+        try:
+            await session.rollback()
+        except Exception:
+            pass
+
     # Actief-bezig items: liveness-check via heartbeat
     r_active = await session.exec(sa_text(f"""
         UPDATE items SET
@@ -2540,56 +2694,84 @@ async def admin_cron_nightly(session=Depends(get_async_session)):
     de queues vanzelf (bounded door SUMMARIZE_WORKERS + hard cap op
     queue-depth). Geen background-task spawn meer hier.
 
+    Twee watchdogs beschermen tegen een hang-request:
+    - Per-bron asyncio.wait_for(90s): één langzame feed kan niet de hele loop
+      gijzelen. Bij timeout: rollback + refresh_errors++ + doorgaan.
+    - Globale asyncio.wait_for(1800s): harde bovengrens voor de hele run. Bij
+      timeout returnen we een JSON-error en laat de AsyncSession contextmanager
+      een rollback doen — geen open transactie, geen pool-lek.
+
     Auth: internal token or admin session cookie.
     """
-    unstuck = await _cron_unstuck(session)
+    async def _run() -> dict:
+        unstuck = await _cron_unstuck(session)
 
-    # Refresh sources
-    rows = (await session.exec(sa_text(
-        "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
-    ))).all()
-    refreshed = 0; refresh_errors = 0; inserted_total = 0
-    for row in rows:
-        src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
-        try:
-            res = await _refresh_one(session, src)
-            await session.commit()
-            refreshed += 1
-            inserted_total += res.get("inserted", 0)
-            if "error" in res:
+        # Refresh sources
+        rows = (await session.exec(sa_text(
+            "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
+        ))).all()
+        refreshed = 0; refresh_errors = 0; inserted_total = 0
+        for row in rows:
+            src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
+            try:
+                res = await asyncio.wait_for(_refresh_one(session, src), timeout=90.0)
+                await session.commit()
+                refreshed += 1
+                inserted_total += res.get("inserted", 0)
+                if "error" in res:
+                    refresh_errors += 1
+            except asyncio.TimeoutError:
+                await session.rollback()
                 refresh_errors += 1
-        except Exception as exc:
+                print(f"[cron] refresh {row[1]} timeout na 90s — overgeslagen", flush=True)
+            except Exception as exc:
+                await session.rollback()
+                refresh_errors += 1
+                print(f"[cron] refresh {row[1]} faalde: {exc}", flush=True)
+
+        podcasts_queued = await _cron_queue_transcribes(session, content_kind="podcast", hours=CRON_NIGHTLY_HOURS)
+        videos_queued = await _cron_queue_transcribes(session, content_kind="youtube", hours=CRON_NIGHTLY_HOURS)
+        article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
+
+        from routers.settings import _load as _load_settings
+        _settings = await _load_settings(session)
+        digests_started = await _cron_kick_topic_digests(session, model=_settings.digest, window="daily")
+        # Weekdigest hoeft maar ~wekelijks: alleen (re)genereren als de bestaande
+        # ouder is dan WEEKLY_MIN_AGE_HOURS. Componeert uit de dag-digests (goedkoop),
+        # dus dit kan veilig elke nacht meeliften zonder de oude 19u-hang.
+        weekly_model = _settings.digest_weekly or _settings.digest
+        weekly_started = await _cron_kick_topic_digests(
+            session, model=weekly_model, window="weekly", min_age_hours=WEEKLY_MIN_AGE_HOURS,
+        )
+
+        return {
+            "ok": True,
+            "stuck_reset": unstuck,
+            "sources_refreshed": refreshed,
+            "refresh_errors": refresh_errors,
+            "new_items_inserted": inserted_total,
+            "podcasts_queued": podcasts_queued,
+            "videos_queued": videos_queued,
+            "articles_summarize_kicked": len(article_ids),
+            "digests_started": digests_started,
+            "weekly_started": weekly_started,
+        }
+
+    try:
+        return await asyncio.wait_for(_run(), timeout=1800.0)
+    except asyncio.TimeoutError:
+        # Harde watchdog. _run is geannuleerd; AsyncSession __aexit__ zal
+        # een rollback doen zodat er geen open transactie achterblijft en
+        # de connectie terugkeert in de pool.
+        try:
             await session.rollback()
-            refresh_errors += 1
-            print(f"[cron] refresh {row[1]} faalde: {exc}")
-
-    podcasts_queued = await _cron_queue_transcribes(session, content_kind="podcast", hours=CRON_NIGHTLY_HOURS)
-    videos_queued = await _cron_queue_transcribes(session, content_kind="youtube", hours=CRON_NIGHTLY_HOURS)
-    article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
-
-    from routers.settings import _load as _load_settings
-    _settings = await _load_settings(session)
-    digests_started = await _cron_kick_topic_digests(session, model=_settings.digest, window="daily")
-    # Weekdigest hoeft maar ~wekelijks: alleen (re)genereren als de bestaande
-    # ouder is dan WEEKLY_MIN_AGE_HOURS. Componeert uit de dag-digests (goedkoop),
-    # dus dit kan veilig elke nacht meeliften zonder de oude 19u-hang.
-    weekly_model = _settings.digest_weekly or _settings.digest
-    weekly_started = await _cron_kick_topic_digests(
-        session, model=weekly_model, window="weekly", min_age_hours=WEEKLY_MIN_AGE_HOURS,
-    )
-
-    return {
-        "ok": True,
-        "stuck_reset": unstuck,
-        "sources_refreshed": refreshed,
-        "refresh_errors": refresh_errors,
-        "new_items_inserted": inserted_total,
-        "podcasts_queued": podcasts_queued,
-        "videos_queued": videos_queued,
-        "articles_summarize_kicked": len(article_ids),
-        "digests_started": digests_started,
-        "weekly_started": weekly_started,
-    }
+        except Exception:
+            pass
+        print("[cron] nightly timeout na 1800s — afgekapt", flush=True)
+        return {
+            "ok": False,
+            "error": "timeout: nightly exceeded 1800 seconds",
+        }
 
 
 @app.post("/admin/cron/transcribe-podcasts")
@@ -2648,6 +2830,72 @@ async def admin_cron_digest_topics(window: DigestWindow = Query("daily"),
                                    session=Depends(get_async_session)):
     started = await _cron_kick_topic_digests(session, model=model, window=window)
     return {"ok": True, "digests_started": started, "window": window, "model": model}
+
+
+@app.get("/admin/cron/last-result")
+async def admin_cron_last_result(session=Depends(get_async_session)):
+    """Monitoring-snap shot van de cron/feed-poll gezondheid.
+
+    Geeft per actieve bron de leeftijd van de laatste poll, aggregaten
+    (hoeveel bronnen ouder dan 24 uur, oudste poll ooit), en de huidige
+    DB-pool-staat (idle / idle-in-transaction / active). Bedoeld voor
+    Netdata of een andere externe monitor: simpele drempel op
+    `oldest_last_polled_seconds > 90000` page't je als cron >25 uur
+    niet heeft gedraaid. Auth: internal token (zelfde als andere
+    /admin/cron/* endpoints — bewust zonder user-cookie zodat externe
+    monitors met één token kunnen pollen).
+    """
+    # Per-source ouderdom
+    from datetime import datetime, timezone
+    rows = (await session.exec(sa_text("""
+        SELECT name, kind::text, last_polled_at, last_poll_status,
+               EXTRACT(EPOCH FROM (now() - last_polled_at))::int AS age_sec
+        FROM sources
+        WHERE active
+        ORDER BY last_polled_at NULLS FIRST
+    """))).all()
+    sources = [
+        {
+            "name": r[0],
+            "kind": r[1],
+            "last_polled_at": r[2].isoformat() if r[2] else None,
+            "last_poll_status": r[3],
+            "age_seconds": r[4],
+        }
+        for r in rows
+    ]
+
+    over_24h = sum(1 for s in sources
+                   if s["age_seconds"] is None or s["age_seconds"] > 24 * 3600)
+    oldest = max((s["age_seconds"] for s in sources if s["age_seconds"] is not None),
+                 default=None)
+
+    # DB-pool-staat. Zelfde SQL als _cron_unstuck gebruikt voor de cleanup,
+    # maar nu read-only. Handig om te zien of er weer zombies opbouwen.
+    pool_rows = (await session.exec(sa_text("""
+        SELECT state, count(*)::int FROM pg_stat_activity
+        WHERE datname = current_database()
+        GROUP BY state
+    """))).all()
+    pool = {state: count for state, count in pool_rows}
+
+    # Items per processing-status, om te zien of de queue leeg-loopt
+    proc_rows = (await session.exec(sa_text("""
+        SELECT processing_status::text, count(*)::int FROM items
+        GROUP BY processing_status
+    """))).all()
+    processing = {status: count for status, count in proc_rows}
+
+    return {
+        "ok": True,
+        "now": datetime.now(timezone.utc).isoformat(),
+        "sources_total": len(sources),
+        "sources_over_24h": over_24h,
+        "oldest_last_polled_seconds": oldest,
+        "pool": pool,
+        "processing": processing,
+        "sources": sources,
+    }
 
 
 @app.post("/admin/articles/backfill")
@@ -2749,7 +2997,9 @@ async def admin_bulk_archive(body: BulkArchiveRequest,
         raise HTTPException(status_code=400, detail="older_than_days moet >= 1 zijn")
     if not (1 <= body.weight_max <= 10):
         raise HTTPException(status_code=400, detail="weight_max moet 1-10 zijn")
-    _ALLOWED_FORMATS = {"article", "podcast", "video", "short"}
+    # "short" is uitgecommentarieerd in ItemFormat (zie models/base.py
+    # TODO 2026-06-20). Archive-allowlist gespiegeld.
+    _ALLOWED_FORMATS = {"article", "podcast", "video"}
     if any(f not in _ALLOWED_FORMATS for f in body.formats):
         raise HTTPException(status_code=400, detail=f"format moet een van {_ALLOWED_FORMATS}")
 

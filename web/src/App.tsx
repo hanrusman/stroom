@@ -24,11 +24,18 @@ import { MODEL_LABELS as DIGEST_MODEL_LABELS } from './admin_model_constants';
 const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
 const useOpenSource = () => React.useContext(OpenSourceContext);
 
+// Volgorde podcast → video → article spiegelt de ItemFormat-enum in de
+// backend (zie models/base.py). De frontend rendert de rails in de
+// volgorde die de backend teruggeeft; deze RAIL_META geeft alleen het
+// label en icoon per rail.
+// TODO 2026-06-20: short is uitgecommentarieerd. ShortCard-component hieronder,
+// FORMAT_BADGE.short en de 'short' branch in ItemCard zijn ook uit; weer
+// aanzetten als short-form content ooit terugkomt.
 const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{ size?: number }> }> = {
-  article: { label: 'Articles',   icon: FileText },
   podcast: { label: 'Podcasts',   icon: Headphones },
   video:   { label: 'Videos',     icon: PlayCircle },
-  short:   { label: 'Short-form', icon: MessageSquare },
+  article: { label: 'Articles',   icon: FileText },
+  // short:   { label: 'Short-form', icon: MessageSquare },
 };
 
 const stripHtml = (s: string | null) =>
@@ -421,32 +428,37 @@ const MediaCard = ({ item, format, onOpen, onUpdate, onArchive }: { key?: React.
   );
 };
 
-const ShortCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & CardProps) => {
-  const summary = stripHtml(item.description);
-  const openSource = useOpenSource();
-  return (
-    <motion.article
-      onClick={() => onOpen(item.id)}
-      initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
-      className="snap-start shrink-0 w-[75vw] md:w-[320px] rounded-3xl p-6 flex flex-col gap-4 bg-brand-surface border border-brand-ink/5 hover:shadow-sm transition-all cursor-pointer"
-    >
-      <div className="font-mono text-[10px] uppercase tracking-[0.18em] font-medium text-brand-ink">{item.author ?? item.source_name}</div>
-      <p className="font-serif text-[15px] leading-[1.55] text-brand-ink/80 line-clamp-5">{summary}</p>
-      <button
-        type="button"
-        onClick={(e) => { e.stopPropagation(); openSource?.(item.source_id); }}
-        className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5 text-left hover:text-brand-accent transition-colors"
-      >
-        {item.source_name}
-      </button>
-      <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
-    </motion.article>
-  );
-};
+// TODO 2026-06-20: ShortCard uitgecommentarieerd. Short-form items worden
+// niet meer ondersteund; RAIL_META.short + FORMAT_BADGE.short zijn ook uit.
+// Om short-form terug te zetten: ShortCard hieronder uncommenten, 'short' weer
+// toevoegen aan RAIL_META en FORMAT_BADGE, en de 'short' branch in ItemCard.
+// const ShortCard = ({ item, onOpen, onUpdate, onArchive }: { key?: React.Key } & CardProps) => {
+//   const summary = stripHtml(item.description);
+//   const openSource = useOpenSource();
+//   return (
+//     <motion.article
+//       onClick={() => onOpen(item.id)}
+//       initial={{ opacity: 0, y: 10 }} whileInView={{ opacity: 1, y: 0 }} viewport={{ once: true }}
+//       className="snap-start shrink-0 w-[75vw] md:w-[320px] rounded-3xl p-6 flex flex-col gap-4 bg-brand-surface border border-brand-ink/5 hover:shadow-sm transition-all cursor-pointer"
+//     >
+//       <div className="font-mono text-[10px] uppercase tracking-[0.18em] font-medium text-brand-ink">{item.author ?? item.source_name}</div>
+//       <p className="font-serif text-[15px] leading-[1.55] text-brand-ink/80 line-clamp-5">{summary}</p>
+//       <button
+//         type="button"
+//         onClick={(e) => { e.stopPropagation(); openSource?.(item.source_id); }}
+//         className="font-mono text-[9px] uppercase tracking-[0.18em] text-brand-ink/40 mt-auto pt-2 border-t border-brand-ink/5 text-left hover:text-brand-accent transition-colors"
+//       >
+//         {item.source_name}
+//       </button>
+//       <CardActions item={item} onUpdate={onUpdate} onArchive={onArchive} />
+//     </motion.article>
+//   );
+// };
 
 const ItemCard = ({ item, format, onOpen, onUpdate, onArchive }: { key?: React.Key; format: ItemFormat } & CardProps) => {
   if (format === 'article') return <ArticleCard item={item} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
-  if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
+  // TODO 2026-06-20: 'short' branch uitgecommentarieerd. Zie ShortCard hierboven.
+  // if (format === 'short')   return <ShortCard item={item} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
   return <MediaCard item={item} format={format} onOpen={onOpen} onUpdate={onUpdate} onArchive={onArchive} />;
 };
 
@@ -502,10 +514,11 @@ const Rail = ({ format, items, onOpen, onUpdate, onArchiveAll, onArchiveItem }: 
 };
 
 const FORMAT_BADGE: Record<ItemFormat, { label: string; className: string }> = {
-  article: { label: 'Article',    className: 'bg-brand-cream/90 text-brand-ink shadow-sm' },
   podcast: { label: 'Podcast',    className: 'bg-brand-cream/90 text-brand-ink shadow-sm' },
   video:   { label: 'Video',      className: 'bg-brand-accent text-white' },
-  short:   { label: 'Short-form', className: 'bg-brand-cream/90 text-brand-ink shadow-sm' },
+  article: { label: 'Article',    className: 'bg-brand-cream/90 text-brand-ink shadow-sm' },
+  // TODO 2026-06-20: short-badge uitgecommentarieerd. Zie ShortCard.
+  // short:   { label: 'Short-form', className: 'bg-brand-cream/90 text-brand-ink shadow-sm' },
 };
 
 const ActionButton = ({ icon: Icon, label, active, busy, onClick, disabled }: {
