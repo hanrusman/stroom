@@ -103,6 +103,7 @@ def _auth_headers() -> dict:
 # de probe doet een echte provider-call, dus niet bij elke admin-render opnieuw.
 _HEALTH_TTL = 60.0
 _health_cache: dict = {"ts": 0.0, "status": {}}  # alias -> (status, reason)
+_health_lock = asyncio.Lock()
 
 
 async def _probe_one(client: httpx.AsyncClient, alias: str) -> Optional[Tuple[str, Tuple[str, Optional[str]]]]:
@@ -116,7 +117,9 @@ async def _probe_one(client: httpx.AsyncClient, alias: str) -> Optional[Tuple[st
         )
         r.raise_for_status()
         data = r.json()
-        unhealthy = data.get("unhealthy_endpoints") or []
+        unhealthy = data.get("unhealthy_endpoints")
+        if not isinstance(unhealthy, list):
+            unhealthy = []
         if data.get("unhealthy_count", 0) > 0 or unhealthy:
             reason = None
             if unhealthy and isinstance(unhealthy[0], dict):
@@ -136,12 +139,19 @@ async def _flaky_health(client: httpx.AsyncClient) -> dict:
     if _health_cache["ts"] > 0 and now - _health_cache["ts"] < _HEALTH_TTL:
         return _health_cache["status"]
 
-    flaky = [e.litellm for e in MODEL_CATALOG if e.flaky]
-    results = await asyncio.gather(*(_probe_one(client, a) for a in flaky))
-    out = {alias: status for r in results if r for alias, status in [r]}
+    # Lock + double-check voorkomt cache-stampede: niet N parallelle requests
+    # die elk de flaky modellen pollen (en LiteLLM onnodig belasten).
+    async with _health_lock:
+        now = time.monotonic()
+        if _health_cache["ts"] > 0 and now - _health_cache["ts"] < _HEALTH_TTL:
+            return _health_cache["status"]
 
-    _health_cache.update(ts=now, status=out)
-    return out
+        flaky = [e.litellm for e in MODEL_CATALOG if e.flaky]
+        results = await asyncio.gather(*(_probe_one(client, a) for a in flaky))
+        out = {alias: status for r in results if r for alias, status in [r]}
+
+        _health_cache.update(ts=now, status=out)
+        return out
 
 
 def _short_reason(reason: Optional[str]) -> Optional[str]:
