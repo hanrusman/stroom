@@ -1026,7 +1026,8 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
         raise HTTPException(status_code=400, detail="Geen transcript, media_url of beschrijving om te samenvatten")
 
     raw_text = re.sub(r"<[^>]+>", " ", text)
-    route = _pick_summary_route(raw_text, item.get("duration_seconds"))
+    is_article = item["type"] == "rss"
+    route = _pick_summary_route(raw_text, item.get("duration_seconds"), is_article=is_article)
     actual_model = route["model"]
 
     await session.exec(sa_text(
@@ -1049,7 +1050,8 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
                   f"{item_id}: {inner} — fallback naar stroom-bulk truncated", flush=True)
             fallback_cleaned = re.sub(r"\s+", " ", raw_text).strip()[:12000]
             summary = await llm.call_llm("stroom-bulk", [
-                {"role": "system", "content": _SHORT_SUMMARY_SYSTEM},
+                {"role": "system",
+                 "content": _ARTICLE_SUMMARY_SYSTEM if is_article else _SHORT_SUMMARY_SYSTEM},
                 {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {fallback_cleaned}"},
             ], temperature=0.3, timeout=180.0)
             actual_model = f"{route['model']}-fallback-bulk"
@@ -1058,6 +1060,18 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
             "processing_status='ready'::processing_status WHERE id = CAST(:i AS uuid)"
         ).bindparams(s=summary.strip(), m=actual_model, i=item_id))
         await session.commit()
+
+        # Tekstartikelen krijgen ook lesson-distill (idempotent — slaat over als er
+        # al lessen zijn). Alleen bij voldoende geëxtraheerde full-text, niet op een
+        # RSS-teaser. Best-effort: distill-fout laat de summary intact.
+        article_body = (item["transcript"] or "").strip()
+        if is_article and len(article_body) >= ARTICLE_MIN_BODY_FOR_LESSONS:
+            from core.db import async_session_maker
+            try:
+                await _distill_lessons_for_item(item_id, summary.strip(), article_body,
+                                                llm, async_session_maker)
+            except Exception as exc:
+                print(f"[summarize_item] distill faalde voor {item_id}: {exc}", flush=True)
     except Exception as exc:
         await session.exec(sa_text(
             "UPDATE items SET processing_status='failed'::processing_status, processing_error=:e "
@@ -1793,14 +1807,44 @@ _LONG_SUMMARY_SYSTEM = (
     "- 1 zin met een conclusie of inzicht"
 )
 
+_ARTICLE_SUMMARY_SYSTEM = (
+    "Je bent een curator van hoogwaardige content. Vat dit artikel inhoudelijk samen "
+    "in het Nederlands, zakelijk maar warm. Lever platte tekst (geen JSON, geen "
+    "markdown-fences) in deze vorm:\n"
+    "- 1 zin met de kern van het artikel\n"
+    "- 2-5 bullets met de belangrijkste punten, argumenten of voorbeelden (1 zin per bullet)\n"
+    "- 1 zin met de conclusie of het inzicht dat blijft hangen\n\n"
+    "Pas het aantal bullets aan op de rijkdom van het artikel; liever 2 rake bullets "
+    "dan 5 opgerekte."
+)
 
-def _pick_summary_route(raw: str, duration_seconds: int | None) -> dict:
-    """Kies model + trim + prompt op basis van transcriptie-lengte.
+# Minimaal aantal chars in de geëxtraheerde body voordat lesson-distill draait.
+# Beschermt tegen oppervlakkige/verzonnen lessen op een RSS-teaser i.p.v. full-text.
+ARTICLE_MIN_BODY_FOR_LESSONS = int(os.environ.get('ARTICLE_MIN_BODY_FOR_LESSONS', 800))
 
-    Lange transcripties (podcast/video > 10 min, of >20k chars als duration
-    onbekend) gaan naar een cloud-model met groot context-window i.p.v. de
-    lokale 12k-trim. Geeft betere samenvattingen voor 3-uur Acquired e.d.
+
+def _pick_summary_route(raw: str, duration_seconds: int | None,
+                        is_article: bool = False) -> dict:
+    """Kies model + trim + prompt op basis van content-type en lengte.
+
+    Tekstartikelen (type='rss') krijgen een eigen gestructureerde prompt los van
+    de transcript-routing; voor lange artikelen (>20k chars) gaat het naar het
+    cloud-model met groot context-window.
+
+    Transcripties (podcast/video): lange transcripties (> 10 min, of >20k chars
+    als duration onbekend) gaan naar een cloud-model met groot context-window
+    i.p.v. de lokale 12k-trim. Geeft betere samenvattingen voor 3-uur Acquired e.d.
     """
+    if is_article:
+        is_long = len(raw) >= LONG_TRANSCRIPT_CHAR_FALLBACK
+        return {
+            "model": LONG_TRANSCRIPT_MODEL if is_long else "stroom-bulk",
+            "cleaned": re.sub(r"\s+", " ", raw).strip()[
+                :(LONG_TRANSCRIPT_MAX_CHARS if is_long else 12000)],
+            "system_prompt": _ARTICLE_SUMMARY_SYSTEM,
+            "timeout": LONG_TRANSCRIPT_TIMEOUT_SEC if is_long else 180.0,
+            "is_long": is_long,
+        }
     duration = duration_seconds or 0
     is_long = (duration >= LONG_TRANSCRIPT_DURATION_SECONDS
                or len(raw) >= LONG_TRANSCRIPT_CHAR_FALLBACK)
@@ -1845,8 +1889,10 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             title = row[0]
             raw = (row[1] or "").strip() or re.sub(r"<[^>]+>", " ", row[2] or "").strip()
             article_body = (row[1] or "").strip()
+            kind = row[3]
             source_name = row[4]
             duration_seconds = row[5]
+            is_article = kind == "rss"
             if not raw:
                 await bg.exec(sa_text(
                     "UPDATE items SET processing_status='ready'::processing_status, queued_at=NULL "
@@ -1855,7 +1901,7 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
                 await bg.commit()
                 return True
 
-        route = _pick_summary_route(raw, duration_seconds)
+        route = _pick_summary_route(raw, duration_seconds, is_article=is_article)
         actual_model = route["model"]
         try:
             response = await llm_service.call_llm(route["model"], [
@@ -1892,9 +1938,13 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             ).bindparams(s=summary, m=actual_model, i=item_id, q=quality_score))
             await bg.commit()
 
-        # Inbox-items krijgen ook lesson-distill (was het oude inbox-gedrag).
+        # Lesson-distill voor tekstartikelen (en handmatige Inbox-items), mits de
+        # full-text echt geëxtraheerd is — niet alleen een RSS-teaser, anders
+        # krijg je oppervlakkige/verzonnen lessen. _distill_lessons_for_item slaat
+        # zelf over als het item al lessen heeft (idempotent bij retry).
         # Best-effort: faalt distill, dan blijft summary nog steeds geldig.
-        if source_name == _INBOX_SOURCE_NAME and article_body:
+        if ((is_article or source_name == _INBOX_SOURCE_NAME)
+                and len(article_body) >= ARTICLE_MIN_BODY_FOR_LESSONS):
             try:
                 await _distill_lessons_for_item(item_id, summary, article_body,
                                                 llm_service, async_session_maker)
@@ -1917,10 +1967,20 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
 
 async def _distill_lessons_for_item(item_id: str, summary: str, article_body: str,
                                      llm_service, async_session_maker) -> int:
-    """Genereer kernlessen via LLM en sla ze op. Returnt aantal inserted."""
+    """Genereer kernlessen via LLM en sla ze op. Returnt aantal inserted.
+
+    Idempotent: als het item al lessen heeft (bv. door een eerdere run) wordt
+    niets gedaan — voorkomt duplicaten én behoudt eerder gegeven ratings.
+    """
     body_text = article_body.strip()[:18000]
     if not body_text:
         return 0
+    async with async_session_maker() as bg:
+        existing = (await bg.exec(sa_text(
+            "SELECT count(*) FROM lessons WHERE item_id = CAST(:i AS uuid)"
+        ).bindparams(i=item_id))).first()
+        if existing and existing[0]:
+            return 0
     system = (
         "Je destilleert kernlessen uit een bron (artikel). "
         "Lever concrete, bruikbare lessen die de kern van het artikel vangen.\n\n"
