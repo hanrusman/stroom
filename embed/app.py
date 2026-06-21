@@ -42,6 +42,12 @@ def load_model() -> None:
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 1
         opts.inter_op_num_threads = 1
+        # Schakel de CPU-memory-arena uit: die groeit mee met de grootste request
+        # ooit en krimpt niet, waardoor het resident-geheugen richting de 768m-cap
+        # kroop (~742 MB high-water). Zonder arena blijft het vlak rond ~250-300 MB,
+        # tegen verwaarloosbaar perf-verlies bij onze lage QPS. Dat geeft de host
+        # weer marge zodat de transcribe mem-gate (500 MB) minder vaak blokkeert.
+        opts.enable_cpu_mem_arena = False
         session = ort.InferenceSession(
             MODEL_PATH, sess_options=opts, providers=["CPUExecutionProvider"]
         )
