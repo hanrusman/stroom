@@ -14,8 +14,13 @@ from pipeline.digest_model_map import resolve_model
 QUALITY_LLM_MODEL = "cloud-gpt-120b"
 QUALITY_LLM_TIMEOUT_SEC = 60.0
 CENTROID_PATH = Path("/data/centroid.npz")
-EMBEDDING_SIM_LOW = 0.83
-EMBEDDING_SIM_HIGH = 0.92
+# Cosine(query, centroid) -> 1-10 lineair via clip((sim-LOW)/(HIGH-LOW),0,1)*9+1.
+# Geijkt op de p10/p90 van een sample van 300 echte items (2026-06-20, int8-model):
+# de cosines clusteren strak rond 0.89 (p10=0.866, p90=0.908), dus een band van
+# 0.83-0.92 boog de scores omhoog. Env-tunebaar omdat de waarden mee-driften als
+# de centroid verandert (nieuwe lessons). Herijk met een sample na grote shifts.
+EMBEDDING_SIM_LOW = float(os.environ.get("EMBEDDING_SIM_LOW", "0.866"))
+EMBEDDING_SIM_HIGH = float(os.environ.get("EMBEDDING_SIM_HIGH", "0.908"))
 
 # Interest-embeddings draaien sinds 2026-06 in de losse stroom-embed sidecar
 # (ONNX-int8 e5-small) i.p.v. in-process sentence-transformers — dat at ~1 GB
