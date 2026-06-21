@@ -42,11 +42,8 @@ class LessonRating(BaseModel):
     rating: Optional[int]  # 1, -1, or None
 
 
-DigestModel = Literal[
-    "qwen", "sonnet", "opus", "long",
-    "cloud-kimi", "cloud-qwen-coder", "cloud-gpt-120b",
-    "cloud-gpt-20b", "cloud-gemma",
-]
+# Vrije modelnaam — geldige set is dynamisch (zie GET /admin/models).
+DigestModel = str
 DigestWindow = Literal["daily", "weekly"]
 LessonsDigestFilter = Literal["useful", "not-useful", "all"]
 
