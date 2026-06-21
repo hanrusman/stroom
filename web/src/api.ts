@@ -562,6 +562,21 @@ export async function fetchSettings(): Promise<AppSettings> {
   return r.json();
 }
 
+// Dynamische modellijst — wat LiteLLM nú serveert, met labels + live status.
+export interface ModelInfo {
+  name: string;       // Stroom-naam (gebruik in model_defaults / digest-keuze)
+  litellm: string;    // onderliggende LiteLLM-alias
+  label: string;      // UI-label
+  category: string;   // 'local' | 'cloud'
+  status: 'ok' | 'degraded' | 'unknown';
+  reason?: string | null;
+}
+
+export async function fetchModels(): Promise<ModelInfo[]> {
+  const r = await apiFetch('/api/admin/models');
+  return r.json();
+}
+
 export interface AdminTopic {
   slug: string;
   name: string;

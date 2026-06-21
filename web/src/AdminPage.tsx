@@ -15,17 +15,19 @@ import {
   reloadQualityScorerConfig, QualityScorerTopic, QualityScorerPerson,
 } from './api';
 import {
-  DigestModel, ModelAction, ALL_MODELS, ALL_ACTIONS,
-  MODEL_LABELS, ACTION_LABELS,
+  ModelAction, ALL_ACTIONS, ACTION_LABELS,
 } from './admin_model_constants';
+import { ModelSelect } from './ModelSelect';
 import { useSettings } from './settings';
 
 const ModelDefaultsPanel = () => {
-  const { settings, save } = useSettings();
+  const { settings, models, save } = useSettings();
   const [draft, setDraft] = useState(settings.model_defaults);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
+
+  const hasDegraded = models.some(m => m.status !== 'ok');
 
   useEffect(() => { setDraft(settings.model_defaults); }, [settings]);
 
@@ -46,21 +48,24 @@ const ModelDefaultsPanel = () => {
   return (
     <section className="mb-10 bg-brand-cream rounded-2xl border border-brand-ink/10 p-6 shadow-sm">
       <h2 className="font-display text-2xl text-brand-ink tracking-[-0.01em] mb-1">Model-defaults</h2>
-      <p className="text-[13px] text-brand-ink/60 mb-5">Welk model wordt gebruikt als je nergens een override hebt ingesteld.</p>
+      <p className="text-[13px] text-brand-ink/60 mb-5">Welk model wordt gebruikt als je nergens een override hebt ingesteld. De lijst komt live uit LiteLLM.</p>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {ALL_ACTIONS.map(action => (
           <label key={action} className="flex flex-col gap-1.5">
             <span className="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-ink/50">{ACTION_LABELS[action]}</span>
-            <select value={draft[action]} disabled={busy}
-              onChange={e => setDraft(d => ({ ...d, [action]: e.target.value as DigestModel }))}
-              className="px-3 py-2 rounded-xl bg-brand-surface border border-brand-ink/10 text-sm text-brand-ink disabled:opacity-50">
-              {ALL_MODELS.map(m => (
-                <option key={m} value={m}>{MODEL_LABELS[m]}</option>
-              ))}
-            </select>
+            <ModelSelect
+              value={draft[action]}
+              models={models}
+              disabled={busy}
+              onChange={v => setDraft(d => ({ ...d, [action]: v }))}
+              className="px-3 py-2 rounded-xl bg-brand-surface border border-brand-ink/10 text-sm text-brand-ink disabled:opacity-50"
+            />
           </label>
         ))}
       </div>
+      {hasDegraded && (
+        <p className="mt-3 text-[12px] text-amber-700">⚠ Modellen gemarkeerd met een driehoekje zijn nu niet beschikbaar (krediet/quota) of hun status is onbekend — selecteren kan, maar de call kan falen.</p>
+      )}
       <div className="mt-5 flex items-center gap-3">
         <button onClick={onSave} disabled={busy || !dirty}
           className="px-4 py-2 rounded-xl bg-brand-accent text-brand-cream text-sm flex items-center gap-2 disabled:opacity-50 hover:opacity-90 transition">

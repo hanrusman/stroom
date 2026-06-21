@@ -888,19 +888,10 @@ async def get_topic_digest(slug: str,
     )
 
 
-DigestModel = Literal[
-    # Lokale Ollama modellen
-    "qwen", "sonnet", "opus", "long",
-    "mistral", "llama", "gemma", "phi",
-    # Cloud modellen
-    "cloud-kimi", "cloud-kimi-latest",
-    "cloud-qwen-coder", "cloud-gpt-120b",
-    "cloud-gpt-20b", "cloud-gemma",
-    "cloud-minimax", "cloud-glm-5.1",
-    "cloud-gemini-flash", "cloud-nemotron",
-    "cloud-deepseek", "cloud-deepseek-reasoner",
-    "cloud-mistral-large", "cloud-mistral-medium", "cloud-codestral",
-]
+# Vrije Stroom-modelnaam. Niet langer een Literal: de geldige set is dynamisch
+# en komt live uit LiteLLM (zie GET /admin/models). resolve_model() vertaalt naar
+# de echte alias; onbekende namen vallen as-is terug.
+DigestModel = str
 
 
 async def _run_digest_generation(topic_id: str, topic_name: str, slug: str,

@@ -1,33 +1,15 @@
 from typing import Dict
 
-DIGEST_MODEL_TO_LITELLM: Dict[str, str] = {
-    # Lokale Ollama modellen
-    "qwen": "stroom-bulk",
-    "sonnet": "stroom-sonnet",
-    "opus": "stroom-deep",
-    "long": "stroom-long-context",
-    "mistral": "stroom-mistral",
-    "llama": "stroom-llama",
-    "gemma": "stroom-gemma",
-    "phi": "stroom-phi",
-    # Cloud modellen
-    "cloud-kimi": "cloud-kimi",
-    "cloud-kimi-latest": "cloud-kimi-latest",
-    "cloud-qwen-coder": "cloud-qwen-coder",
-    "cloud-gpt-120b": "cloud-gpt-120b",
-    "cloud-gpt-20b": "cloud-gpt-20b",
-    "cloud-gemma": "cloud-gemma",
-    "cloud-minimax": "cloud-minimax",
-    "cloud-glm-5.1": "cloud-glm-5.1",
-    "cloud-gemini-flash": "cloud-gemini-flash",
-    "cloud-nemotron": "cloud-nemotron",
-    "cloud-deepseek": "cloud-deepseek",
-    "cloud-deepseek-reasoner": "cloud-deepseek-reasoner",
-    "cloud-mistral-large": "cloud-mistral-large",
-    "cloud-mistral-medium": "cloud-mistral-medium",
-    "cloud-codestral": "cloud-codestral",
-}
+from pipeline.model_catalog import MODEL_CATALOG
+
+# Afgeleid uit de catalogus — één bron van waarheid voor naam→alias-vertaling.
+DIGEST_MODEL_TO_LITELLM: Dict[str, str] = {e.name: e.litellm for e in MODEL_CATALOG}
+
 
 def resolve_model(name: str) -> str:
-    """Vertaal Stroom-naam naar LiteLLM-alias. Onbekende naam → as-is."""
+    """Vertaal Stroom-naam naar LiteLLM-alias. Onbekende naam → as-is.
+
+    De as-is-fallback is bewust: cloud-modellen gebruiken hun alias als
+    Stroom-naam, dus een nieuw LiteLLM-model werkt zonder hier iets toe te voegen.
+    """
     return DIGEST_MODEL_TO_LITELLM.get(name, name)

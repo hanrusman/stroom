@@ -19,7 +19,7 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          fetchSourceDetail, SourceDetail, backfillSource,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
          LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
-import { MODEL_LABELS as DIGEST_MODEL_LABELS } from './admin_model_constants';
+import { ModelSelect } from './ModelSelect';
 
 const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
 const useOpenSource = () => React.useContext(OpenSourceContext);
@@ -1881,10 +1881,9 @@ export default function App() {
   );
 }
 
-// DIGEST_MODEL_LABELS verhuisd naar admin_model_constants.ts (zie import bovenaan).
 
 function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; topicName: string; window: DigestWindow }) {
-  const { getDefault } = useSettings();
+  const { getDefault, models } = useSettings();
   const [digest, setDigest] = useState<TopicDigest | null | undefined>(undefined);
   const [history, setHistory] = useState<TopicDigestRun[]>([]);
   const [historyIdx, setHistoryIdx] = useState(0);
@@ -1964,12 +1963,8 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
-          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
-            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
-            {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
-              <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
-            ))}
-          </select>
+          <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
+            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
           <button onClick={regen} disabled={busy || !!digest?.is_generating}
             className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
               busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
@@ -2284,7 +2279,7 @@ const LESSON_FILTER_LABELS: Record<LessonFilter, string> = {
 };
 
 function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWindow; filter: LessonsDigestFilter }) {
-  const { getDefault } = useSettings();
+  const { getDefault, models } = useSettings();
   const [digest, setDigest] = useState<LessonsDigest | null | undefined>(undefined);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2359,12 +2354,8 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
               {open ? 'Verberg' : 'Toon'}
             </button>
           )}
-          <select value={model} onChange={e => setModel(e.target.value as DigestModel)} disabled={busy || !!digest?.is_generating}
-            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50">
-            {(['qwen', 'sonnet', 'opus'] as DigestModel[]).map(m => (
-              <option key={m} value={m}>{DIGEST_MODEL_LABELS[m]}</option>
-            ))}
-          </select>
+          <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
+            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
           <button onClick={regen} disabled={busy || !!digest?.is_generating}
             className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
               busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'

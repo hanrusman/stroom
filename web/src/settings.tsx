@@ -1,10 +1,11 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { AppSettings, DigestModel, ModelAction, fetchSettings, updateSettings } from './api';
+import { AppSettings, DigestModel, ModelAction, ModelInfo, fetchSettings, fetchModels, updateSettings } from './api';
 
 const FALLBACK: AppSettings = { model_defaults: { expand: 'qwen', distill: 'qwen', digest: 'opus', digest_weekly: 'opus', ask: 'qwen', score: 'cloud-kimi' } };
 
 interface Ctx {
   settings: AppSettings;
+  models: ModelInfo[];
   loading: boolean;
   save: (s: AppSettings) => Promise<void>;
   getDefault: (action: ModelAction) => DigestModel;
@@ -14,10 +15,12 @@ const SettingsContext = createContext<Ctx | null>(null);
 
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
   const [settings, setSettings] = useState<AppSettings>(FALLBACK);
+  const [models, setModels] = useState<ModelInfo[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     fetchSettings().then(setSettings).catch(() => {}).finally(() => setLoading(false));
+    fetchModels().then(setModels).catch(() => {});
   }, []);
 
   const save = useCallback(async (s: AppSettings) => {
@@ -26,13 +29,13 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const getDefault = useCallback((action: ModelAction): DigestModel => {
-    const override = localStorage.getItem(`stroom-model-${action}`) as DigestModel | null;
-    if (override === 'qwen' || override === 'sonnet' || override === 'opus') return override;
+    const override = localStorage.getItem(`stroom-model-${action}`);
+    if (override) return override;
     return settings.model_defaults[action];
   }, [settings]);
 
   return (
-    <SettingsContext.Provider value={{ settings, loading, save, getDefault }}>
+    <SettingsContext.Provider value={{ settings, models, loading, save, getDefault }}>
       {children}
     </SettingsContext.Provider>
   );
