@@ -1,0 +1,3 @@
+# Gebouwde modelartefacten — niet in git (118 MB int8 + 470 MB fp32).
+# Genereer met ./build-embed.sh; back-up als GitHub-release-asset.
+_artifacts/
