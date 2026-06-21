@@ -22,6 +22,17 @@ CENTROID_PATH = Path("/data/centroid.npz")
 EMBEDDING_SIM_LOW = float(os.environ.get("EMBEDDING_SIM_LOW", "0.866"))
 EMBEDDING_SIM_HIGH = float(os.environ.get("EMBEDDING_SIM_HIGH", "0.908"))
 
+# Contrastieve interest-score: raw = cos(q,pos) - cos(q,bg), dan tanh-gemapt naar
+# 1-10. Het background-centroid (mean van ~500 random items, "gemiddelde content")
+# de-inflateert items die nu eenmaal op alles lijken — fixt dat not_interesting-
+# items ten onrechte hoog scoorden (gemeten: 7.3 -> 4.7, separatie t.o.v. likes
+# hersteld). Zónder bg_centroid.npz valt score_interest terug op de pure-positieve
+# mapping hierboven (kill-switch). MU/SIGMA geijkt op de raw-verdeling van een
+# sample (2026-06: median=-0.029, std=0.009); env-tunebaar.
+BG_CENTROID_PATH = Path("/data/bg_centroid.npz")
+INTEREST_TANH_MU = float(os.environ.get("INTEREST_TANH_MU", "-0.029"))
+INTEREST_TANH_SIGMA = float(os.environ.get("INTEREST_TANH_SIGMA", "0.009"))
+
 # Interest-embeddings draaien sinds 2026-06 in de losse stroom-embed sidecar
 # (ONNX-int8 e5-small) i.p.v. in-process sentence-transformers — dat at ~1 GB
 # resident en zette de mem-gate dicht. score_interest praat nu over HTTP met
@@ -37,6 +48,7 @@ EMBED_MAX_CONCURRENCY = int(os.environ.get("EMBED_MAX_CONCURRENCY", "4"))
 class QualityService:
     def __init__(self):
         self.centroid = None
+        self.bg_centroid = None
         self._client: httpx.AsyncClient | None = None
         self._sem = asyncio.Semaphore(EMBED_MAX_CONCURRENCY)
         self._fail_count = 0
@@ -51,18 +63,24 @@ class QualityService:
             print(f"Interest-embeddings via sidecar: {EMBED_SERVICE_URL}", flush=True)
         self.reload_centroid()
 
+    @staticmethod
+    def _load_npz(path: Path, label: str):
+        if not path.exists():
+            print(f"{label} file not found ({path}).", flush=True)
+            return None
+        try:
+            vec = np.load(path)["centroid"].astype(np.float32)
+            print(f"{label} loaded: shape={vec.shape}", flush=True)
+            return vec
+        except Exception as e:
+            print(f"Failed to load {label}: {e}", flush=True)
+            return None
+
     def reload_centroid(self) -> None:
-        if CENTROID_PATH.exists():
-            try:
-                data = np.load(CENTROID_PATH)
-                self.centroid = data["centroid"].astype(np.float32)
-                print(f"Centroid loaded: shape={self.centroid.shape}", flush=True)
-            except Exception as e:
-                print(f"Failed to load centroid: {e}", flush=True)
-                self.centroid = None
-        else:
-            print("Centroid file not found.", flush=True)
-            self.centroid = None
+        self.centroid = self._load_npz(CENTROID_PATH, "Centroid")
+        # Background-centroid is optioneel: ontbreekt het, dan valt score_interest
+        # terug op de pure-positieve mapping (kill-switch voor contrastief).
+        self.bg_centroid = self._load_npz(BG_CENTROID_PATH, "Background-centroid")
 
     def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -141,10 +159,15 @@ class QualityService:
         try:
             if query_vec.shape != self.centroid.shape:
                 return None
-            sim = np.dot(query_vec, self.centroid).item()
+            sim = float(np.dot(query_vec, self.centroid))
+            if self.bg_centroid is not None and self.bg_centroid.shape == query_vec.shape:
+                # Contrastief: hoeveel meer op mijn likes dan op gemiddelde content.
+                raw = sim - float(np.dot(query_vec, self.bg_centroid))
+                score = 5.0 + 5.0 * np.tanh((raw - INTEREST_TANH_MU) / INTEREST_TANH_SIGMA)
+                return int(np.clip(round(score), 1, 10))
+            # Fallback (geen bg-centroid): pure-positieve lineaire mapping.
             normalized = np.clip((sim - EMBEDDING_SIM_LOW) / (EMBEDDING_SIM_HIGH - EMBEDDING_SIM_LOW), 0, 1)
-            score = round(normalized * 9) + 1
-            return int(score)
+            return int(round(normalized * 9) + 1)
         except Exception as e:
             print(f"Error scoring interest: {e}", flush=True)
             return None
