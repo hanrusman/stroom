@@ -14,6 +14,7 @@ from main import (  # noqa: E402
     _pick_summary_route,
     _SHORT_SUMMARY_SYSTEM,
     _LONG_SUMMARY_SYSTEM,
+    _ARTICLE_SUMMARY_SYSTEM,
     LONG_TRANSCRIPT_DURATION_SECONDS,
     LONG_TRANSCRIPT_CHAR_FALLBACK,
     LONG_TRANSCRIPT_MAX_CHARS,
@@ -97,3 +98,39 @@ class TestPickSummaryRoute:
         op basis van duration alleen — alleen char-fallback bepaalt."""
         route = _pick_summary_route("kort", duration_seconds=0)
         assert route["is_long"] is False
+
+
+class TestArticleRoute:
+    def test_article_uses_structured_prompt_on_bulk(self):
+        """Normaal tekstartikel: eigen gestructureerde prompt op stroom-bulk,
+        niet de 3-zinnen short-prompt van de transcript-routing."""
+        route = _pick_summary_route("een normaal artikel " * 50, duration_seconds=None,
+                                    is_article=True)
+        assert route["model"] == "stroom-bulk"
+        assert route["is_long"] is False
+        assert route["system_prompt"] == _ARTICLE_SUMMARY_SYSTEM
+        assert route["timeout"] == 180.0
+        assert len(route["cleaned"]) <= 12000
+
+    def test_article_ignores_duration(self):
+        """Artikelen hebben geen betekenisvolle duration; een toevallige hoge
+        duration mag de artikel-route niet naar de long-transcript-prompt duwen."""
+        route = _pick_summary_route("kort artikel", duration_seconds=10800, is_article=True)
+        assert route["is_long"] is False
+        assert route["model"] == "stroom-bulk"
+        assert route["system_prompt"] == _ARTICLE_SUMMARY_SYSTEM
+
+    def test_long_article_routes_to_cloud_with_article_prompt(self):
+        """Longread (>20k chars) → cloud-model met groot context-window, maar
+        nog steeds de artikel-prompt (geen transcript-prompt)."""
+        long_text = "x " * LONG_TRANSCRIPT_CHAR_FALLBACK
+        route = _pick_summary_route(long_text, duration_seconds=None, is_article=True)
+        assert route["is_long"] is True
+        assert route["model"] == LONG_TRANSCRIPT_MODEL
+        assert route["system_prompt"] == _ARTICLE_SUMMARY_SYSTEM
+        assert route["timeout"] == 600.0
+
+    def test_long_article_truncated_to_max_chars(self):
+        huge = "z" * (LONG_TRANSCRIPT_MAX_CHARS * 2)
+        route = _pick_summary_route(huge, duration_seconds=None, is_article=True)
+        assert len(route["cleaned"]) == LONG_TRANSCRIPT_MAX_CHARS
