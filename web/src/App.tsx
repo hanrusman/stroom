@@ -1936,44 +1936,42 @@ function DigestPanel({ slug, topicName, window: digestWindow }: { slug: string; 
 
   return (
     <section className="border border-brand-ink/10 rounded-2xl md:rounded-3xl bg-brand-surface/40 p-4 md:p-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4">
-        <div className="flex items-center gap-2 md:gap-3 min-w-0">
-          <Newspaper size={18} className="text-brand-accent shrink-0 md:w-5 md:h-5" />
-          <div className="min-w-0">
-            <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent truncate">{windowLabel} · {topicName}</div>
-            {digest?.is_generating && (
-              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
-                Bezig met genereren…
-              </div>
-            )}
-            {digest && !digest.is_generating && digest.generated_at && (
-              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
-                {digest.item_count} items · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
-              </div>
-            )}
-            {digest === null && (
-              <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 md:gap-2 flex-wrap">
-          {digest?.markdown && (
-            <button onClick={() => setOpen(o => !o)}
-              className="flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
-              {open ? 'Verberg' : 'Toon'}
-            </button>
+      <div className="flex items-center gap-2 md:gap-3 min-w-0">
+        <Newspaper size={18} className="text-brand-accent shrink-0 md:w-5 md:h-5" />
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent truncate">{windowLabel} · {topicName}</div>
+          {digest?.is_generating && (
+            <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1 inline-flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-brand-accent animate-pulse" /> Bezig met genereren…
+            </div>
           )}
-          <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
-            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
-          <button onClick={regen} disabled={busy || !!digest?.is_generating}
-            className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
-              busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
-                   : 'bg-brand-accent text-brand-cream hover:opacity-90'
-            }`}>
-            {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
-            {digest?.markdown ? 'Ververs' : 'Genereer'}
-          </button>
+          {digest && !digest.is_generating && digest.generated_at && (
+            <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1 truncate">
+              {digest.item_count} items · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
+            </div>
+          )}
+          {digest === null && (
+            <div className="font-mono text-[9px] md:text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1">Nog geen digest</div>
+          )}
         </div>
+      </div>
+      <div className="mt-4 flex items-center gap-2">
+        <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
+          className="flex-1 min-w-0 px-3 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
+        {digest?.markdown && (
+          <button onClick={() => setOpen(o => !o)}
+            className="shrink-0 px-3.5 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+            {open ? 'Verberg' : 'Toon'}
+          </button>
+        )}
+        <button onClick={regen} disabled={busy || !!digest?.is_generating}
+          className={`shrink-0 flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
+            busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
+                 : 'bg-brand-accent text-brand-cream hover:opacity-90'
+          }`}>
+          {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
+          {digest?.markdown ? 'Ververs' : 'Genereer'}
+        </button>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
       {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
@@ -2329,42 +2327,42 @@ function LessonsDigestPanel({ window: digestWindow, filter }: { window: DigestWi
 
   return (
     <section className="border border-brand-ink/10 rounded-2xl md:rounded-3xl bg-brand-surface/40 p-4 md:p-6">
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 md:gap-4">
-        <div className="flex items-center gap-2 md:gap-3 min-w-0">
-          <BookOpen size={18} className="text-brand-accent shrink-0 md:w-5 md:h-5" />
-          <div className="min-w-0">
-            <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent truncate">{windowLabel} · {LESSON_FILTER_LABELS[filter as LessonFilter]}</div>
-            {digest?.is_generating && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Bezig met genereren…</div>
-            )}
-            {digest && !digest.is_generating && digest.generated_at && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">
-                {digest.lesson_count} lessen · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
-              </div>
-            )}
-            {digest === null && (
-              <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 mt-1">Nog geen digest</div>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 md:gap-2 flex-wrap">
-          {digest?.markdown && (
-            <button onClick={() => setOpen(o => !o)}
-              className="flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
-              {open ? 'Verberg' : 'Toon'}
-            </button>
+      <div className="flex items-center gap-2 md:gap-3 min-w-0">
+        <BookOpen size={18} className="text-brand-accent shrink-0 md:w-5 md:h-5" />
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[10px] md:text-[11px] uppercase tracking-[0.18em] text-brand-accent truncate">{windowLabel} · {LESSON_FILTER_LABELS[filter as LessonFilter]}</div>
+          {digest?.is_generating && (
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1 inline-flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-brand-accent animate-pulse" /> Bezig met genereren…
+            </div>
           )}
-          <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
-            className="px-2 md:px-3 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
-          <button onClick={regen} disabled={busy || !!digest?.is_generating}
-            className={`flex items-center gap-1 md:gap-2 px-3 md:px-4 py-1.5 md:py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
-              busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
-                   : 'bg-brand-accent text-brand-cream hover:opacity-90'
-            }`}>
-            {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
-            {digest?.markdown ? 'Ververs' : 'Genereer'}
-          </button>
+          {digest && !digest.is_generating && digest.generated_at && (
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1 truncate">
+              {digest.lesson_count} lessen · {digestWindow === 'weekly' ? `wk ${isoWeek(new Date(digest.generated_at))}` : `${digest.window_hours}u`} · {ago}
+            </div>
+          )}
+          {digest === null && (
+            <div className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/45 mt-1">Nog geen digest</div>
+          )}
         </div>
+      </div>
+      <div className="mt-4 flex items-center gap-2">
+        <ModelSelect value={model} models={models} onChange={setModel} disabled={busy || !!digest?.is_generating}
+          className="flex-1 min-w-0 px-3 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface text-brand-ink/70 border border-brand-ink/10 cursor-pointer disabled:opacity-50" />
+        {digest?.markdown && (
+          <button onClick={() => setOpen(o => !o)}
+            className="shrink-0 px-3.5 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70">
+            {open ? 'Verberg' : 'Toon'}
+          </button>
+        )}
+        <button onClick={regen} disabled={busy || !!digest?.is_generating}
+          className={`shrink-0 flex items-center gap-2 px-4 py-2 rounded-full font-mono text-[9px] md:text-[10px] uppercase tracking-[0.18em] transition-all ${
+            busy || digest?.is_generating ? 'opacity-50 cursor-wait bg-brand-surface text-brand-ink/60'
+                 : 'bg-brand-accent text-brand-cream hover:opacity-90'
+          }`}>
+          {busy || digest?.is_generating ? <Loader2 size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <RefreshCw size={12} className="md:w-3.5 md:h-3.5" />}
+          {digest?.markdown ? 'Ververs' : 'Genereer'}
+        </button>
       </div>
       {err && <div className="mt-4 text-red-600 text-sm">{err}</div>}
       {!digest?.markdown && !digest?.is_generating && digest && digest.generated_at && (
