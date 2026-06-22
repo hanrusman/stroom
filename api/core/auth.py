@@ -157,6 +157,29 @@ async def require_user(request: Request,
     return user
 
 
+# Eigen, smal-gescopet token voor de inbox-router (iOS Shortcut e.d.). Bewust
+# losgekoppeld van STROOM_INTERNAL_TOKEN: dit token kan alléén items insturen.
+INBOX_TOKEN = os.environ.get("STROOM_INBOX_TOKEN", "")
+INBOX_TOKEN_HEADER = "x-stroom-inbox-token"
+
+
+def valid_inbox_token(request: Request) -> bool:
+    tok = request.headers.get(INBOX_TOKEN_HEADER, "")
+    return bool(INBOX_TOKEN) and bool(tok) and hmac.compare_digest(tok, INBOX_TOKEN)
+
+
+async def require_user_or_inbox_token(request: Request,
+                                      session=Depends(get_async_session)) -> dict:
+    """Auth voor de inbox-endpoints: accepteert de sessie-cookie (web-UI) OF
+    een geldige X-Stroom-Inbox-Token header (clients zonder cookie, zoals een
+    iOS Shortcut)."""
+    if valid_inbox_token(request):
+        print(f"[auth] inbox-token gebruikt path={request.url.path} "
+              f"ip={request.client.host if request.client else '?'}", flush=True)
+        return {"id": None, "email": "inbox-token"}
+    return await require_user(request, session)
+
+
 def csrf_guard(request: Request) -> None:
     """Block cross-origin state-changing requests via Origin header check."""
     if request.method in ("GET", "HEAD", "OPTIONS"):

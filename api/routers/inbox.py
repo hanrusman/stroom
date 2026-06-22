@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
-from core.auth import require_user
+from core.auth import require_user_or_inbox_token
 from core.db import get_async_session
 from core.url_guard import UnsafeURLError, assert_public_url, safe_get
 
@@ -85,7 +85,7 @@ async def inbox_submit(
     body: InboxSubmitRequest,
     request: Request,
     session=Depends(get_async_session),
-    user=Depends(require_user),
+    user=Depends(require_user_or_inbox_token),
 ):
     """Submit a new item to the inbox for processing.
 
@@ -373,7 +373,7 @@ async def _fetch_youtube_metadata(client, url: str) -> InboxFetchResponse:
 async def inbox_fetch(
     body: InboxFetchRequest,
     request: Request,
-    user=Depends(require_user),
+    user=Depends(require_user_or_inbox_token),
 ):
     """Fetch metadata from a URL to pre-fill inbox form.
 
@@ -394,7 +394,7 @@ async def inbox_fetch(
 @router.get("/inbox/topics")
 async def inbox_topics(
     session=Depends(get_async_session),
-    user=Depends(require_user),
+    user=Depends(require_user_or_inbox_token),
 ):
     """Get list of topics for the inbox dropdown."""
     rows = (await session.exec(sa_text(
