@@ -28,6 +28,7 @@ from core.auth import (
     check_login_rate_limit, reset_login_rate_limit,
     create_session, delete_session, get_session_user,
     set_session_cookie, clear_session_cookie, require_user,
+    valid_inbox_token,
 )
 from routers import legacy as legacy_router
 from routers import lessons as lessons_router
@@ -380,6 +381,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
             if not tok or not hmac.compare_digest(tok, INTERNAL_TOKEN):
                 print(f"[SECURITY] Invalid/missing internal token for {path} from {request.client.host}", flush=True)
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+            return await call_next(request)
+
+        # 3c. Inbox-token: laat de inbox-endpoints door op een geldig
+        # X-Stroom-Inbox-Token (iOS Shortcut e.d.). Anders valt het door naar
+        # de sessie-cookie hieronder, zodat de web-UI gewoon blijft werken.
+        if path.startswith("/inbox/") and valid_inbox_token(request):
             return await call_next(request)
 
         # 4. Everything else needs a session cookie
