@@ -23,14 +23,19 @@ class CatalogEntry:
     # Krediet-/quota-gevoelig: kan tijdelijk falen (bv. Anthropic-credit op,
     # Gemini-quota bereikt). De UI mag deze markeren en de status live pollen.
     flaky: bool = False
+    # Permanent niet bruikbaar (geen credit/geen key) → volledig uit de UI-lijst
+    # filteren. Zet op False zodra het weer werkt om 'm terug te tonen.
+    hidden: bool = False
 
 
 MODEL_CATALOG = [
     # Lokale / eigen-gehoste modellen (Stroom-naam ≠ alias → vertaling nodig)
     CatalogEntry("qwen", "stroom-bulk", "Qwen3.6 35B (lokaal)", "local"),
-    CatalogEntry("sonnet", "stroom-sonnet", "Claude Sonnet 4.6", "cloud", flaky=True),
-    CatalogEntry("opus", "stroom-deep", "Claude Opus 4.7", "cloud", flaky=True),
-    CatalogEntry("long", "stroom-long-context", "Gemini 2.5 Pro (lange context)", "cloud", flaky=True),
+    # Verborgen: Anthropic-account zonder API-credit + geen Gemini-key meer
+    # (2026-06-22). Fallbacks vangen ze op request-tijd nog op; uit de UI gehaald.
+    CatalogEntry("sonnet", "stroom-sonnet", "Claude Sonnet 4.6", "cloud", flaky=True, hidden=True),
+    CatalogEntry("opus", "stroom-deep", "Claude Opus 4.7", "cloud", flaky=True, hidden=True),
+    CatalogEntry("long", "stroom-long-context", "Gemini 2.5 Pro (lange context)", "cloud", flaky=True, hidden=True),
     # Cloud-modellen via Ollama Turbo (Stroom-naam == alias)
     CatalogEntry("cloud-kimi", "cloud-kimi", "Kimi K2.5 (cloud)", "cloud"),
     CatalogEntry("cloud-qwen-coder", "cloud-qwen-coder", "Qwen3-coder 480B (cloud)", "cloud"),

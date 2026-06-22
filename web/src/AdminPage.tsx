@@ -27,8 +27,6 @@ const ModelDefaultsPanel = () => {
   const [err, setErr] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
 
-  const hasDegraded = models.some(m => m.status !== 'ok');
-
   useEffect(() => { setDraft(settings.model_defaults); }, [settings]);
 
   const dirty = ALL_ACTIONS.some(a => draft[a] !== settings.model_defaults[a]);
@@ -63,9 +61,6 @@ const ModelDefaultsPanel = () => {
           </label>
         ))}
       </div>
-      {hasDegraded && (
-        <p className="mt-3 text-[12px] text-amber-700">⚠ Modellen gemarkeerd met een driehoekje zijn nu niet beschikbaar (krediet/quota) of hun status is onbekend — selecteren kan, maar de call kan falen.</p>
-      )}
       <div className="mt-5 flex items-center gap-3">
         <button onClick={onSave} disabled={busy || !dirty}
           className="px-4 py-2 rounded-xl bg-brand-accent text-brand-cream text-sm flex items-center gap-2 disabled:opacity-50 hover:opacity-90 transition">
