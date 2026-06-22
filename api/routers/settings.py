@@ -146,7 +146,7 @@ async def _flaky_health(client: httpx.AsyncClient) -> dict:
         if _health_cache["ts"] > 0 and now - _health_cache["ts"] < _HEALTH_TTL:
             return _health_cache["status"]
 
-        flaky = [e.litellm for e in MODEL_CATALOG if e.flaky]
+        flaky = [e.litellm for e in MODEL_CATALOG if e.flaky and not e.hidden]
         results = await asyncio.gather(*(_probe_one(client, a) for a in flaky))
         out = {alias: status for r in results if r for alias, status in [r]}
 
@@ -194,6 +194,9 @@ async def list_models(request: Request, user=Depends(require_user)):
     out: List[ModelInfo] = []
     for alias in chat_aliases:
         entry = BY_ALIAS.get(alias)
+        # Permanent-dode modellen (geen credit/geen key) volledig verbergen.
+        if entry is not None and entry.hidden:
+            continue
         status, reason = "ok", None
         if alias in health:
             status, reason = health[alias]
