@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+  <meta charset="UTF-8" />
+  <title>Stroom extensie — testharnas</title>
+  <link rel="stylesheet" href="popup-test.css" />
+</head>
+<body>
+  <!-- Mocks MOETEN vóór popup.js geladen worden -->
+  <script>
+    window.__SUBMITTED__ = null;
+    // Stub chrome.tabs
+    window.chrome = {
+      tabs: {
+        query: (_q, cb) =>
+          cb([{ url: "https://example.com/artikel-over-fietsen", title: "Tab-titel (fallback)" }]),
+      },
+    };
+    // Mock fetch: simuleer de Stroom-API
+    window.fetch = async (input, init) => {
+      const url = String(input);
+      const json = (obj, status = 200) =>
+        Promise.resolve({ ok: status >= 200 && status < 300, status, json: async () => obj });
+      if (url.endsWith("/api/inbox/topics")) {
+        return json([
+          { slug: "vandaag", name: "Vandaag" },
+          { slug: "ai", name: "AI" },
+          { slug: "tech", name: "Tech" },
+        ]);
+      }
+      if (url.endsWith("/api/inbox/fetch")) {
+        return json({
+          url: "https://example.com/artikel-over-fietsen",
+          title: "Echte titel via fetch",
+          description: "Een korte beschrijving uit trafilatura.",
+          author: "Jan Janssen",
+          format: "article",
+          thumbnail_url: null,
+        });
+      }
+      if (url.endsWith("/api/inbox/submit")) {
+        const body = JSON.parse(init.body);
+        window.__SUBMITTED__ = body;
+        return json({ id: "abc123", title: body.title, message: "Toegevoegd aan inbox" });
+      }
+      return json({ detail: "onbekend" }, 404);
+    };
+  </script>
+
+  <h1>📥 Stroom <span class="sub">— naar inbox</span></h1>
+  <div id="loading" class="loading">Pagina ophalen…</div>
+  <form id="form" class="hidden">
+    <div class="url" id="urlDisplay"></div>
+    <label for="title">Titel</label>
+    <input type="text" id="title" placeholder="Titel van het item" />
+    <div class="row">
+      <div>
+        <label for="format">Type</label>
+        <select id="format">
+          <option value="article">📄 Artikel</option>
+          <option value="podcast">🎧 Podcast</option>
+          <option value="video">📺 Video</option>
+        </select>
+      </div>
+      <div>
+        <label for="topic">Topic</label>
+        <select id="topic"></select>
+      </div>
+    </div>
+    <label for="author">Auteur</label>
+    <input type="text" id="author" placeholder="Naam van de auteur" />
+    <label for="description">Beschrijving</label>
+    <textarea id="description" placeholder="Korte beschrijving…"></textarea>
+    <div id="status"></div>
+    <div class="actions">
+      <button type="button" class="ghost" id="cancel">Annuleren</button>
+      <button type="submit" class="primary" id="submit">Toevoegen aan inbox</button>
+    </div>
+  </form>
+  <div id="fatal" class="hidden"></div>
+
+  <!-- window.close zou de tab sluiten in de preview; no-op'en voor de test -->
+  <script>window.close = () => { document.getElementById("status").dataset.closed = "1"; };</script>
+  <script src="popup.js"></script>
+</body>
+</html>

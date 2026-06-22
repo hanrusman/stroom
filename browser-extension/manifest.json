@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Stroom — Stuur naar inbox",
+  "description": "Stuur de pagina waar je op zit met één klik naar je Stroom-inbox.",
+  "version": "1.0.0",
+  "permissions": ["activeTab"],
+  "host_permissions": ["https://stroom.c4w.nl/*"],
+  "action": {
+    "default_title": "Stuur deze pagina naar Stroom",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
