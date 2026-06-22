@@ -44,6 +44,12 @@ from routers import transcripts as transcripts_router
 SUMMARIZE_QUEUE_MAX_DEPTH = int(os.environ.get('SUMMARIZE_QUEUE_MAX_DEPTH', 30))
 TRANSCRIBE_QUEUE_MAX_DEPTH = int(os.environ.get('TRANSCRIBE_QUEUE_MAX_DEPTH', 30))
 SUMMARIZE_WORKERS = int(os.environ.get('SUMMARIZE_WORKERS', 2))
+# Retry+backoff op de summarize-LLM-call. Een enkele transiente hapering
+# (timeout, 429/5xx van de proxy, of lege content van een reasoning-model)
+# mag een item niet permanent op 'failed' zetten — vooral bij bulk-runs waar
+# de transiente fout-staart in één keer zichtbaar wordt.
+SUMMARIZE_MAX_ATTEMPTS = int(os.environ.get('SUMMARIZE_MAX_ATTEMPTS', 3))
+SUMMARIZE_RETRY_BASE_SEC = float(os.environ.get('SUMMARIZE_RETRY_BASE_SEC', 2))
 LLM_HTTP_TIMEOUT_SEC = float(os.environ.get('LLM_HTTP_TIMEOUT_SEC', 60))
 LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
 WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
@@ -1046,7 +1052,7 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
     try:
         llm = LLMService(app.state.http_client)
         try:
-            summary = await llm.call_llm(route["model"], [
+            summary = await _summarize_with_retry(llm, route["model"], [
                 {"role": "system", "content": route["system_prompt"]},
                 {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {route['cleaned']}"},
             ], temperature=0.3, timeout=route["timeout"])
@@ -1056,7 +1062,7 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
             print(f"[summarize_item] long-context model {route['model']} faalde voor "
                   f"{item_id}: {inner} — fallback naar stroom-bulk truncated", flush=True)
             fallback_cleaned = re.sub(r"\s+", " ", raw_text).strip()[:12000]
-            summary = await llm.call_llm("stroom-bulk", [
+            summary = await _summarize_with_retry(llm, "stroom-bulk", [
                 {"role": "system",
                  "content": _ARTICLE_SUMMARY_SYSTEM if is_article else _SHORT_SUMMARY_SYSTEM},
                 {"role": "user", "content": f"Titel: {item['title']}\n\nTekst: {fallback_cleaned}"},
@@ -1872,6 +1878,37 @@ def _pick_summary_route(raw: str, duration_seconds: int | None,
     }
 
 
+async def _summarize_with_retry(llm_service, model: str, messages: list, *,
+                                temperature: float, timeout: float,
+                                attempts: int = SUMMARIZE_MAX_ATTEMPTS) -> str:
+    """`call_llm` met retry+backoff op transiente fouten.
+
+    Transient = HTTP 429 / 5xx (incl. de 502 die `call_llm` gooit bij lege
+    content) en netwerk-/timeout-fouten. Niet-transiente 4xx (bv. 400 bad
+    request) bubbelen direct, want die lossen niet op met opnieuw proberen.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return await llm_service.call_llm(
+                model, messages, temperature=temperature, timeout=timeout)
+        except HTTPException as exc:
+            transient = exc.status_code == 429 or exc.status_code >= 500
+            if not transient or attempt == attempts:
+                raise
+            last_exc = exc
+        except (httpx.TimeoutException, httpx.TransportError) as exc:
+            if attempt == attempts:
+                raise
+            last_exc = exc
+        backoff = min(SUMMARIZE_RETRY_BASE_SEC * (2 ** (attempt - 1)), 30.0)
+        print(f"[sum-retry] {model} poging {attempt}/{attempts} faalde "
+              f"({last_exc}); retry over {backoff:.0f}s", flush=True)
+        await asyncio.sleep(backoff)
+    # Onbereikbaar (laatste poging raise't al), maar voor de typechecker:
+    raise last_exc if last_exc else RuntimeError("summarize-retry zonder resultaat")
+
+
 async def _summarize_single_item(item_id: str, llm_service, async_session_maker, http_client=None) -> bool:
     """Summarize a single item (article/podcast/video with transcript).
 
@@ -1910,8 +1947,9 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
 
         route = _pick_summary_route(raw, duration_seconds, is_article=is_article)
         actual_model = route["model"]
+        fallback_summary_prompt = _ARTICLE_SUMMARY_SYSTEM if is_article else _SHORT_SUMMARY_SYSTEM
         try:
-            response = await llm_service.call_llm(route["model"], [
+            response = await _summarize_with_retry(llm_service, route["model"], [
                 {"role": "system", "content": route["system_prompt"]},
                 {"role": "user", "content": f"Titel: {title}\n\nTekst: {route['cleaned']}"},
             ], temperature=0.3, timeout=route["timeout"])
@@ -1921,8 +1959,8 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             print(f"[sum-worker] long-context model {route['model']} faalde voor "
                   f"{item_id}: {exc} — fallback naar stroom-bulk truncated", flush=True)
             fallback_cleaned = re.sub(r"\s+", " ", raw).strip()[:12000]
-            response = await llm_service.call_llm("stroom-bulk", [
-                {"role": "system", "content": _SHORT_SUMMARY_SYSTEM},
+            response = await _summarize_with_retry(llm_service, "stroom-bulk", [
+                {"role": "system", "content": fallback_summary_prompt},
                 {"role": "user", "content": f"Titel: {title}\n\nTekst: {fallback_cleaned}"},
             ], temperature=0.3, timeout=180.0)
             actual_model = f"{route['model']}-fallback-bulk"
