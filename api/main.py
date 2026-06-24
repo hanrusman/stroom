@@ -101,14 +101,22 @@ LONG_TRANSCRIPT_TIMEOUT_SEC = float(os.environ.get('LONG_TRANSCRIPT_TIMEOUT_SEC'
 # QUALITY_SCORER_MODE, _scorer_endpoint(). Verwijderd 2026-05-19.
 
 
-def _cgroup_v2_mem_headroom_mb() -> Optional[int]:
-    """Beschikbare RAM binnen cgroup-v2 memory limit, in MB.
+def _cgroup_v2_available_mb() -> Optional[int]:
+    """Beschikbare RAM binnen de cgroup-v2 memory-limit, in MB.
 
-    Leest memory.max en memory.current uit /sys/fs/cgroup/. Geeft None
-    terug als:
+    Berekent (memory.max - memory.current) + reclaimable, waarbij
+    reclaimable = inactive_file + slab_reclaimable uit memory.stat. Net als
+    MemAvailable telt dit reclaimable page-cache mee als "beschikbaar": die
+    cache groeit over de uptime tot tegen memory.max aan, maar de kernel
+    claimt 'm terug vóór een OOM. Zonder die correctie zou (max - current)
+    langzaam richting 0 zakken en de gate ten onrechte permanent blokkeren.
+
+    Geeft None terug (→ proc-fallback) als:
       - cgroup-v2 niet beschikbaar is (bv. cgroup-v1 host)
-      - memory.max op "max" staat (geen limit) — gebruik dan proc fallback
-      - leesfout
+      - memory.max op "max" staat (geen limit)
+      - leesfout op max/current
+    Een echte 0 (cgroup zit werkelijk vol) wordt als 0 teruggegeven, niet
+    als None — zodat de gate dan blokkeert i.p.v. fail-open te gaan.
     """
     try:
         with open('/sys/fs/cgroup/memory.max') as f:
@@ -118,17 +126,27 @@ def _cgroup_v2_mem_headroom_mb() -> Optional[int]:
         max_bytes = int(max_str)
         with open('/sys/fs/cgroup/memory.current') as f:
             cur_bytes = int(f.read().strip())
-        # memory.max is inclusief een kleine marge voor page-cache;
-        # headroom (max - current) is conservatiever dan MemAvailable die
-        # reclaimable cache meetelt. Beide zijn OK als gate — als deze
-        # onder de drempel zit, is het echt krap.
-        return max(0, (max_bytes - cur_bytes)) // (1024 * 1024)
     except (FileNotFoundError, ValueError, OSError):
         return None
 
+    # Reclaimable page-cache + slab telt mee als beschikbaar. Ontbreekt
+    # memory.stat, dan reclaimable=0: conservatief (kan ten onrechte
+    # blokkeren) maar nooit te optimistisch.
+    reclaimable = 0
+    try:
+        with open('/sys/fs/cgroup/memory.stat') as f:
+            for line in f:
+                key, _, val = line.partition(' ')
+                if key in ('inactive_file', 'slab_reclaimable'):
+                    reclaimable += int(val)
+    except (FileNotFoundError, ValueError, OSError):
+        pass
 
-def _proc_memavailable_mb() -> int:
-    """MemAvailable uit /proc/meminfo, in MB. 0 bij leesfout (gate uit)."""
+    return max(0, (max_bytes - cur_bytes) + reclaimable) // (1024 * 1024)
+
+
+def _proc_memavailable_mb() -> Optional[int]:
+    """MemAvailable uit /proc/meminfo, in MB. None bij leesfout (gate uit)."""
     try:
         with open('/proc/meminfo') as f:
             for line in f:
@@ -136,18 +154,18 @@ def _proc_memavailable_mb() -> int:
                     return int(line.split()[1]) // 1024
     except Exception:
         pass
-    return 0
+    return None
 
 
-def _available_mem_mb() -> int:
-    """Beschikbare RAM voor de mem-gate, in MB. 0 bij leesfout (gate uit).
+def _available_mem_mb() -> Optional[int]:
+    """Beschikbare RAM voor de mem-gate, in MB. None bij leesfout (gate uit).
 
-    Prefer cgroup-v2 headroom zodat de gate correct werkt ook als de
-    container een memory-limit heeft (Docker `--memory`, compose
+    Prefer cgroup-v2 zodat de gate correct werkt ook als de container een
+    memory-limit heeft (Docker `--memory`, compose
     `deploy.resources.limits.memory`). Valt terug op /proc/meminfo's
     MemAvailable voor cgroup-v1 hosts of niet-container setups.
     """
-    cgroup = _cgroup_v2_mem_headroom_mb()
+    cgroup = _cgroup_v2_available_mb()
     if cgroup is not None:
         return cgroup
     return _proc_memavailable_mb()
@@ -160,8 +178,8 @@ _LAST_MEM_GATE_LOG: Dict[str, float] = {}
 def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
     """True als beschikbare RAM onder de drempel zit. Logt throttled."""
     avail = _available_mem_mb()
-    if avail == 0:
-        return False  # /proc/meminfo onleesbaar — gate uit, fail open
+    if avail is None:
+        return False  # mem-stats onleesbaar — gate uit, fail open
     if avail >= min_mb:
         return False
     now = time.time()
