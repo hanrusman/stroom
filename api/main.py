@@ -60,13 +60,24 @@ QUEUE_DEPTH_LOG_EVERY_SEC = 60
 # sibling container named `transcribe-agent` on the same docker network.
 TRANSCRIBE_AGENT_URL = os.environ.get('TRANSCRIBE_AGENT_URL', 'http://transcribe-agent:8080')
 
-# Memory-gate: workers weigeren nieuwe items te claimen als de host-RAM
-# headroom onder deze drempel zakt. Voorkomt OOM op kleine VPS waar
-# Whisper-medium ~1.6GB piek RAM nodig heeft naast de baseline van andere
-# stacks (n8n, authentik, etc.). MemAvailable uit /proc/meminfo is host-stat,
-# niet cgroup — perfect voor deze use-case.
-TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 500))
-SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 300))
+# Memory-gate: workers weigeren nieuwe items te claimen als de werkelijk
+# beschikbare RAM onder deze drempel zakt. Voorkomt OOM op kleine VPS waar
+# andere stacks (n8n, authentik, etc.) al een paar GB opeten.
+#
+# Bron van "beschikbaar" staat in _available_mem_mb() hieronder: prefer
+# cgroup-v2 (memory.max - memory.current) zodat de gate correct werkt
+# ook als de container een memory-limit heeft. Valt terug op
+# MemAvailable uit /proc/meminfo voor cgroup-v1 of niet-container setups.
+#
+# Drempels (2026-06-24): 200MB transcribe / 150MB summarize. De oude
+# defaults (500/300) blokkeerden het claimen op de 768MB cgroup van
+# stroom-api, terwijl stroom-api geen Whisper runt — dat zit in
+# transcribe-agent (externe service). Het trigger-werk is een korte
+# HTTP POST + wachten op completion, geen 1.6GB piek. 200MB is veilig
+# boven de baseline (~480MB RSS) + LLM-response buffering.
+# memory.peak monitoren na deze wijziging.
+TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 200))
+SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 150))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
 # Transient DNS/connect-fouten naar samenvat-agent moeten niet meteen 'failed'
@@ -90,16 +101,34 @@ LONG_TRANSCRIPT_TIMEOUT_SEC = float(os.environ.get('LONG_TRANSCRIPT_TIMEOUT_SEC'
 # QUALITY_SCORER_MODE, _scorer_endpoint(). Verwijderd 2026-05-19.
 
 
-def _available_host_mem_mb() -> int:
-    """MemAvailable uit /proc/meminfo, in MB. 0 bij leesfout (gate uit).
+def _cgroup_v2_mem_headroom_mb() -> Optional[int]:
+    """Beschikbare RAM binnen cgroup-v2 memory limit, in MB.
 
-    Let op: Docker exposet /proc/meminfo als HOST-stat, niet de cgroup
-    memory limit van de container. Voor onze setup (geen cgroup-mem limit
-    op stroom-api, host == VPS) is dat exact wat we willen. Voor setups
-    waar de container een lagere mem-limit heeft dan de host, kan deze
-    gate "vals positief" zijn (host heeft RAM, container niet) — dan moet
-    je in plaats daarvan /sys/fs/cgroup/memory.max lezen.
+    Leest memory.max en memory.current uit /sys/fs/cgroup/. Geeft None
+    terug als:
+      - cgroup-v2 niet beschikbaar is (bv. cgroup-v1 host)
+      - memory.max op "max" staat (geen limit) — gebruik dan proc fallback
+      - leesfout
     """
+    try:
+        with open('/sys/fs/cgroup/memory.max') as f:
+            max_str = f.read().strip()
+        if max_str == 'max':
+            return None  # Geen limit; proc-fallback is informatiever
+        max_bytes = int(max_str)
+        with open('/sys/fs/cgroup/memory.current') as f:
+            cur_bytes = int(f.read().strip())
+        # memory.max is inclusief een kleine marge voor page-cache;
+        # headroom (max - current) is conservatiever dan MemAvailable die
+        # reclaimable cache meetelt. Beide zijn OK als gate — als deze
+        # onder de drempel zit, is het echt krap.
+        return max(0, (max_bytes - cur_bytes)) // (1024 * 1024)
+    except (FileNotFoundError, ValueError, OSError):
+        return None
+
+
+def _proc_memavailable_mb() -> int:
+    """MemAvailable uit /proc/meminfo, in MB. 0 bij leesfout (gate uit)."""
     try:
         with open('/proc/meminfo') as f:
             for line in f:
@@ -110,13 +139,27 @@ def _available_host_mem_mb() -> int:
     return 0
 
 
+def _available_mem_mb() -> int:
+    """Beschikbare RAM voor de mem-gate, in MB. 0 bij leesfout (gate uit).
+
+    Prefer cgroup-v2 headroom zodat de gate correct werkt ook als de
+    container een memory-limit heeft (Docker `--memory`, compose
+    `deploy.resources.limits.memory`). Valt terug op /proc/meminfo's
+    MemAvailable voor cgroup-v1 hosts of niet-container setups.
+    """
+    cgroup = _cgroup_v2_mem_headroom_mb()
+    if cgroup is not None:
+        return cgroup
+    return _proc_memavailable_mb()
+
+
 # Per-worker state voor throttled mem-gate logging.
 _LAST_MEM_GATE_LOG: Dict[str, float] = {}
 
 
 def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
-    """True als beschikbare host-RAM onder de drempel zit. Logt throttled."""
-    avail = _available_host_mem_mb()
+    """True als beschikbare RAM onder de drempel zit. Logt throttled."""
+    avail = _available_mem_mb()
     if avail == 0:
         return False  # /proc/meminfo onleesbaar — gate uit, fail open
     if avail >= min_mb:
