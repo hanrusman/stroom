@@ -2843,6 +2843,15 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
     return started
 
 
+# Run-lock: voorkomt dat overlappende cron-aanroepen (de uurlijkse light-pas, de
+# nachtelijke full, en handmatige triggers) tegelijk dezelfde refresh-loop draaien
+# en de gedeelde httpx-pool leegtrekken — de contentie-spiraal die de transcribe-
+# stap deed verhongeren. Eén actieve run tegelijk; een tweede aanroep no-opt direct.
+# Single uvicorn-proces, dus een module-flag volstaat: er zit geen await tussen de
+# check en de set, dus het is race-vrij in asyncio (geen DB-advisory-lock nodig).
+_nightly_running = False
+
+
 @app.post("/admin/cron/nightly")
 async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_async_session)):
     """Nightly job: reset stuck → refresh sources → queue items.
@@ -2865,6 +2874,13 @@ async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_asy
 
     Auth: internal token or admin session cookie.
     """
+    global _nightly_running
+    if _nightly_running:
+        # Er draait al een run; niet nóg een concurrente refresh-loop starten.
+        print(f"[cron] nightly al bezig — aanroep overgeslagen (light={light})", flush=True)
+        return {"ok": False, "skipped": "already_running", "light": light}
+    _nightly_running = True
+
     async def _run() -> dict:
         unstuck = await _cron_unstuck(session)
 
@@ -2940,6 +2956,8 @@ async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_asy
             "ok": False,
             "error": "timeout: nightly exceeded 1800 seconds",
         }
+    finally:
+        _nightly_running = False
 
 
 @app.post("/admin/cron/transcribe-podcasts")
