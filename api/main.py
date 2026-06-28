@@ -76,14 +76,20 @@ TRANSCRIBE_AGENT_URL = os.environ.get('TRANSCRIBE_AGENT_URL', 'http://transcribe
 # ook als de container een memory-limit heeft. Valt terug op
 # MemAvailable uit /proc/meminfo voor cgroup-v1 of niet-container setups.
 #
-# Drempels (2026-06-24): 200MB transcribe / 150MB summarize. De oude
-# defaults (500/300) blokkeerden het claimen op de 768MB cgroup van
-# stroom-api, terwijl stroom-api geen Whisper runt — dat zit in
-# transcribe-agent (externe service). Het trigger-werk is een korte
-# HTTP POST + wachten op completion, geen 1.6GB piek. 200MB is veilig
-# boven de baseline (~480MB RSS) + LLM-response buffering.
-# memory.peak monitoren na deze wijziging.
-TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 200))
+# Drempels: 50MB transcribe / 150MB summarize. stroom-api runt zelf GEEN
+# Whisper — dat zit in samenvat-agent (aparte container). De transcribe-worker
+# doet hier alleen een goedkope HTTP-dispatch (paar MB); de 1.6GB-piek valt
+# elders. De transcribe-drempel hoort dus LAGER te zijn dan summarize (dat wél
+# in-proces LLM-werk doet), niet hoger.
+#
+# Regressie (#59, 2026-06-24): transcribe stond op 200 > summarize 150. Op de
+# krappe 768MB cgroup hield de summarize-backlog het beschikbare geheugen tussen
+# 150-200MB → summarize claimde wél, transcribe nooit → permanente uithongering
+# (structureel "0 transcripties" terwijl samenvattingen doorliepen). Door de
+# cheap dispatch ONDER de summarize-drempel te zetten krijgt transcribe weer
+# voorrang als RAM krap is; de single-GPU-constraint (max 1 'transcribing')
+# begrenst de echte capaciteit toch al.
+TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 50))
 SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 150))
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
