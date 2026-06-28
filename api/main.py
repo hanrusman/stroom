@@ -55,6 +55,13 @@ LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
 WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
 QUEUE_DEPTH_LOG_EVERY_SEC = 60
 
+# Worker-liveness heartbeat. Elke worker-loop-iteratie (óók wanneer de mem-gate
+# het claimen blokkeert) zet dit op now(). _cron_unstuck gebruikt het om
+# 'getemperd' (workers leven, RAM krap → niks geclaimd) te onderscheiden van
+# 'stalled' (workers echt dood). Zonder dit faalt de watchdog een hele wachtrij
+# die enkel op geheugen staat te wachten — de bron van de "queue stalled"-golven.
+_worker_heartbeat_at: float = 0.0
+
 # Transcription service (WhisperX wrapper) reachable from the api container.
 # Override via TRANSCRIBE_AGENT_URL=http://your-host:port. Default points at a
 # sibling container named `transcribe-agent` on the same docker network.
@@ -1249,10 +1256,12 @@ async def _summarize_worker(idx: int, async_session_maker) -> None:
     is daarmee per definitie begrensd op N. Geen losse `create_task`
     per item — als de pool vol zit, wacht de queue gewoon.
     """
+    global _worker_heartbeat_at
     print(f"[sum-worker-{idx}] started", flush=True)
     llm = LLMService(app.state.llm_client)
     while True:
         try:
+            _worker_heartbeat_at = time.time()
             async with async_session_maker() as s:
                 item_id = await _claim_next_summarize(s)
             if not item_id:
@@ -1275,10 +1284,12 @@ async def _transcribe_worker(async_session_maker) -> None:
     client geen invloed heeft op deze hot path. Een DNS-flap op personal_net
     leek de gedeelde pool in een permanent fail-state te dwingen.
     """
+    global _worker_heartbeat_at
     print("[trans-worker] started", flush=True)
     client = httpx.AsyncClient(timeout=30.0, limits=httpx.Limits(max_connections=2))
     while True:
         try:
+            _worker_heartbeat_at = time.time()
             async with async_session_maker() as s:
                 claim = await _claim_next_transcribe(s)
             if not claim:
@@ -2624,28 +2635,39 @@ async def _cron_unstuck(session) -> int:
     """))
     n_active = r_active.rowcount or 0
 
-    # In-queue items: alleen 'stalled' als er geen enkel actief item is met
-    # verse heartbeat. CRON_STUCK_ACTIVE_MIN doet dubbele dienst als
-    # minimum-leeftijd voor queue-items, anders zou net-binnen-gequeued
-    # tijdens een API-restart direct gefaald worden.
-    r_queued = await session.exec(sa_text(f"""
-        UPDATE items SET
-          processing_status = 'failed'::processing_status,
-          processing_error = 'queue stalled (no active workers) — auto-reset by cron'
-        WHERE processing_status IN
-              ('queued'::processing_status, 'transcribe_queued'::processing_status,
-               'summarize_queued'::processing_status)
-          AND queued_at IS NOT NULL
-          AND queued_at < now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
-          AND NOT EXISTS (
-            SELECT 1 FROM items active
-            WHERE active.processing_status IN
-                  ('transcribing'::processing_status, 'summarizing'::processing_status)
-              AND active.last_progress_at IS NOT NULL
-              AND active.last_progress_at > now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
-          )
-    """))
-    n = n_active + (r_queued.rowcount or 0)
+    # In-queue items: alleen 'stalled' als de pipeline werkelijk stil staat.
+    # Twee onafhankelijke liveness-signalen moeten BEIDE dood zijn:
+    #  1. geen actief item met verse last_progress_at (SQL, hieronder), én
+    #  2. geen worker-loop-heartbeat in de laatste N min (Python-global).
+    # Signaal 2 is cruciaal bij mem-gate-druk: dan claimt niemand iets (dus geen
+    # actief item), maar de workers LEVEN — ze pollen alleen en wachten op RAM.
+    # Zonder deze check faalde de watchdog elke ronde de hele getemperde wachtrij.
+    workers_alive = (time.time() - _worker_heartbeat_at) < CRON_STUCK_ACTIVE_MIN * 60
+    n_queued_stalled = 0
+    if workers_alive:
+        print(f"[cron-unstuck] queue-stall-check overgeslagen — workers leven "
+              f"(heartbeat {time.time() - _worker_heartbeat_at:.0f}s geleden, "
+              f"waarschijnlijk mem-gated)", flush=True)
+    else:
+        r_queued = await session.exec(sa_text(f"""
+            UPDATE items SET
+              processing_status = 'failed'::processing_status,
+              processing_error = 'queue stalled (no active workers) — auto-reset by cron'
+            WHERE processing_status IN
+                  ('queued'::processing_status, 'transcribe_queued'::processing_status,
+                   'summarize_queued'::processing_status)
+              AND queued_at IS NOT NULL
+              AND queued_at < now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
+              AND NOT EXISTS (
+                SELECT 1 FROM items active
+                WHERE active.processing_status IN
+                      ('transcribing'::processing_status, 'summarizing'::processing_status)
+                  AND active.last_progress_at IS NOT NULL
+                  AND active.last_progress_at > now() - interval '{CRON_STUCK_ACTIVE_MIN} minutes'
+              )
+        """))
+        n_queued_stalled = r_queued.rowcount or 0
+    n = n_active + n_queued_stalled
 
     # Reset topic digests stuck in queue (worker crasht voordat generatie begint)
     # Dit kan gebeuren als de API herstart terwijl een digest in de wachtrij staat
