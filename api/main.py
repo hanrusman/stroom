@@ -2910,13 +2910,20 @@ _nightly_running = False
 
 
 @app.post("/admin/cron/nightly")
-async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_async_session)):
+async def admin_cron_nightly(light: bool = Query(False),
+                             digests: bool = Query(True),
+                             session=Depends(get_async_session)):
     """Nightly job: reset stuck → refresh sources → queue items.
 
     `light=true` (daytime-pas): alleen feeds verversen + artikelen samenvatten
     (cloud-vriendelijk). Slaat transcriptie (GPU/lokaal) én digests over — die
     blijven nachtwerk. Bedoeld om overdag uurlijks te draaien zodat summaries
     niet tot de volgende ochtend wachten, zonder de A2-GPU overdag te belasten.
+
+    `digests=false`: wél transcripties queueen (full queue-vulling) maar de
+    dag/week-digests overslaan — voor een hourly test-cron die de pipeline vaak
+    draait zonder elke keer nieuwe digests te genereren. Digests lopen dan via
+    een aparte dagelijkse full-run (zonder dit flag).
 
     Cron flipt alleen statussen naar *_queued. De worker pool draineert
     de queues vanzelf (bounded door SUMMARIZE_WORKERS + hard cap op
@@ -2934,8 +2941,8 @@ async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_asy
     global _nightly_running
     if _nightly_running:
         # Er draait al een run; niet nóg een concurrente refresh-loop starten.
-        print(f"[cron] nightly al bezig — aanroep overgeslagen (light={light})", flush=True)
-        return {"ok": False, "skipped": "already_running", "light": light}
+        print(f"[cron] nightly al bezig — aanroep overgeslagen (light={light}, digests={digests})", flush=True)
+        return {"ok": False, "skipped": "already_running", "light": light, "digests": digests}
     _nightly_running = True
 
     async def _run() -> dict:
@@ -2973,16 +2980,20 @@ async def admin_cron_nightly(light: bool = Query(False), session=Depends(get_asy
             podcasts_queued = await _cron_queue_transcribes(session, content_kind="podcast", hours=CRON_NIGHTLY_HOURS)
             videos_queued = await _cron_queue_transcribes(session, content_kind="youtube", hours=CRON_NIGHTLY_HOURS)
 
-            from routers.settings import _load as _load_settings
-            _settings = await _load_settings(session)
-            digests_started = await _cron_kick_topic_digests(session, model=_settings.digest, window="daily")
-            # Weekdigest hoeft maar ~wekelijks: alleen (re)genereren als de bestaande
-            # ouder is dan WEEKLY_MIN_AGE_HOURS. Componeert uit de dag-digests (goedkoop),
-            # dus dit kan veilig elke nacht meeliften zonder de oude 19u-hang.
-            weekly_model = _settings.digest_weekly or _settings.digest
-            weekly_started = await _cron_kick_topic_digests(
-                session, model=weekly_model, window="weekly", min_age_hours=WEEKLY_MIN_AGE_HOURS,
-            )
+            if digests:
+                from routers.settings import _load as _load_settings
+                _settings = await _load_settings(session)
+                digests_started = await _cron_kick_topic_digests(session, model=_settings.digest, window="daily")
+                # Weekdigest hoeft maar ~wekelijks: alleen (re)genereren als de bestaande
+                # ouder is dan WEEKLY_MIN_AGE_HOURS. Componeert uit de dag-digests (goedkoop),
+                # dus dit kan veilig elke nacht meeliften zonder de oude 19u-hang.
+                weekly_model = _settings.digest_weekly or _settings.digest
+                weekly_started = await _cron_kick_topic_digests(
+                    session, model=weekly_model, window="weekly", min_age_hours=WEEKLY_MIN_AGE_HOURS,
+                )
+            else:
+                # digests=false: queue wel, digests niet (hourly test-cron).
+                digests_started = weekly_started = 0
 
         return {
             "ok": True,
