@@ -2176,8 +2176,9 @@ async def _refresh_one(session, src) -> dict:
     import feedparser
     from datetime import datetime, timezone
 
-    # SSRF-guard: feedparser fetcht src.url zelf (eigen urllib). Valideer het
-    # adres vooraf zodat een feed-URL niet naar een intern adres kan wijzen.
+    # SSRF-guard: safe_get hieronder valideert de URL én elke redirect-hop
+    # tegen intern-adres-misbruik. De upfront assert_public_url is een vroege
+    # short-circuit voordat we een connectie openen.
     try:
         await assert_public_url(src.url)
     except UnsafeURLError as exc:
@@ -2187,7 +2188,35 @@ async def _refresh_one(session, src) -> dict:
         ).bindparams(st=f"error: {str(exc)[:120]}", i=str(src.id)))
         return {"inserted": 0, "checked": 0, "error": str(exc)}
 
-    feed = await asyncio.get_event_loop().run_in_executor(None, feedparser.parse, src.url)
+    # Fetch via httpx met harde timeout (30s). feedparser.parse(url) doet zelf
+    # een synchrone urllib-fetch zonder timeout in de gedeelde default
+    # ThreadPoolExecutor; een host die de connectie accepteert maar nooit
+    # antwoordt wedged die thread permanent — asyncio.wait_for(90s) cancelt de
+    # coroutine maar kan de OS-thread niet doden. Zodra de ~12 executor-threads
+    # vol zitten met gewedgede fetches, blokkeert élke volgende refresh (ook
+    # naar gezonde feeds) op een vrije thread → uniform 90s-stall. Bytes aan
+    # feedparser.parse geven = geen ongetimede netwerk-call meer in de
+    # executor; die parset enkel gedownloade bytes (snel, begrensd). Zelfde
+    # patroon als _backfill_one (main.py:~2289).
+    try:
+        resp = await _safe_get(
+            app.state.http_client,
+            src.url,
+            headers={"User-Agent": "StroomBot/1.0 (+refresh)"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        feed_bytes = resp.content
+    except Exception as e:
+        # repr(e) maakt het exceptie-type zichtbaar — str(e) is vaak leeg
+        # (bijv. ConnectError/ReadError), net als bij quality_service.score_quality.
+        await session.exec(sa_text(
+            "UPDATE sources SET last_polled_at = now(), last_poll_status = :st "
+            "WHERE id = CAST(:i AS uuid)"
+        ).bindparams(st=f"error: fetch: {repr(e)[:200]}", i=str(src.id)))
+        return {"inserted": 0, "checked": 0, "error": f"fetch: {repr(e)}"}
+
+    feed = await asyncio.get_event_loop().run_in_executor(None, feedparser.parse, feed_bytes)
     if feed.bozo and not feed.entries:
         err = str(getattr(feed, "bozo_exception", "unknown"))
         await session.exec(sa_text(
