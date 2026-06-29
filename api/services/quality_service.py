@@ -147,7 +147,9 @@ class QualityService:
             if match:
                 return int(match.group(1))
         except Exception as e:
-            print(f"Error scoring quality: {e}", flush=True)
+            # Fail-open naar None is intended (interest+hook scoren gewoon door).
+            # repr(e) maakt het exceptie-type zichtbaar — {e} was vaak leeg.
+            print(f"[quality] score_quality fail-open naar None: {repr(e)}", flush=True)
         return None
 
     async def score_interest(self, text: str) -> int | None:
