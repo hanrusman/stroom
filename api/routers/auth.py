@@ -9,6 +9,7 @@ from core.auth import (
     SESSION_COOKIE,
     check_login_rate_limit,
     clear_session_cookie,
+    client_ip,
     create_session,
     delete_session,
     get_session_user,
@@ -29,7 +30,7 @@ class LoginBody(BaseModel):
 @router.post("/auth/login")
 async def auth_login(body: LoginBody, request: Request, response: Response,
                      session=Depends(get_async_session)):
-    rate_key = request.client.host if request.client else "unknown"
+    rate_key = client_ip(request)
     if not check_login_rate_limit(rate_key):
         raise HTTPException(status_code=429, detail="Te veel pogingen, probeer over 15 minuten opnieuw")
 

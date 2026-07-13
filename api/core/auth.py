@@ -34,6 +34,23 @@ SCRYPT_KEYLEN = 64
 _LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 LOGIN_WINDOW_S = 15 * 60
 LOGIN_MAX_ATTEMPTS = 5
+_MAX_TRACKED_KEYS = 10_000
+
+
+def client_ip(request: Request) -> str:
+    """Echte client-IP voor rate-limiting.
+
+    Achter de nginx van stroom-web is request.client.host het proxy-IP —
+    dan zouden alle bezoekers één bucket delen. X-Forwarded-For alléén
+    vertrouwen als de directe peer een geconfigureerde proxy is
+    (STROOM_TRUSTED_PROXIES), anders is de header spoofbaar.
+    """
+    peer = request.client.host if request.client else "unknown"
+    if peer in settings.trusted_proxies:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[0].strip()
+    return peer
 
 
 def hash_password(password: str) -> str:
@@ -77,6 +94,11 @@ def verify_password(password: str, stored: str) -> bool:
 
 def check_login_rate_limit(key: str) -> bool:
     now = time.time()
+    # Opportunistische cleanup houdt de dict begrensd zonder achtergrondtaak.
+    if len(_LOGIN_ATTEMPTS) > _MAX_TRACKED_KEYS:
+        cutoff = now - LOGIN_WINDOW_S
+        for stale in [k for k, ts in _LOGIN_ATTEMPTS.items() if not ts or ts[-1] < cutoff]:
+            del _LOGIN_ATTEMPTS[stale]
     recent = [t for t in _LOGIN_ATTEMPTS.get(key, []) if now - t < LOGIN_WINDOW_S]
     if len(recent) >= LOGIN_MAX_ATTEMPTS:
         _LOGIN_ATTEMPTS[key] = recent

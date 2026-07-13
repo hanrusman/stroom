@@ -75,7 +75,12 @@ class Settings(BaseSettings):
     # --- Web/security ---
     STROOM_ENABLE_DOCS: bool = False
     STROOM_ALLOWED_ORIGINS: str = ""
+    # Overgangstoken met alle scopes; vervangen door de drie scoped tokens
+    # hieronder en daarna uit de .env halen (zie verbeterplan S5).
     STROOM_INTERNAL_TOKEN: str = ""
+    STROOM_AGENT_TOKEN: str = ""   # samenvat-agent: callback + heartbeat
+    STROOM_CRON_TOKEN: str = ""    # cron-caller: /admin/cron/*, backfill-stale, quality-backfill
+    STROOM_READER_TOKEN: str = ""  # m2m-readers: /transcripts, /internal/*
     STROOM_INBOX_TOKEN: str = ""
     STROOM_INSECURE_COOKIE: bool = False
     STROOM_TRUSTED_PROXIES: str = ""

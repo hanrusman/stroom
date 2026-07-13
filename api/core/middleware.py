@@ -37,10 +37,42 @@ _INTERNAL_TOKEN_PATH_PREFIXES = (
     "/transcripts",
     "/internal/",
 )
-INTERNAL_TOKEN = settings.STROOM_INTERNAL_TOKEN
-if not INTERNAL_TOKEN:
-    log.warning("[SECURITY WARNING] STROOM_INTERNAL_TOKEN not set - "
+
+# --- Token-scopes (verbeterplan S5) ---
+# Per-consumer tokens zodat een gelekt token maar één capability geeft en per
+# consumer roteerbaar is. Het oude STROOM_INTERNAL_TOKEN heeft tijdens de
+# overgangsperiode alle scopes; haal het uit de .env zodra de consumers
+# (samenvat-agent, cron-script, m2m-readers) hun eigen token gebruiken.
+_TOKEN_SCOPES: dict[str, frozenset[str]] = {}
+for _tok, _scopes in (
+    (settings.STROOM_AGENT_TOKEN, frozenset({"callback"})),
+    (settings.STROOM_CRON_TOKEN, frozenset({"cron"})),
+    (settings.STROOM_READER_TOKEN, frozenset({"transcripts"})),
+    (settings.STROOM_INTERNAL_TOKEN, frozenset({"callback", "cron", "transcripts"})),
+):
+    if _tok:  # lege env-vars nooit als geldig token registreren
+        _TOKEN_SCOPES[_tok] = _TOKEN_SCOPES.get(_tok, frozenset()) | _scopes
+
+if not _TOKEN_SCOPES:
+    log.warning("[SECURITY WARNING] geen interne tokens gezet - "
                 "internal endpoints will only work with session auth")
+
+
+def _scope_for_path(path: str) -> str | None:
+    if path.endswith(("/transcribe-callback", "/heartbeat")):
+        return "callback"
+    if any(path.endswith(s) for s in _INTERNAL_TOKEN_PATH_SUFFIXES):
+        return "cron"
+    if any(path.startswith(p) for p in _INTERNAL_TOKEN_PATH_PREFIXES):
+        return "transcripts"
+    return None
+
+
+def _token_allows(token: str, scope: str) -> bool:
+    for known, scopes in _TOKEN_SCOPES.items():
+        if hmac.compare_digest(token, known) and scope in scopes:
+            return True
+    return False
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
@@ -59,14 +91,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in _PUBLIC_PATHS or path.startswith("/static"):
             return await call_next(request)
 
-        # 3. Internal-token paths (transcribe-agent callback, cron) — accept token
-        # OR fall through to session-cookie auth (admin user kicking the cron from UI).
+        # 3. Internal-token paths (transcribe-agent callback, cron) — accept een
+        # token met de juiste scope, OR fall through to session-cookie auth
+        # (admin user kicking the cron from UI).
         if any(path.endswith(s) for s in _INTERNAL_TOKEN_PATH_SUFFIXES):
             tok = request.headers.get("x-stroom-internal-token", "")
-            if INTERNAL_TOKEN and tok:
-                if hmac.compare_digest(tok, INTERNAL_TOKEN):
+            if _TOKEN_SCOPES and tok:
+                scope = _scope_for_path(path)
+                if scope and _token_allows(tok, scope):
                     return await call_next(request)
-                # Invalid token - log for security monitoring
+                # Invalid token / verkeerde scope - log for security monitoring
                 log.warning("[SECURITY] Invalid internal token attempt from %s to %s",
                             request.client.host if request.client else "?", path)
                 return JSONResponse({"detail": "Unauthorized"}, status_code=403)
@@ -75,9 +109,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 3b. Token-only prefix paths (machine-to-machine) — no session-fallback.
         if any(path.startswith(p) for p in _INTERNAL_TOKEN_PATH_PREFIXES):
             tok = request.headers.get("x-stroom-internal-token", "")
-            if not INTERNAL_TOKEN:
+            if not _TOKEN_SCOPES:
                 return JSONResponse({"detail": "Internal endpoints disabled"}, status_code=503)
-            if not tok or not hmac.compare_digest(tok, INTERNAL_TOKEN):
+            if not tok or not _token_allows(tok, "transcripts"):
                 log.warning("[SECURITY] Invalid/missing internal token for %s from %s",
                             path, request.client.host if request.client else "?")
                 return JSONResponse({"detail": "Unauthorized"}, status_code=401)
