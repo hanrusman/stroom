@@ -1,4 +1,3 @@
-import os
 
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import Session, create_engine
@@ -12,10 +11,10 @@ engine = create_engine(settings.DATABASE_URL, echo=settings.SQL_ECHO)
 # Async engine for API requests - configure pool size for concurrent workers
 # Workers: SUMMARIZE_WORKERS (default 2) + trans-worker (1) + queue-depth (1) + API requests
 # Pool size 10 with overflow 20 gives genoeg ruimte voor pieken zonder timeout
-_pool_size = int(os.environ.get("DB_POOL_SIZE", "10"))
-_max_overflow = int(os.environ.get("DB_MAX_OVERFLOW", "20"))
-_pool_timeout = int(os.environ.get("DB_POOL_TIMEOUT", "30"))
-_pool_recycle = int(os.environ.get("DB_POOL_RECYCLE", "3600"))  # Recycle na 1 uur
+_pool_size = settings.DB_POOL_SIZE
+_max_overflow = settings.DB_MAX_OVERFLOW
+_pool_timeout = settings.DB_POOL_TIMEOUT
+_pool_recycle = settings.DB_POOL_RECYCLE  # Recycle na 1 uur
 
 async_engine = create_async_engine(
     settings.ASYNC_DATABASE_URL,

@@ -1,6 +1,5 @@
 import asyncio
 import hmac
-import os
 import re
 import time
 from contextlib import asynccontextmanager
@@ -30,6 +29,7 @@ from core.auth import (
     valid_inbox_token,
     verify_password_or_dummy,
 )
+from core.config import settings
 from core.db import get_async_session
 from core.url_guard import UnsafeURLError, assert_public_url
 from core.url_guard import safe_get as _safe_get
@@ -50,18 +50,18 @@ from services.llm_service import LLMService
 
 # --- Queue tunables ---
 # Hard caps voorkomen dat cron/inbox de queue volgooit en de VPS plat trekt.
-SUMMARIZE_QUEUE_MAX_DEPTH = int(os.environ.get('SUMMARIZE_QUEUE_MAX_DEPTH', 30))
-TRANSCRIBE_QUEUE_MAX_DEPTH = int(os.environ.get('TRANSCRIBE_QUEUE_MAX_DEPTH', 30))
-SUMMARIZE_WORKERS = int(os.environ.get('SUMMARIZE_WORKERS', 2))
+SUMMARIZE_QUEUE_MAX_DEPTH = settings.SUMMARIZE_QUEUE_MAX_DEPTH
+TRANSCRIBE_QUEUE_MAX_DEPTH = settings.TRANSCRIBE_QUEUE_MAX_DEPTH
+SUMMARIZE_WORKERS = settings.SUMMARIZE_WORKERS
 # Retry+backoff op de summarize-LLM-call. Een enkele transiente hapering
 # (timeout, 429/5xx van de proxy, of lege content van een reasoning-model)
 # mag een item niet permanent op 'failed' zetten — vooral bij bulk-runs waar
 # de transiente fout-staart in één keer zichtbaar wordt.
-SUMMARIZE_MAX_ATTEMPTS = int(os.environ.get('SUMMARIZE_MAX_ATTEMPTS', 3))
-SUMMARIZE_RETRY_BASE_SEC = float(os.environ.get('SUMMARIZE_RETRY_BASE_SEC', 2))
-LLM_HTTP_TIMEOUT_SEC = float(os.environ.get('LLM_HTTP_TIMEOUT_SEC', 60))
-LLM_MAX_CONCURRENT = int(os.environ.get('LLM_MAX_CONCURRENT', 4))
-WORKER_IDLE_POLL_SEC = float(os.environ.get('WORKER_IDLE_POLL_SEC', 10))
+SUMMARIZE_MAX_ATTEMPTS = settings.SUMMARIZE_MAX_ATTEMPTS
+SUMMARIZE_RETRY_BASE_SEC = settings.SUMMARIZE_RETRY_BASE_SEC
+LLM_HTTP_TIMEOUT_SEC = settings.LLM_HTTP_TIMEOUT_SEC
+LLM_MAX_CONCURRENT = settings.LLM_MAX_CONCURRENT
+WORKER_IDLE_POLL_SEC = settings.WORKER_IDLE_POLL_SEC
 QUEUE_DEPTH_LOG_EVERY_SEC = 60
 
 # Worker-liveness heartbeat. Elke worker-loop-iteratie (óók wanneer de mem-gate
@@ -74,7 +74,7 @@ _worker_heartbeat_at: float = 0.0
 # Transcription service (WhisperX wrapper) reachable from the api container.
 # Override via TRANSCRIBE_AGENT_URL=http://your-host:port. Default points at a
 # sibling container named `transcribe-agent` on the same docker network.
-TRANSCRIBE_AGENT_URL = os.environ.get('TRANSCRIBE_AGENT_URL', 'http://transcribe-agent:8080')
+TRANSCRIBE_AGENT_URL = settings.TRANSCRIBE_AGENT_URL
 
 # Memory-gate: workers weigeren nieuwe items te claimen als de werkelijk
 # beschikbare RAM onder deze drempel zakt. Voorkomt OOM op kleine VPS waar
@@ -98,25 +98,25 @@ TRANSCRIBE_AGENT_URL = os.environ.get('TRANSCRIBE_AGENT_URL', 'http://transcribe
 # cheap dispatch ONDER de summarize-drempel te zetten krijgt transcribe weer
 # voorrang als RAM krap is; de single-GPU-constraint (max 1 'transcribing')
 # begrenst de echte capaciteit toch al.
-TRANSCRIBE_MIN_FREE_MB = int(os.environ.get('TRANSCRIBE_MIN_FREE_MB', 50))
-SUMMARIZE_MIN_FREE_MB = int(os.environ.get('SUMMARIZE_MIN_FREE_MB', 150))
+TRANSCRIBE_MIN_FREE_MB = settings.TRANSCRIBE_MIN_FREE_MB
+SUMMARIZE_MIN_FREE_MB = settings.SUMMARIZE_MIN_FREE_MB
 MEM_GATE_LOG_EVERY_SEC = 300  # Throttle "wachten op geheugen"-logs naar 1x / 5min
 
 # Transient DNS/connect-fouten naar samenvat-agent moeten niet meteen 'failed'
 # opleveren — Docker's embedded DNS resolver kan kort flappen bij churn op
 # personal_net. Requeue tot N pogingen voordat we echt opgeven.
-TRANSCRIBE_TRIGGER_MAX_TRIES = int(os.environ.get('TRANSCRIBE_TRIGGER_MAX_TRIES', 3))
+TRANSCRIBE_TRIGGER_MAX_TRIES = settings.TRANSCRIBE_TRIGGER_MAX_TRIES
 _TRANSCRIBE_TRIGGER_ATTEMPTS: dict[str, int] = {}
 
 # Lange transcripties (podcasts, video's > 10 min) gaan via een cloud-model
 # met groot context-window in plaats van de lokale 12k-trim + stroom-bulk.
 # Drempel op duration_seconds (audio-tijd), met char-fallback voor items
 # zonder duration. Bij cloud-faal: graceful fallback naar truncated stroom-bulk.
-LONG_TRANSCRIPT_DURATION_SECONDS = int(os.environ.get('LONG_TRANSCRIPT_DURATION_SECONDS', 600))
-LONG_TRANSCRIPT_CHAR_FALLBACK = int(os.environ.get('LONG_TRANSCRIPT_CHAR_FALLBACK', 20000))
-LONG_TRANSCRIPT_MAX_CHARS = int(os.environ.get('LONG_TRANSCRIPT_MAX_CHARS', 150000))
-LONG_TRANSCRIPT_MODEL = os.environ.get('LONG_TRANSCRIPT_MODEL', 'cloud-kimi')
-LONG_TRANSCRIPT_TIMEOUT_SEC = float(os.environ.get('LONG_TRANSCRIPT_TIMEOUT_SEC', 600))
+LONG_TRANSCRIPT_DURATION_SECONDS = settings.LONG_TRANSCRIPT_DURATION_SECONDS
+LONG_TRANSCRIPT_CHAR_FALLBACK = settings.LONG_TRANSCRIPT_CHAR_FALLBACK
+LONG_TRANSCRIPT_MAX_CHARS = settings.LONG_TRANSCRIPT_MAX_CHARS
+LONG_TRANSCRIPT_MODEL = settings.LONG_TRANSCRIPT_MODEL
+LONG_TRANSCRIPT_TIMEOUT_SEC = settings.LONG_TRANSCRIPT_TIMEOUT_SEC
 
 # Quality + interest scoring zit nu in stroom-api zelf (services/quality_service.py).
 # Geen externe quality-scorer container meer — was: QUALITY_SCORER_URL,
@@ -213,12 +213,12 @@ def _mem_gate_blocks(worker_name: str, min_mb: int) -> bool:
     return True
 
 
-_QUALITY_WEIGHT = float(os.environ.get("QUALITY_HYBRID_QUALITY_WEIGHT", "0.4"))
-_INTEREST_WEIGHT = float(os.environ.get("QUALITY_HYBRID_INTEREST_WEIGHT", "0.6"))
+_QUALITY_WEIGHT = settings.QUALITY_HYBRID_QUALITY_WEIGHT
+_INTEREST_WEIGHT = settings.QUALITY_HYBRID_INTEREST_WEIGHT
 
 # Quality boost voor huygens ranking: extra seconden per quality punt boven 6
 # Factor 2.0 = 2 dagen extra per punt (86400 * 2 = 172800 seconden)
-_QUALITY_BOOST_FACTOR = float(os.environ.get("QUALITY_BOOST_FACTOR", "2.0"))
+_QUALITY_BOOST_FACTOR = settings.QUALITY_BOOST_FACTOR
 _QUALITY_BOOST_SECONDS = int(_QUALITY_BOOST_FACTOR * 86400)
 
 
@@ -312,7 +312,7 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
         hybrid = _calculate_hybrid(quality, interest)
         if hybrid is not None:
             out[item_id] = hybrid
-    if os.environ.get("QUALITY_SCORER_DEBUG") == "1" and out:
+    if settings.QUALITY_SCORER_DEBUG and out:
         lo = min(out.items(), key=lambda kv: kv[1])
         hi = max(out.items(), key=lambda kv: kv[1])
         print(f"[quality-scorer] batch debug: lowest={lo[1]} (id={lo[0]}), "
@@ -342,7 +342,7 @@ async def lifespan(app: FastAPI):
     from services.topics_service import TopicsService
     app.state.quality_service = QualityService()
     app.state.topics_service = TopicsService(Path("/data/topics_config.json"))
-    if os.environ.get("QUALITY_EMBEDDING_ENABLED", "true").lower() in ("true", "1", "yes"):
+    if settings.QUALITY_EMBEDDING_ENABLED:
         try:
             await asyncio.to_thread(app.state.quality_service.load)
         except Exception as e:
@@ -375,7 +375,7 @@ async def lifespan(app: FastAPI):
 
 # OpenAPI docs zijn handig in dev maar lekken endpoint-structuur in productie.
 # Default: dicht. Zet STROOM_ENABLE_DOCS=1 om ze aan te zetten.
-_DOCS_ENABLED = os.environ.get("STROOM_ENABLE_DOCS") == "1"
+_DOCS_ENABLED = settings.STROOM_ENABLE_DOCS
 app = FastAPI(
     title="Stroom API",
     lifespan=lifespan,
@@ -385,14 +385,9 @@ app = FastAPI(
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
 
-_DEFAULT_ORIGINS = [
-    "http://localhost:3000",
-    "http://localhost:8101",
-]
-# Add deployed origins (Tailscale IP, public hostname) via env var, comma-separated:
+# Deployed origins (Tailscale IP, publieke hostname) via env:
 #   STROOM_ALLOWED_ORIGINS=https://stroom.example.com,http://10.0.0.5:8101
-_extra = [o.strip() for o in os.environ.get("STROOM_ALLOWED_ORIGINS", "").split(",") if o.strip()]
-_ALLOWED_ORIGINS = list(dict.fromkeys(_DEFAULT_ORIGINS + _extra))
+_ALLOWED_ORIGINS = settings.allowed_origins
 
 app.add_middleware(
     CORSMiddleware,
@@ -427,7 +422,7 @@ _INTERNAL_TOKEN_PATH_PREFIXES = (
     "/transcripts",
     "/internal/",
 )
-INTERNAL_TOKEN = os.environ.get("STROOM_INTERNAL_TOKEN", "")
+INTERNAL_TOKEN = settings.STROOM_INTERNAL_TOKEN
 if not INTERNAL_TOKEN:
     print("[SECURITY WARNING] STROOM_INTERNAL_TOKEN not set - internal endpoints will only work with session auth")
 
@@ -1921,7 +1916,7 @@ _ARTICLE_SUMMARY_SYSTEM = (
 
 # Minimaal aantal chars in de geëxtraheerde body voordat lesson-distill draait.
 # Beschermt tegen oppervlakkige/verzonnen lessen op een RSS-teaser i.p.v. full-text.
-ARTICLE_MIN_BODY_FOR_LESSONS = int(os.environ.get('ARTICLE_MIN_BODY_FOR_LESSONS', 800))
+ARTICLE_MIN_BODY_FOR_LESSONS = settings.ARTICLE_MIN_BODY_FOR_LESSONS
 
 
 def _pick_summary_route(raw: str, duration_seconds: int | None,

@@ -18,6 +18,7 @@ from typing import Optional
 from fastapi import Depends, HTTPException, Request, Response
 from sqlalchemy import text as sa_text
 
+from core.config import settings
 from core.db import get_async_session
 
 log = logging.getLogger("stroom.auth")
@@ -138,7 +139,7 @@ def set_session_cookie(response: Response, token: str, expires_at: datetime) -> 
         key=SESSION_COOKIE,
         value=token,
         httponly=True,
-        secure=os.environ.get("STROOM_INSECURE_COOKIE") != "1",
+        secure=not settings.STROOM_INSECURE_COOKIE,
         samesite="lax",
         path="/",
         expires=expires_at,
@@ -150,7 +151,7 @@ def clear_session_cookie(response: Response) -> None:
         key=SESSION_COOKIE,
         path="/",
         samesite="lax",
-        secure=os.environ.get("STROOM_INSECURE_COOKIE") != "1",
+        secure=not settings.STROOM_INSECURE_COOKIE,
         httponly=True,
     )
 
@@ -173,7 +174,7 @@ async def require_user(request: Request,
 
 # Eigen, smal-gescopet token voor de inbox-router (iOS Shortcut e.d.). Bewust
 # losgekoppeld van STROOM_INTERNAL_TOKEN: dit token kan alléén items insturen.
-INBOX_TOKEN = os.environ.get("STROOM_INBOX_TOKEN", "")
+INBOX_TOKEN = settings.STROOM_INBOX_TOKEN
 INBOX_TOKEN_HEADER = "x-stroom-inbox-token"
 
 
