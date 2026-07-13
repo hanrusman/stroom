@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
+import { sanitizeHtml, sanitizeMarkdown } from './lib/sanitize';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { SettingsProvider, useSettings } from './settings';
@@ -52,13 +51,6 @@ const safeHref = (url: string | null | undefined): string | undefined => {
   } catch {
     return undefined;
   }
-};
-
-// Security: sanitize markdown output before rendering with dangerouslySetInnerHTML
-const sanitizeMarkdown = (content: string | null | undefined, options?: { async?: boolean; breaks?: boolean }): string => {
-  if (!content) return '';
-  const html = marked.parse(content, { async: false, breaks: options?.breaks ?? true }) as string;
-  return DOMPurify.sanitize(html, { ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'a', 'blockquote', 'code', 'pre', 'span'], ALLOWED_ATTR: ['href', 'target', 'class'] });
 };
 
 const TopicChip = ({ topic, active, onClick }: {
@@ -841,7 +833,7 @@ const ArticleBody = ({ item }: { item: ItemDetail }) => {
   const hero = item.thumbnail_url ?? item.source_image_url;
   const html = item.format === 'article' && item.transcript
     ? sanitizeMarkdown(item.transcript)
-    : DOMPurify.sanitize(item.description ?? '');
+    : sanitizeHtml(item.description);
   const excerpt = firstParagraph(item);
   return (
     <div className="max-w-[680px] mx-auto">
