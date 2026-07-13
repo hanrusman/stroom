@@ -49,6 +49,7 @@ LessonsDigestFilter = Literal["useful", "not-useful", "all"]
 
 # Single source of truth voor model-aliases: pipeline.digest_model_map.
 from pipeline.digest_model_map import DIGEST_MODEL_TO_LITELLM as _MODEL_ALIAS  # noqa: E402
+
 _WINDOW_HOURS: dict[str, int] = {"daily": 24, "weekly": 168}
 _FILTER_RATING: dict[str, int] = {"useful": 1, "not-useful": -1, "all": 0}
 _DIGEST_GENERATION_STALE_MIN = 10

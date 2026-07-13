@@ -1,0 +1,14 @@
+# Mild startprofiel (verbeterplan T2): fouten en import-hygiëne, geen stijlpolitie.
+# Uitbreiden (B, UP, S) zodra de eerste run schoon is.
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E501",  # regel-lengte: handhaven we (nog) niet
+    "E741",  # onduidelijke variabelenamen (l, O) — te veel bestaande hits
+]
+
+[lint.isort]
+known-first-party = ["core", "models", "pipeline", "routers", "schemas", "services", "workers"]

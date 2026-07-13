@@ -1,43 +1,52 @@
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, Depends, HTTPException, Query, BackgroundTasks, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import select
-from pathlib import Path
-from typing import Dict, List, Optional, Literal
-from pydantic import BaseModel
-from core.db import get_async_session
-from core.config import settings
-from core.url_guard import UnsafeURLError, assert_public_url, safe_get as _safe_get
-from models.base import (
-    Item, ItemStatus, ProcessingStatus,
-    Topic, ItemFormat, Source,
-)
-from sqlalchemy import text as sa_text
-from services.llm_service import LLMService
 import asyncio
 import hmac
-import httpx
 import os
 import re
 import time
+from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Literal, Optional
 from uuid import UUID
+
+import httpx
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import text as sa_text
+from sqlmodel import select
 from starlette.middleware.base import BaseHTTPMiddleware
+
 from core.auth import (
-    SESSION_COOKIE, hash_password, verify_password, verify_password_or_dummy,
-    check_login_rate_limit, reset_login_rate_limit,
-    create_session, delete_session, get_session_user,
-    set_session_cookie, clear_session_cookie, require_user,
+    SESSION_COOKIE,
+    check_login_rate_limit,
+    clear_session_cookie,
+    create_session,
+    delete_session,
+    get_session_user,
+    require_user,
+    reset_login_rate_limit,
+    set_session_cookie,
     valid_inbox_token,
+    verify_password_or_dummy,
 )
-from routers import legacy as legacy_router
-from routers import lessons as lessons_router
-from routers import settings as settings_router
+from core.db import get_async_session
+from core.url_guard import UnsafeURLError, assert_public_url
+from core.url_guard import safe_get as _safe_get
+from models.base import (
+    ItemFormat,
+    ItemStatus,
+    ProcessingStatus,
+    Topic,
+)
 from routers import admin_topics as admin_topics_router
 from routers import ask as ask_router
 from routers import inbox as inbox_router
+from routers import legacy as legacy_router
+from routers import lessons as lessons_router
+from routers import settings as settings_router
 from routers import transcripts as transcripts_router
-
+from services.llm_service import LLMService
 
 # --- Queue tunables ---
 # Hard caps voorkomen dat cron/inbox de queue volgooit en de VPS plat trekt.
@@ -945,10 +954,10 @@ DIGEST_WINDOWS: dict[str, int] = {"daily": 24, "weekly": 168}
 # 'm pas als de bestaande ouder is dan dit (6,5 dag) → zelfherstellend, geen
 # 28-uurs backfill-cascade. Weekly componeert uit dag-digests, dus goedkoop.
 WEEKLY_MIN_AGE_HOURS: float = 156.0
-from pipeline.digest import (
-    DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS, DIGEST_MODEL_MAP,
+from pipeline.digest import (  # noqa: E402
     DIGEST_GENERATION_STALE_MIN,
-    strip_html as _strip_html,
+)
+from pipeline.digest import (  # noqa: E402
     run_digest_generation as _pipeline_run_digest_generation,
 )
 
@@ -1875,11 +1884,12 @@ _OG_PATTERNS = [
 ]
 
 
-from pipeline.articles import (
-    extract_article_body as _extract_article_body,
+from pipeline.articles import (  # noqa: E402
     backfill_articles as _pipeline_backfill_articles,
 )
-
+from pipeline.articles import (  # noqa: E402
+    extract_article_body as _extract_article_body,
+)
 
 _INBOX_SOURCE_NAME = "Inbox (handmatig)"
 
@@ -2173,8 +2183,9 @@ async def _scrape_og_image(client: httpx.AsyncClient, url: str) -> Optional[str]
 
 async def _refresh_one(session, src) -> dict:
     """Fetch src's feed, upsert items, return {inserted, checked, error?}."""
-    import feedparser
     from datetime import datetime, timezone
+
+    import feedparser
 
     # SSRF-guard: safe_get hieronder valideert de URL én elke redirect-hop
     # tegen intern-adres-misbruik. De upfront assert_public_url is een vroege
@@ -2310,8 +2321,9 @@ async def _backfill_one(session, src, target_new: int) -> dict:
     pulls older episodes. Stops as soon as `target_new` new items have been
     inserted; relies on ON CONFLICT DO NOTHING to skip what's already stored.
     """
-    import feedparser
     from datetime import datetime, timezone
+
+    import feedparser
 
     # Fetch via httpx so we get a hard timeout (feedparser's default urllib
     # call can hang on slow podcast hosts).
@@ -2952,7 +2964,9 @@ async def admin_cron_nightly(light: bool = Query(False),
         rows = (await session.exec(sa_text(
             "SELECT id, name, kind::text, url FROM sources WHERE active ORDER BY name"
         ))).all()
-        refreshed = 0; refresh_errors = 0; inserted_total = 0
+        refreshed = 0
+        refresh_errors = 0
+        inserted_total = 0
         for row in rows:
             src = type("S", (), {"id": row[0], "name": row[1], "kind": row[2], "url": row[3]})
             try:
@@ -3396,7 +3410,7 @@ async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> N
     from core.db import async_session_maker
     scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
     if not scores_by_id:
-        print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
+        print("[quality-backfill] scorer gaf geen resultaten terug", flush=True)
         return
     async with async_session_maker() as session:
         for item_id, score in scores_by_id.items():
@@ -3491,7 +3505,8 @@ async def admin_quality_status(
 
 # --- Quality Scorer Admin (lokaal via topics_service, geen externe container) ---
 
-from pydantic import BaseModel
+from pydantic import BaseModel  # noqa: E402
+
 
 class QualityScorerTopic(BaseModel):
     name: str
@@ -3577,7 +3592,8 @@ async def admin_quality_scorer_extract_keywords(
 
 # --- TEST: Quality Boost Scoring ---
 
-from pydantic import BaseModel
+from pydantic import BaseModel  # noqa: E402
+
 
 class QualityBoostTestResponse(BaseModel):
     topic_slug: str

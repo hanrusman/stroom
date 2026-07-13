@@ -1,9 +1,11 @@
 from typing import Optional
+
 import httpx
 from fastapi import HTTPException
 from sqlmodel.ext.asyncio.session import AsyncSession
+
 from core.config import settings
-from models.base import Todo, Insight, Item
+from models.base import Insight, Item, Todo
 
 
 class VikunjaService:
@@ -24,8 +26,9 @@ class VikunjaService:
         """
         Sends a lesson to Vikunja inbox and returns the task ID.
         """
-        from sqlalchemy import text as sa_text
         from datetime import datetime, timezone
+
+        from sqlalchemy import text as sa_text
 
         # Build description with all info
         description_parts = [body]

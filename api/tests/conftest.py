@@ -8,9 +8,9 @@ Run from the host:
     docker exec stroom-api pytest /app/tests
 """
 import os
-import pytest
-import httpx
 
+import httpx
+import pytest
 
 API_BASE = os.environ.get("STROOM_TEST_API_BASE", "http://localhost:8000")
 

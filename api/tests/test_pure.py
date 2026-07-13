@@ -3,12 +3,13 @@
 These don't touch the DB or HTTP — just verify input → output behaviour.
 """
 import sys
+
 import pytest
 
 # main.py lives at /app/main.py inside the container; pytest runs with cwd=/app
 sys.path.insert(0, "/app")
 
-from main import _feed_media_url, _feed_thumb_url, _feed_first_text  # noqa: E402
+from main import _feed_first_text, _feed_media_url, _feed_thumb_url  # noqa: E402
 
 pytestmark = pytest.mark.unit
 

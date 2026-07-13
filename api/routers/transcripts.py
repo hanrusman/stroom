@@ -1,11 +1,11 @@
 from typing import List, Optional
 from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
 from core.db import get_async_session
-
 
 router = APIRouter()
 

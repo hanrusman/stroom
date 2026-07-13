@@ -1,15 +1,14 @@
+import asyncio
 import os
 import re
 import time
-import asyncio
 from pathlib import Path
 
-import numpy as np
 import httpx
+import numpy as np
 
-from services.llm_service import LLMService
 from pipeline.digest_model_map import resolve_model
-
+from services.llm_service import LLMService
 
 QUALITY_LLM_MODEL = "cloud-gpt-120b"
 QUALITY_LLM_TIMEOUT_SEC = 60.0

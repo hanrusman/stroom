@@ -11,8 +11,8 @@ from core.auth import require_user
 from core.config import settings as app_settings
 from core.db import get_async_session
 from pipeline.model_catalog import (
-    MODEL_CATALOG,
     BY_ALIAS,
+    MODEL_CATALOG,
     is_embedding_alias,
     stroom_name_for_alias,
 )
