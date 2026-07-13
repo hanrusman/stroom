@@ -7,7 +7,6 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
     libpq-dev \
-    espeak-ng \
     && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user

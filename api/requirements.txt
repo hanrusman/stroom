@@ -10,8 +10,6 @@ httpx==0.27.0
 feedparser==6.0.11
 trafilatura>=2.0.0
 lxml_html_clean>=0.2.0
-kokoro-onnx>=0.3.0
-soundfile>=0.12.1
 numpy>=1.26.0
 # Interest-embeddings draaien sinds 2026-06 in de losse stroom-embed sidecar
 # (ONNX-int8 e5-small) — geen in-process sentence-transformers/torch meer hier.

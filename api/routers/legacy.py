@@ -1,5 +1,9 @@
+# TODO(verbeterplan R7): deze router lijkt volledig ongebruikt — web-UI en
+# browser-extensie roepen alleen /huygens/* en /inbox/* aan. Check de
+# access-logs op Strongbad; staat er geen verkeer op, verwijder dan deze
+# hele module (en de Save/Todo-modellen als niets anders ze gebruikt).
 from typing import List, Optional, Literal
-from fastapi import APIRouter, Depends, HTTPException, Query, BackgroundTasks, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlmodel import select
@@ -8,12 +12,11 @@ from sqlalchemy.orm import selectinload
 from core.db import get_async_session
 from models.base import (
     Item, Insight, ProcessingStatus, InsightCategory,
-    Save, Todo, Episode, EpisodeRange, EpisodeStatus,
+    Save, Todo,
 )
 from services.llm_service import LLMService
 from services.obsidian_service import ObsidianService
 from services.vikunja_service import VikunjaService
-from services.podcast_service import PodcastService
 
 router = APIRouter()
 
@@ -68,19 +71,6 @@ class TodoRead(BaseModel):
     vikunja_task_id: int
     title: str
     done: bool
-
-
-class EpisodeCreate(BaseModel):
-    range: EpisodeRange
-    title: str
-
-
-class EpisodeRead(BaseModel):
-    id: str
-    range: EpisodeRange
-    title: str
-    status: EpisodeStatus
-    audio_url: Optional[str]
 
 
 @router.get("/stream", response_model=List[StreamItem])
@@ -187,28 +177,4 @@ async def create_todo(todo_in: TodoCreate, request: Request, session=Depends(get
         vikunja_task_id=db_todo.vikunja_task_id,
         title=db_todo.title,
         done=db_todo.done,
-    )
-
-
-@router.post("/episodes", response_model=EpisodeRead)
-async def create_episode(
-    episode_in: EpisodeCreate,
-    background_tasks: BackgroundTasks,
-    request: Request,
-    session=Depends(get_async_session),
-):
-    db_episode = Episode(range=episode_in.range, title=episode_in.title)
-    session.add(db_episode)
-    await session.commit()
-    await session.refresh(db_episode)
-
-    podcast_svc = PodcastService(request.app.state.http_client)
-    background_tasks.add_task(podcast_svc.generate_episode_task, str(db_episode.id))
-
-    return EpisodeRead(
-        id=str(db_episode.id),
-        range=db_episode.range,
-        title=db_episode.title,
-        status=db_episode.status,
-        audio_url=db_episode.audio_url,
     )

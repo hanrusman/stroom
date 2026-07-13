@@ -8,6 +8,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -18,6 +19,8 @@ from fastapi import Depends, HTTPException, Request, Response
 from sqlalchemy import text as sa_text
 
 from core.db import get_async_session
+
+log = logging.getLogger("stroom.auth")
 
 SESSION_COOKIE = "stroom_session"
 SESSION_TTL_DAYS = 30
@@ -86,13 +89,20 @@ def reset_login_rate_limit(key: str) -> None:
     _LOGIN_ATTEMPTS.pop(key, None)
 
 
+def _token_digest(token: str) -> str:
+    """SHA-256-digest van het sessietoken. Alleen de digest gaat de database
+    in: wie de sessions-tabel leest (backup-lek, dump) kan er geen sessie mee
+    overnemen. Geen salt nodig — het token heeft al 256 bits entropie."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
 async def create_session(session, user_id: str) -> tuple[str, datetime]:
     token = secrets.token_urlsafe(32)
     expires_at = datetime.now(timezone.utc) + timedelta(days=SESSION_TTL_DAYS)
     await session.exec(sa_text(
         "INSERT INTO sessions (token, user_id, expires_at) "
         "VALUES (:t, CAST(:u AS uuid), :e)"
-    ).bindparams(t=token, u=user_id, e=expires_at))
+    ).bindparams(t=_token_digest(token), u=user_id, e=expires_at))
     await session.commit()
     return token, expires_at
 
@@ -100,7 +110,7 @@ async def create_session(session, user_id: str) -> tuple[str, datetime]:
 async def delete_session(session, token: str) -> None:
     await session.exec(sa_text(
         "DELETE FROM sessions WHERE token = :t"
-    ).bindparams(t=token))
+    ).bindparams(t=_token_digest(token)))
     await session.commit()
 
 
@@ -113,7 +123,7 @@ async def get_session_user(session, token: Optional[str]) -> Optional[dict]:
         FROM sessions s JOIN users u ON s.user_id = u.id
         WHERE s.token = :t
         """
-    ).bindparams(t=token))
+    ).bindparams(t=_token_digest(token)))
     row = r.first()
     if not row:
         return None
@@ -147,12 +157,16 @@ def clear_session_cookie(response: Response) -> None:
 
 async def require_user(request: Request,
                         session=Depends(get_async_session)) -> dict:
+    # AuthMiddleware heeft de sessie al gevalideerd en op request.state gezet;
+    # hergebruik die zodat er niet per request een tweede sessions-query loopt.
+    cached = getattr(request.state, "user", None)
+    if cached:
+        return cached
     token = request.cookies.get(SESSION_COOKIE)
     user = await get_session_user(session, token)
     if not user:
-        print(f"[auth] 401 path={request.url.path} cookie_present={bool(token)} "
-              f"all_cookies={list(request.cookies.keys())} ua={request.headers.get('user-agent','')[:60]}",
-              flush=True)
+        log.info("401 path=%s cookie_present=%s ua=%s", request.url.path,
+                 bool(token), request.headers.get("user-agent", "")[:60])
         raise HTTPException(status_code=401, detail="Niet ingelogd")
     return user
 
@@ -174,24 +188,10 @@ async def require_user_or_inbox_token(request: Request,
     een geldige X-Stroom-Inbox-Token header (clients zonder cookie, zoals een
     iOS Shortcut)."""
     if valid_inbox_token(request):
-        print(f"[auth] inbox-token gebruikt path={request.url.path} "
-              f"ip={request.client.host if request.client else '?'}", flush=True)
+        log.info("inbox-token gebruikt path=%s ip=%s", request.url.path,
+                 request.client.host if request.client else "?")
         return {"id": None, "email": "inbox-token"}
     return await require_user(request, session)
 
-
-def csrf_guard(request: Request) -> None:
-    """Block cross-origin state-changing requests via Origin header check."""
-    if request.method in ("GET", "HEAD", "OPTIONS"):
-        return
-    origin = request.headers.get("origin")
-    if not origin:
-        return
-    host = request.headers.get("host", "")
-    try:
-        from urllib.parse import urlparse
-        origin_host = urlparse(origin).netloc
-    except Exception:
-        raise HTTPException(status_code=403, detail="Ongeldige origin")
-    if origin_host != host:
-        raise HTTPException(status_code=403, detail="Ongeldige origin")
+# NB: de vroegere csrf_guard()-functie is verwijderd — hij werd nergens
+# aangeroepen. De echte CSRF-bescherming is de Origin-check in AuthMiddleware.
