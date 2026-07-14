@@ -1,10 +1,11 @@
 from datetime import datetime, timezone
+from enum import Enum
 from typing import List, Optional
 from uuid import UUID, uuid4
-from enum import Enum
-from sqlmodel import SQLModel, Field, Relationship
-from sqlalchemy import Column
+
 from pgvector.sqlalchemy import Vector
+from sqlalchemy import Column
+from sqlmodel import Field, Relationship, SQLModel
 
 
 class ContentKind(str, Enum):

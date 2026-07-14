@@ -1,14 +1,23 @@
-"""Unit tests for pure helper functions in main.py.
+"""Unit tests for pure helper functions in pipeline/feeds.py.
 
 These don't touch the DB or HTTP — just verify input → output behaviour.
 """
 import sys
+
 import pytest
 
 # main.py lives at /app/main.py inside the container; pytest runs with cwd=/app
 sys.path.insert(0, "/app")
 
-from main import _feed_media_url, _feed_thumb_url, _feed_first_text  # noqa: E402
+from pipeline.feeds import (  # noqa: E402
+    feed_first_text as _feed_first_text,
+)
+from pipeline.feeds import (
+    feed_media_url as _feed_media_url,
+)
+from pipeline.feeds import (
+    feed_thumb_url as _feed_thumb_url,
+)
 
 pytestmark = pytest.mark.unit
 

@@ -12,7 +12,7 @@ import pytest
 
 sys.path.insert(0, "/app")
 
-import main  # noqa: E402
+from routers import admin_cron  # noqa: E402
 
 pytestmark = pytest.mark.unit
 
@@ -20,20 +20,22 @@ pytestmark = pytest.mark.unit
 def test_nightly_skips_when_already_running():
     """Vlag staat al op True → endpoint returnt meteen de skip-dict en raakt
     de session niet aan (vandaar session=None: zou crashen bij gebruik)."""
-    main._nightly_running = True
+    admin_cron._nightly_running = True
     try:
-        result = asyncio.run(main.admin_cron_nightly(light=True, session=None))
+        result = asyncio.run(
+            admin_cron.admin_cron_nightly(light=True, digests=True, session=None))
     finally:
-        main._nightly_running = False
-    assert result == {"ok": False, "skipped": "already_running", "light": True}
+        admin_cron._nightly_running = False
+    assert result == {"ok": False, "skipped": "already_running",
+                      "light": True, "digests": True}
 
 
 def test_nightly_flag_reset_after_skip():
     """De skip-aanroep gebeurt vóór de try/finally, dus mag de vlag van een
     lopende run niet per ongeluk terugzetten naar False."""
-    main._nightly_running = True
+    admin_cron._nightly_running = True
     try:
-        asyncio.run(main.admin_cron_nightly(light=False, session=None))
-        assert main._nightly_running is True
+        asyncio.run(admin_cron.admin_cron_nightly(light=False, digests=True, session=None))
+        assert admin_cron._nightly_running is True
     finally:
-        main._nightly_running = False
+        admin_cron._nightly_running = False

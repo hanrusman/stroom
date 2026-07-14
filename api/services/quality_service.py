@@ -1,15 +1,14 @@
-import os
+import asyncio
 import re
 import time
-import asyncio
 from pathlib import Path
 
-import numpy as np
 import httpx
+import numpy as np
 
-from services.llm_service import LLMService
+from core.config import settings
 from pipeline.digest_model_map import resolve_model
-
+from services.llm_service import LLMService
 
 QUALITY_LLM_MODEL = "cloud-gpt-120b"
 QUALITY_LLM_TIMEOUT_SEC = 60.0
@@ -19,8 +18,8 @@ CENTROID_PATH = Path("/data/centroid.npz")
 # de cosines clusteren strak rond 0.89 (p10=0.866, p90=0.908), dus een band van
 # 0.83-0.92 boog de scores omhoog. Env-tunebaar omdat de waarden mee-driften als
 # de centroid verandert (nieuwe lessons). Herijk met een sample na grote shifts.
-EMBEDDING_SIM_LOW = float(os.environ.get("EMBEDDING_SIM_LOW", "0.866"))
-EMBEDDING_SIM_HIGH = float(os.environ.get("EMBEDDING_SIM_HIGH", "0.908"))
+EMBEDDING_SIM_LOW = settings.EMBEDDING_SIM_LOW
+EMBEDDING_SIM_HIGH = settings.EMBEDDING_SIM_HIGH
 
 # Contrastieve interest-score: raw = cos(q,pos) - cos(q,bg), dan tanh-gemapt naar
 # 1-10. Het background-centroid (mean van ~500 random items, "gemiddelde content")
@@ -30,19 +29,19 @@ EMBEDDING_SIM_HIGH = float(os.environ.get("EMBEDDING_SIM_HIGH", "0.908"))
 # mapping hierboven (kill-switch). MU/SIGMA geijkt op de raw-verdeling van een
 # sample (2026-06: median=-0.029, std=0.009); env-tunebaar.
 BG_CENTROID_PATH = Path("/data/bg_centroid.npz")
-INTEREST_TANH_MU = float(os.environ.get("INTEREST_TANH_MU", "-0.029"))
-INTEREST_TANH_SIGMA = float(os.environ.get("INTEREST_TANH_SIGMA", "0.009"))
+INTEREST_TANH_MU = settings.INTEREST_TANH_MU
+INTEREST_TANH_SIGMA = settings.INTEREST_TANH_SIGMA
 
 # Interest-embeddings draaien sinds 2026-06 in de losse stroom-embed sidecar
 # (ONNX-int8 e5-small) i.p.v. in-process sentence-transformers — dat at ~1 GB
 # resident en zette de mem-gate dicht. score_interest praat nu over HTTP met
 # de sidecar en faalt fail-open naar None bij elke hapering. Een circuit-breaker
 # voorkomt dat een zieke/trage sidecar de scoring-pijplijn laat hangen.
-EMBED_SERVICE_URL = os.environ.get("EMBED_SERVICE_URL", "").rstrip("/")
-EMBED_TIMEOUT_SEC = float(os.environ.get("EMBED_TIMEOUT_SEC", "5.0"))
-EMBED_BREAKER_THRESHOLD = int(os.environ.get("EMBED_BREAKER_THRESHOLD", "5"))
-EMBED_BREAKER_COOLDOWN_SEC = float(os.environ.get("EMBED_BREAKER_COOLDOWN_SEC", "60"))
-EMBED_MAX_CONCURRENCY = int(os.environ.get("EMBED_MAX_CONCURRENCY", "4"))
+EMBED_SERVICE_URL = settings.EMBED_SERVICE_URL.rstrip("/")
+EMBED_TIMEOUT_SEC = settings.EMBED_TIMEOUT_SEC
+EMBED_BREAKER_THRESHOLD = settings.EMBED_BREAKER_THRESHOLD
+EMBED_BREAKER_COOLDOWN_SEC = settings.EMBED_BREAKER_COOLDOWN_SEC
+EMBED_MAX_CONCURRENCY = settings.EMBED_MAX_CONCURRENCY
 
 
 class QualityService:

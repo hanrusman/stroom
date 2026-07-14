@@ -1,9 +1,11 @@
 import json
+from typing import Dict, List
+
 import httpx
 from fastapi import HTTPException
-from typing import List, Dict, Any
-from sqlmodel import select, delete
+from sqlmodel import delete, select
 from sqlmodel.ext.asyncio.session import AsyncSession
+
 from core.config import settings
 
 
@@ -119,7 +121,7 @@ class LLMService:
 
 
     async def regenerate_summary(self, session: AsyncSession, item_id: str):
-        from models.base import Item, Insight
+        from models.base import Insight, Item
 
         item = await session.get(Item, item_id)
         if not item:
@@ -169,7 +171,7 @@ class LLMService:
     async def explore_insight(
         self, session: AsyncSession, insight_id: str, user_query: str
     ):
-        from models.base import Insight, Item        
+        from models.base import Insight, Item
         insight = await session.get(Insight, insight_id)
         if not insight:
             raise HTTPException(status_code=404, detail="Insight not found")
@@ -186,7 +188,7 @@ class LLMService:
         similar_insights_stmt = (
             select(Insight)
             .where(Insight.id != insight.id)
-            .where(Insight.embedding != None)
+            .where(Insight.embedding.is_not(None))
             .order_by(Insight.embedding.cosine_distance(query_embedding))
             .limit(3)
         )

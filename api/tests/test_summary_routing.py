@@ -6,20 +6,29 @@ gestructureerde prompt, en korte content op `stroom-bulk` met de bestaande
 12k-trim laat.
 """
 import sys
+
 import pytest
 
 sys.path.insert(0, "/app")
 
-from main import (  # noqa: E402
-    _pick_summary_route,
-    _SHORT_SUMMARY_SYSTEM,
-    _LONG_SUMMARY_SYSTEM,
-    _ARTICLE_SUMMARY_SYSTEM,
-    LONG_TRANSCRIPT_DURATION_SECONDS,
-    LONG_TRANSCRIPT_CHAR_FALLBACK,
-    LONG_TRANSCRIPT_MAX_CHARS,
-    LONG_TRANSCRIPT_MODEL,
+from core.config import settings  # noqa: E402
+from workers.summarize import (  # noqa: E402
+    ARTICLE_SUMMARY_SYSTEM as _ARTICLE_SUMMARY_SYSTEM,
 )
+from workers.summarize import (
+    LONG_SUMMARY_SYSTEM as _LONG_SUMMARY_SYSTEM,
+)
+from workers.summarize import (
+    SHORT_SUMMARY_SYSTEM as _SHORT_SUMMARY_SYSTEM,
+)
+from workers.summarize import (
+    pick_summary_route as _pick_summary_route,
+)
+
+LONG_TRANSCRIPT_CHAR_FALLBACK = settings.LONG_TRANSCRIPT_CHAR_FALLBACK
+LONG_TRANSCRIPT_DURATION_SECONDS = settings.LONG_TRANSCRIPT_DURATION_SECONDS
+LONG_TRANSCRIPT_MAX_CHARS = settings.LONG_TRANSCRIPT_MAX_CHARS
+LONG_TRANSCRIPT_MODEL = settings.LONG_TRANSCRIPT_MODEL
 
 pytestmark = pytest.mark.unit
 

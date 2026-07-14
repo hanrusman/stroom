@@ -10,13 +10,13 @@ model — geen fp32/int8-drift in de cosine-vergelijking.
 
 Output: /data/centroid.npz (atomisch via tmp + os.replace).
 """
+import asyncio
 import os
 import sys
-import asyncio
 from pathlib import Path
 
-import numpy as np
 import httpx
+import numpy as np
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 

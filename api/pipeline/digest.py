@@ -7,7 +7,6 @@ from typing import Optional
 
 from sqlalchemy import text as sa_text
 
-
 DIGEST_MAX_ITEMS = 40
 DIGEST_PER_ITEM_CHARS = 600
 WEEKLY_SOURCE_DAYS = 7  # weekly componeert uit de laatste N dag-digests

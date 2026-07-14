@@ -12,13 +12,13 @@ Run binnen stroom-api:
 Bevroren artefact: draai alleen opnieuw bij grote shifts in de corpus-mix.
 Output: /data/bg_centroid.npz (atomisch via tmp + os.replace).
 """
+import asyncio
 import os
 import sys
-import asyncio
 from pathlib import Path
 
-import numpy as np
 import httpx
+import numpy as np
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 
