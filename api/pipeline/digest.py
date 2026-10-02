@@ -18,10 +18,8 @@ DIGEST_LLM_TIMEOUT = 1200.0  # 20 min per digest — grote weekly + zware topic 
 # met 12 tegelijk overspoelen. Eén tegelijk = elke krijgt z'n eigen tijd, geen race.
 _DIGEST_SEM = asyncio.Semaphore(1)
 
-# Mapping van Stroom-namen naar LiteLLM-aliases. Single source of truth in
-# pipeline.digest_model_map; we exposeren 'm hier nog onder de oude naam voor
-# bestaande callers (`DIGEST_MODEL_MAP[model]`).
-from pipeline.digest_model_map import DIGEST_MODEL_TO_LITELLM as DIGEST_MODEL_MAP  # noqa: E402
+# Stroom-naam → LiteLLM-alias: altijd via resolve_model (pipeline.digest_model_map).
+from pipeline.digest_model_map import resolve_model  # noqa: E402
 
 
 def strip_html(s: Optional[str]) -> str:
@@ -122,8 +120,10 @@ async def _run_digest_generation_inner(topic_id: str, topic_name: str, slug: str
                                        model: str, window_hours: int,
                                        async_session_maker, llm_service):
     """Inner worker: dit draait binnen de semaphore, dus één tegelijk."""
-    llm_alias = DIGEST_MODEL_MAP[model]
     try:
+        # Binnen de try: een onbruikbare naam belandt als error op de digest i.p.v.
+        # 'm eeuwig op is_generating te laten staan.
+        llm_alias = resolve_model(model)
         async with async_session_maker() as bg:
             # Zet generation_started_at NU pas — we zitten binnen de semaphore,
             # dus dit is het moment dat de generatie écht begint.

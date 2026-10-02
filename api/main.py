@@ -376,6 +376,16 @@ app = FastAPI(
     openapi_url="/openapi.json" if _DOCS_ENABLED else None,
 )
 
+
+from pipeline.digest_model_map import RetiredModelError, resolve_model  # noqa: E402
+
+
+@app.exception_handler(RetiredModelError)
+async def _retired_model_handler(request: Request, exc: RetiredModelError):
+    """Uitgefaseerde modelnaam in een verzoek → 400 met de opvolger erbij."""
+    from fastapi.responses import JSONResponse
+    return JSONResponse({"detail": str(exc)}, status_code=400)
+
 _DEFAULT_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:8101",
@@ -946,7 +956,7 @@ DIGEST_WINDOWS: dict[str, int] = {"daily": 24, "weekly": 168}
 # 28-uurs backfill-cascade. Weekly componeert uit dag-digests, dus goedkoop.
 WEEKLY_MIN_AGE_HOURS: float = 156.0
 from pipeline.digest import (
-    DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS, DIGEST_MODEL_MAP,
+    DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS,
     DIGEST_GENERATION_STALE_MIN,
     strip_html as _strip_html,
     run_digest_generation as _pipeline_run_digest_generation,
@@ -1038,6 +1048,7 @@ async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
                                   model: DigestModel = Query("opus"),
                                   window: DigestWindow = Query("daily"),
                                   session=Depends(get_async_session)):
+    resolve_model(model)  # uitgefaseerd → 400 vóór er iets in de wachtrij gaat
     topic = (await session.exec(select(Topic).where(Topic.slug == slug))).first()
     if not topic:
         raise HTTPException(status_code=404, detail="Topic not found")
@@ -2856,6 +2867,7 @@ async def _cron_kick_topic_digests(session, *, model: "DigestModel" = "opus",
 
     min_age_hours: sla een topic over als z'n digest recenter dan dit is. Zo
     draait de weekdigest ~wekelijks ondanks de dagelijkse cron (zelfherstellend)."""
+    resolve_model(model)  # uitgefaseerd → fout vóór er digests in de wachtrij gaan
     window_hours = DIGEST_WINDOWS[window]
     rows = (await session.exec(sa_text(
         "SELECT id::text, slug, name FROM topics ORDER BY sort_order, name"

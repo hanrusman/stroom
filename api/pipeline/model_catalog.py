@@ -36,6 +36,16 @@ MODEL_CATALOG = [
     CatalogEntry("stroom-embed", "stroom-embed", "embed"),
 ]
 
+# Uitgefaseerde namen → opvolger. De alias bestaat in LiteLLM nog (scripts breken
+# niet), maar wijst naar een ander model dan de naam belooft. Stroom weigert ze
+# daarom in een verzoek en zet een opgeslagen keuze om naar de opvolger (zie
+# digest_model_map). Bewust hier en niet in de LiteLLM-config: deze regel moet ook
+# gelden als LiteLLM even niet antwoordt.
+RETIRED: Dict[str, str] = {
+    # qwen3.5:397b geretireerd 2026-09-25; de alias wijst nu naar Kimi K2.7 Code.
+    "cloud-qwen-coder": "cloud-kimi-code",
+}
+
 BY_NAME: Dict[str, CatalogEntry] = {e.name: e for e in MODEL_CATALOG}
 BY_ALIAS: Dict[str, CatalogEntry] = {e.litellm: e for e in MODEL_CATALOG}
 

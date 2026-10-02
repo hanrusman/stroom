@@ -47,8 +47,8 @@ DigestModel = str
 DigestWindow = Literal["daily", "weekly"]
 LessonsDigestFilter = Literal["useful", "not-useful", "all"]
 
-# Single source of truth voor model-aliases: pipeline.digest_model_map.
-from pipeline.digest_model_map import DIGEST_MODEL_TO_LITELLM as _MODEL_ALIAS  # noqa: E402
+# Stroom-naam → LiteLLM-alias: altijd via resolve_model (pipeline.digest_model_map).
+from pipeline.digest_model_map import resolve_model  # noqa: E402
 _WINDOW_HOURS: dict[str, int] = {"daily": 24, "weekly": 168}
 _FILTER_RATING: dict[str, int] = {"useful": 1, "not-useful": -1, "all": 0}
 _DIGEST_GENERATION_STALE_MIN = 10
@@ -231,6 +231,7 @@ async def distill_more_lessons(item_id: str,
                                session=Depends(get_async_session),
                                user=Depends(require_user)):
     """Genereer extra kernlessen uit transcript (of summary als geen transcript). LLM mag 0 teruggeven."""
+    model_alias = resolve_model(model)
     item_row = (await session.exec(sa_text(
         "SELECT title, transcript, summary FROM items WHERE id = CAST(:i AS uuid)"
     ).bindparams(i=item_id))).first()
@@ -263,7 +264,7 @@ async def distill_more_lessons(item_id: str,
     )
 
     raw = await _llm(request).call_llm(
-        _MODEL_ALIAS[model],
+        model_alias,
         [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
         temperature=0.4, response_format="json_object", timeout=240.0,
     )
@@ -307,6 +308,7 @@ async def expand_lesson(lesson_id: str,
                         force: bool = Query(False, description="Hergenereer ook als er al een expansion is"),
                         session=Depends(get_async_session),
                         user=Depends(require_user)):
+    model_alias = resolve_model(model)
     row = (await session.exec(sa_text(
         "SELECT l.title, l.body, l.expansion, i.title, i.transcript, i.summary "
         "FROM lessons l JOIN items i ON i.id = l.item_id "
@@ -337,7 +339,7 @@ async def expand_lesson(lesson_id: str,
     )
 
     expansion = await _llm(request).call_llm(
-        _MODEL_ALIAS[model],
+        model_alias,
         [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
         temperature=0.5, timeout=240.0,
     )
@@ -345,7 +347,7 @@ async def expand_lesson(lesson_id: str,
     await session.exec(sa_text(
         "UPDATE lessons SET expansion=:e, expansion_model=:m, expansion_generated_at=now() "
         "WHERE id = CAST(:i AS uuid)"
-    ).bindparams(e=expansion.strip(), m=_MODEL_ALIAS[model], i=lesson_id))
+    ).bindparams(e=expansion.strip(), m=model_alias, i=lesson_id))
     await session.commit()
 
     result = await session.exec(sa_text(
@@ -495,7 +497,7 @@ async def regenerate_lessons_digest(background_tasks: BackgroundTasks,
                                     user=Depends(require_user)):
     w = _WINDOW_HOURS[window]
     r = _filter_to_rating(filter)
-    model_alias = _MODEL_ALIAS[model]
+    model_alias = resolve_model(model)
 
     existing = (await session.exec(sa_text(
         "SELECT is_generating, generation_started_at FROM lessons_digests "

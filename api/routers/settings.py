@@ -10,6 +10,7 @@ from sqlalchemy import text as sa_text
 from core.auth import require_user
 from core.config import settings as app_settings
 from core.db import get_async_session
+from pipeline.digest_model_map import replace_retired, resolve_model
 from pipeline.model_catalog import (
     BY_ALIAS,
     is_embedding_alias,
@@ -54,6 +55,10 @@ async def _load(session) -> ModelDefaults:
     try:
         # Tolerate missing keys (older rows) by merging onto DEFAULTS.
         merged = {**DEFAULTS.model_dump(), **(row[0] or {})}
+        # Opgeslagen keuze op een uitgefaseerde naam → opvolger. Cron (digests) en
+        # scoring lezen deze defaults zonder dat iemand een modelkeuze ziet.
+        merged = {k: replace_retired(v) if isinstance(v, str) else v
+                  for k, v in merged.items()}
         return ModelDefaults(**merged)
     except Exception:
         return DEFAULTS
@@ -66,6 +71,8 @@ async def get_settings(session=Depends(get_async_session), user=Depends(require_
 
 @router.put("/admin/settings", response_model=Settings)
 async def put_settings(body: Settings, session=Depends(get_async_session), user=Depends(require_user)):
+    for name in body.model_defaults.model_dump().values():
+        resolve_model(name)  # uitgefaseerd → 400, niet opslaan
     await session.execute(sa_text("""
         INSERT INTO app_settings (key, value, updated_at)
         VALUES ('model_defaults', CAST(:v AS jsonb), now())

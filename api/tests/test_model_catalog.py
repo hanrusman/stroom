@@ -70,3 +70,25 @@ class TestNaamvertaling:
         assert is_embedding_alias("stroom-embed")
         assert is_embedding_alias("iets-embed-v2")
         assert not is_embedding_alias("cloud-kimi")
+
+
+class TestUitgefaseerd:
+    """cloud-qwen-coder wijst in LiteLLM naar Kimi: nooit stil gebruiken."""
+
+    def test_resolve_weigert_met_opvolger_in_de_melding(self):
+        from pipeline.digest_model_map import RetiredModelError, resolve_model
+        with pytest.raises(RetiredModelError, match="cloud-kimi-code"):
+            resolve_model("cloud-qwen-coder")
+
+    def test_resolve_laat_gewone_namen_door(self):
+        from pipeline.digest_model_map import resolve_model
+        assert resolve_model("qwen") == "stroom-bulk"
+        assert resolve_model("opus") == "stroom-deep"
+        # Cloud-namen staan niet in de catalogus maar moeten gewoon werken.
+        assert resolve_model("cloud-kimi") == "cloud-kimi"
+        assert resolve_model("cloud-mistral") == "cloud-mistral"
+
+    def test_opgeslagen_keuze_gaat_naar_opvolger(self):
+        from pipeline.digest_model_map import replace_retired
+        assert replace_retired("cloud-qwen-coder") == "cloud-kimi-code"
+        assert replace_retired("opus") == "opus"
