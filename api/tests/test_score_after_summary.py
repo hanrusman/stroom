@@ -2,7 +2,8 @@
 
 Die helper scoort items waarvan de summary buiten de summarize-worker om is
 geschreven (transcribe-callback met summary, handmatige /summarize). Scorer
-en DB-session zijn gemockt; geen netwerk, geen database.
+en DB-session zijn gemockt; geen netwerk, geen database. De guards zelf
+(handmatige scores, verouderde summary) staan in test_score_guards_db.py.
 """
 import sys
 import pytest
@@ -49,20 +50,6 @@ def _patch_scorer(monkeypatch, value):
 
     monkeypatch.setattr(main, "_score_with_quality_scorer", fake)
     return calls
-
-
-async def test_writes_auto_score_without_overwriting_manual(monkeypatch, db_log):
-    calls = _patch_scorer(monkeypatch, 7)
-    await main._score_item_after_summary("abc", "Een samenvatting", "Titel")
-
-    assert calls == [("Een samenvatting", "Titel")]
-    stmt, commit = db_log
-    sql = str(stmt)
-    assert "quality_score_reason='auto'" in sql
-    # Handmatige correcties (personal_interest, not_interesting, ...) blijven staan.
-    assert "(quality_score_reason IS NULL OR quality_score_reason = 'auto')" in sql
-    assert stmt.compile().params == {"q": 7, "i": "abc"}
-    assert commit == "commit"
 
 
 async def test_failed_score_leaves_item_untouched(monkeypatch, db_log):

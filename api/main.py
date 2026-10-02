@@ -311,9 +311,15 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
     return out
 
 
-# Alleen auto-scores mogen overschreven worden; een handmatige correctie
-# (personal_interest, not_interesting, ...) is ground truth.
-_AUTO_SCORE_GUARD = "(quality_score_reason IS NULL OR quality_score_reason = 'auto')"
+def _auto_score_guard(alias: str = "") -> str:
+    """SQL-conditie: de huidige score is van het systeem en mag overschreven
+    worden. Dat is reason 'auto' (worker/backfill), of nooit gescoord: reason
+    én updated_at NULL. De PATCH /quality-score zet altijd updated_at, óók als
+    de caller geen reason meegeeft — zo'n handmatige score (of handmatige
+    neutrale NULL) is ground truth en blijft staan."""
+    p = f"{alias}." if alias else ""
+    return (f"({p}quality_score_reason = 'auto' OR "
+            f"({p}quality_score_reason IS NULL AND {p}quality_score_updated_at IS NULL))")
 
 
 async def _score_item_after_summary(item_id: str, summary: str, title: Optional[str]) -> None:
@@ -323,7 +329,9 @@ async def _score_item_after_summary(item_id: str, summary: str, title: Optional[
     door de oude DEFAULT 5 zag dat eruit als een neutrale score.
 
     Draait als BackgroundTask zodat de caller niet op de LLM-call wacht.
-    Fail-open: bij None blijft quality_score NULL en pikt
+    De write vereist dat de summary nog dezelfde is: is er tijdens de
+    LLM-call een nieuwere summary opgeslagen, dan hoort deze score daar niet
+    bij. Fail-open: bij None blijft quality_score NULL en pikt
     /admin/quality-backfill (only_null) het later op."""
     if not summary:
         return
@@ -336,8 +344,9 @@ async def _score_item_after_summary(item_id: str, summary: str, title: Optional[
             await bg.exec(sa_text(
                 "UPDATE items SET quality_score=:q, quality_score_reason='auto', "
                 "quality_score_updated_at=now() "
-                f"WHERE id = CAST(:i AS uuid) AND {_AUTO_SCORE_GUARD}"
-            ).bindparams(q=score, i=item_id))
+                "WHERE id = CAST(:i AS uuid) AND summary = :s "
+                f"AND {_auto_score_guard()}"
+            ).bindparams(q=score, i=item_id, s=summary))
             await bg.commit()
     except Exception as e:
         print(f"[score] opslaan faalde voor {item_id}: {e}", flush=True)
@@ -3441,24 +3450,35 @@ class QualityBackfillResponse(BaseModel):
     error: Optional[str] = None
 
 
-async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> None:
-    """Background worker: score items en sla op. Eigen session per run."""
+async def _run_quality_backfill(items_for_scoring: list[dict], http_client,
+                                only_null: bool = False) -> None:
+    """Background worker: score items en sla op. Eigen session per run.
+
+    Tussen selectie en write zit de sequentiële scoring van de hele batch.
+    Bij only_null wordt de selectievoorwaarde daarom bij de UPDATE atomair
+    herhaald: een score die intussen handmatig is gezet (of al via een ander
+    pad geschreven) blijft staan."""
     from core.db import async_session_maker
     scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
     if not scores_by_id:
         print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
         return
+    guard = f"AND quality_score IS NULL AND {_auto_score_guard()}" if only_null else ""
+    updated = 0
     async with async_session_maker() as session:
         for item_id, score in scores_by_id.items():
-            await session.exec(sa_text("""
+            res = await session.exec(sa_text(f"""
                 UPDATE items
                 SET quality_score = :score,
                     quality_score_reason = 'auto',
                     quality_score_updated_at = NOW()
                 WHERE id = CAST(:id AS uuid)
+                {guard}
             """).bindparams(score=score, id=item_id))
+            updated += res.rowcount
         await session.commit()
-    print(f"[quality-backfill] klaar: {len(scores_by_id)}/{len(items_for_scoring)} gescored", flush=True)
+    print(f"[quality-backfill] klaar: {updated}/{len(items_for_scoring)} gescored "
+          f"({len(scores_by_id) - updated} intussen al gescoord, overgeslagen)", flush=True)
 
 
 @app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
@@ -3474,8 +3494,7 @@ async def admin_quality_backfill(
         raise HTTPException(status_code=400, detail="limit moet 1-10000 zijn")
     # only_null slaat handmatig op NULL ("neutraal") gezette items over.
     where_clause = (
-        "i.quality_score IS NULL "
-        "AND (i.quality_score_reason IS NULL OR i.quality_score_reason = 'auto')"
+        f"i.quality_score IS NULL AND {_auto_score_guard('i')}"
     ) if body.only_null else "TRUE"
     r = await session.exec(sa_text(f"""
         SELECT i.id::text, i.title, i.summary, i.transcript, i.description
@@ -3501,7 +3520,8 @@ async def admin_quality_backfill(
     if not items_for_scoring:
         return QualityBackfillResponse(processed=len(items), updated=0)
 
-    background_tasks.add_task(_run_quality_backfill, items_for_scoring, request.app.state.http_client)
+    background_tasks.add_task(_run_quality_backfill, items_for_scoring,
+                              request.app.state.http_client, body.only_null)
     print(f"[quality-backfill] gestart voor {len(items_for_scoring)} items", flush=True)
 
     return QualityBackfillResponse(
