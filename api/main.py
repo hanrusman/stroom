@@ -13,6 +13,8 @@ from models.base import (
 )
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
+from services import decision_scorer
+from services.score_guards import auto_score_guard as _auto_score_guard
 import asyncio
 import hmac
 import httpx
@@ -36,6 +38,7 @@ from routers import admin_topics as admin_topics_router
 from routers import ask as ask_router
 from routers import inbox as inbox_router
 from routers import transcripts as transcripts_router
+from routers import decision as decision_router
 
 
 # --- Queue tunables ---
@@ -258,7 +261,12 @@ async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, 
     default cloud-kimi), interest via lokaal embedding-model + centroid.
     `http_client` blijft in de signature voor backwards-compat van de
     call-sites; we gebruiken hem niet meer. Fail-open: returnt None bij faal.
+
+    In decision-modus scoort niemand inline: dan None, en de batch-loop van
+    services/decision_scorer.py pakt het item op (quality_score blijft NULL).
     """
+    if decision_scorer.ENABLED:
+        return None
     try:
         qs = app.state.quality_service
         llm = LLMService(app.state.llm_client)
@@ -310,15 +318,17 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
     return out
 
 
-def _auto_score_guard(alias: str = "") -> str:
-    """SQL-conditie: de huidige score is van het systeem en mag overschreven
-    worden. Dat is reason 'auto' (worker/backfill), of nooit gescoord: reason
-    én updated_at NULL. De PATCH /quality-score zet altijd updated_at, óók als
-    de caller geen reason meegeeft — zo'n handmatige score (of handmatige
-    neutrale NULL) is ground truth en blijft staan."""
-    p = f"{alias}." if alias else ""
-    return (f"({p}quality_score_reason = 'auto' OR "
-            f"({p}quality_score_reason IS NULL AND {p}quality_score_updated_at IS NULL))")
+async def _decision_score_loop(async_session_maker) -> None:
+    """Batch-scoring via het decision model (SCORER_MODE=decision). Faalt een
+    ronde, dan blijven de items NULL en pakt de volgende ronde ze op."""
+    await asyncio.sleep(60)  # eerst de API en workers laten opstarten
+    while True:
+        try:
+            await decision_scorer.run_batch(async_session_maker,
+                                            LLMService(app.state.llm_client))
+        except Exception as e:
+            print(f"[decision] batch faalde onverwacht: {e!r}", flush=True)
+        await asyncio.sleep(decision_scorer.INTERVAL_SEC)
 
 
 async def _score_item_after_summary(item_id: str, summary: str, title: Optional[str]) -> None:
@@ -390,6 +400,11 @@ async def lifespan(app: FastAPI):
         worker_tasks.append(asyncio.create_task(_summarize_worker(i, async_session_maker)))
     worker_tasks.append(asyncio.create_task(_transcribe_worker(async_session_maker)))
     worker_tasks.append(asyncio.create_task(_queue_depth_logger(async_session_maker)))
+    if decision_scorer.ENABLED:
+        worker_tasks.append(asyncio.create_task(_decision_score_loop(async_session_maker)))
+        print(f"[lifespan] decision-scorer aan: {decision_scorer.DECISION_MODEL} via "
+              f"{decision_scorer.DECISION_URL}, elke {decision_scorer.INTERVAL_SEC:.0f}s",
+              flush=True)
 
     yield
 
@@ -461,6 +476,10 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/last-result",
     "/admin/sources/backfill-stale",
     "/admin/quality-backfill",
+    "/admin/decision-score/run",
+    "/admin/decision-score/status",
+    "/admin/decision-profile",
+    "/admin/decision-profile/rebuild",
 )
 # Paths that ALWAYS go through internal-token auth (no session-fallback).
 # Used by sibling services that read transcripts / lessons machine-to-machine.
@@ -544,6 +563,7 @@ app.include_router(admin_topics_router.router)
 app.include_router(ask_router.router)
 app.include_router(inbox_router.router)
 app.include_router(transcripts_router.router)
+app.include_router(decision_router.router)
 
 
 # --- Auth routes ---
@@ -670,6 +690,8 @@ class HuygensItemDetail(BaseModel):
     queue_position: Optional[int] = None
     scheduled_for: Optional[str] = None
     quality_score: Optional[int] = None
+    # Uitleg van de decision-scorer (deelscores, kansverdeling); zie migratie 023.
+    quality_score_detail: Optional[dict] = None
 
 
 class StatusUpdate(BaseModel):
@@ -738,7 +760,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
                    COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), '{}') AS topic_names,
                    i.status::text, i.processing_status::text, i.scheduled_for,
                    i.transcript_segments,
-                   i.quality_score
+                   i.quality_score, i.quality_score_detail
             FROM items i
             JOIN sources s ON s.id = i.source_id
             LEFT JOIN item_topics it ON it.item_id = i.id
@@ -778,6 +800,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
         queue_position=queue_pos,
         scheduled_for=str(row[18]) if row[18] else None,
         quality_score=row[20],
+        quality_score_detail=row[21],
     )
 
 
@@ -3493,6 +3516,11 @@ async def admin_quality_backfill(
     scoring en DB-updates lopen als background task."""
     if not (1 <= body.limit <= 10000):
         raise HTTPException(status_code=400, detail="limit moet 1-10000 zijn")
+    if decision_scorer.ENABLED:
+        return QualityBackfillResponse(
+            processed=0, updated=0,
+            error="SCORER_MODE=decision: scoring loopt via de decision-batch "
+                  "(POST /admin/decision-score/run), niet via deze backfill")
     # only_null slaat handmatig op NULL ("neutraal") gezette items over.
     where_clause = (
         f"i.quality_score IS NULL AND {_auto_score_guard('i')}"

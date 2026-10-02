@@ -147,6 +147,27 @@ export interface ItemDetail {
   queue_position: number | null;
   scheduled_for: string | null;
   quality_score: number | null;
+  quality_score_detail?: QualityScoreDetail | null;
+}
+
+/** Uitleg van de decision-scorer (nimble). Geen tekstuele reden — wel deelscores
+ *  en de kansverdeling per niveau. `error` = item kon niet gescoord worden. */
+export interface ScoreRubric {
+  score10: number;
+  fraction: number;
+  probabilities: Record<string, number>;
+  confidence: number | null;
+}
+
+export interface QualityScoreDetail {
+  quality?: ScoreRubric;
+  interest?: ScoreRubric | null;
+  clickbait?: number | null;
+  interest_weight?: number;
+  model?: string;
+  profile_version?: string | null;
+  scored_at?: string;
+  error?: string;
 }
 
 export async function fetchItem(id: string): Promise<ItemDetail> {
