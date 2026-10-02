@@ -172,10 +172,17 @@ async def score_item(client: httpx.AsyncClient, title: Optional[str], summary: s
         except httpx.HTTPError as e:
             raise DecisionUnavailable(f"{type(e).__name__}: {e}") from e
         if r.status_code == 200:
-            score, detail = parse_answers(r.json()["answers"])
+            try:
+                score, detail = parse_answers(r.json()["answers"])
+            except (KeyError, TypeError, ValueError) as e:
+                # Onverwacht antwoord: dit item markeren, niet elke ronde de
+                # batch laten vastlopen op hetzelfde item.
+                raise DecisionItemError(f"onleesbaar antwoord: {e!r}: {r.text[:200]}") from e
             detail["latency_sec"] = round(time.monotonic() - t0, 2)
             return score, detail
-        if r.status_code == 404 and "not found" in r.text and not pulled:
+        if r.status_code == 404 and "not found" in r.text:
+            if pulled:
+                raise DecisionUnavailable(f"model {DECISION_MODEL} ook na pull niet gevonden")
             await _pull_model(client)
             pulled = True
             continue

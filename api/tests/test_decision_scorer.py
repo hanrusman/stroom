@@ -107,6 +107,19 @@ async def test_missing_model_is_pulled_then_retried():
     assert calls == ["/v1/systemone", "/api/pull", "/v1/systemone"]
 
 
+async def test_model_still_missing_after_pull_is_unavailable():
+    missing = '{"error":"model \\"nimble\\" not found, try pulling it first"}'
+    client, _ = _client([(404, missing), (200, {"status": "success"}), (404, missing)])
+    with pytest.raises(ds.DecisionUnavailable):
+        await ds.score_item(client, "Titel", "Samenvatting", None)
+
+
+async def test_malformed_answer_is_item_error():
+    client, _ = _client([(200, {"answers": {"clickbait": {"noul": 0.1}}})])
+    with pytest.raises(ds.DecisionItemError):
+        await ds.score_item(client, "Titel", "Samenvatting", None)
+
+
 async def test_runner_crash_is_retried_once():
     client, calls = _client([(500, '{"error":"EOF"}'), (200, {"answers": _answers()})])
     score, _ = await ds.score_item(client, "Titel", "Samenvatting", None)
