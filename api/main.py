@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel
 from core.db import get_async_session
-from core.config import settings
 from core.url_guard import UnsafeURLError, assert_public_url, safe_get as _safe_get
 from models.base import (
-    Item, ItemStatus, ProcessingStatus,
-    Topic, ItemFormat, Source,
+    ItemStatus, ProcessingStatus,
+    Topic, ItemFormat,
 )
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
@@ -24,7 +23,7 @@ from datetime import datetime
 from uuid import UUID
 from starlette.middleware.base import BaseHTTPMiddleware
 from core.auth import (
-    SESSION_COOKIE, hash_password, verify_password, verify_password_or_dummy,
+    SESSION_COOKIE, verify_password_or_dummy,
     check_login_rate_limit, reset_login_rate_limit,
     create_session, delete_session, get_session_user,
     set_session_cookie, clear_session_cookie, require_user,
@@ -956,9 +955,7 @@ DIGEST_WINDOWS: dict[str, int] = {"daily": 24, "weekly": 168}
 # 28-uurs backfill-cascade. Weekly componeert uit dag-digests, dus goedkoop.
 WEEKLY_MIN_AGE_HOURS: float = 156.0
 from pipeline.digest import (
-    DIGEST_MAX_ITEMS, DIGEST_PER_ITEM_CHARS,
     DIGEST_GENERATION_STALE_MIN,
-    strip_html as _strip_html,
     run_digest_generation as _pipeline_run_digest_generation,
 )
 
@@ -3408,7 +3405,7 @@ async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> N
     from core.db import async_session_maker
     scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
     if not scores_by_id:
-        print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
+        print("[quality-backfill] scorer gaf geen resultaten terug", flush=True)
         return
     async with async_session_maker() as session:
         for item_id, score in scores_by_id.items():

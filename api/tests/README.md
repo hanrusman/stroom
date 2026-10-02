@@ -29,6 +29,17 @@ docker exec -w /app stroom-api pytest tests -v -m unit
 docker exec -w /app stroom-api pytest tests -v -m integration
 ```
 
+## CI
+
+`.github/workflows/ci.yml` draait bij elke PR en push naar `main`:
+`ruff check` (alleen F-regels, zie `api/ruff.toml`) + `pytest -m "unit or db"`
+met dummy-env en een wegwerp-Postgres-service, en voor `web/` `tsc --noEmit`
++ `vite build`. Integratietests draaien níét in CI — die hebben de live
+container nodig.
+
+`db`-tests skippen zonder `STROOM_TEST_DB_URL` en werken alleen in schema
+`stroom_test`.
+
 ## Test-types
 
 ### `test_pure.py` — unit

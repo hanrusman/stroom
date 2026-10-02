@@ -199,7 +199,6 @@ def _detect_format_from_url(url: str) -> InboxFormat:
     """Detect format based on URL patterns."""
     parsed = urlparse(url)
     hostname = parsed.hostname or ""
-    path = parsed.path or ""
 
     # YouTube
     if "youtube.com" in hostname or "youtu.be" in hostname:

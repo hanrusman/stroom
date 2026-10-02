@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from core.db import get_async_session
 from models.base import (
     Item, Insight, ProcessingStatus, InsightCategory,
-    Save, Todo, Episode, EpisodeRange, EpisodeStatus,
+    Save, Episode, EpisodeRange, EpisodeStatus,
 )
 from services.llm_service import LLMService
 from services.obsidian_service import ObsidianService
