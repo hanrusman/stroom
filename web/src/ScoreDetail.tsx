@@ -4,10 +4,10 @@ import type { QualityScoreDetail, ScoreRubric } from './api';
 // De rubric-niveaus zoals de decision-scorer ze aan nimble geeft (Engels), met
 // een Nederlands label voor de UI. Onbekende labels tonen we ongewijzigd.
 const LABELS: Record<string, string> = {
-  'Spam, clickbait or advertisement': 'Spam / clickbait / reclame',
+  'Spam, clickbait or advertisement': 'Spam / reclame',
   'Shallow, low signal': 'Oppervlakkig',
-  'Decent but unremarkable': 'Degelijk, niet bijzonder',
-  'Well-argued with specific insights': 'Goed onderbouwd, concrete inzichten',
+  'Decent but unremarkable': 'Degelijk',
+  'Well-argued with specific insights': 'Goed onderbouwd',
   'Exceptional depth or rare expertise': 'Uitzonderlijk diep',
   'Not interesting': 'Niet interessant',
   'Slightly interesting': 'Een beetje',
@@ -26,7 +26,7 @@ const Rubric = ({ title, rubric, note }: { title: string; rubric: ScoreRubric; n
     <div className="space-y-0.5">
       {Object.entries(rubric.probabilities).map(([label, p]) => (
         <div key={label} className="flex items-center gap-2 text-[11px] text-brand-ink/60">
-          <span className="w-40 shrink-0 truncate" title={label}>{LABELS[label] ?? label}</span>
+          <span className="w-32 shrink-0 truncate" title={label}>{LABELS[label] ?? label}</span>
           <div className="flex-1 h-1.5 bg-brand-surface rounded">
             <div className="h-1.5 bg-brand-accent rounded" style={{ width: pct(p) }} />
           </div>
