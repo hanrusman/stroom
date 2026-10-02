@@ -2130,13 +2130,20 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             if quality_score:
                 print(f"[sum-worker] scored {item_id}: {quality_score}/10")
 
+        # Summary altijd, score alleen als de huidige score van het systeem is:
+        # een handmatige PATCH tijdens summarize/scoring blijft staan. Eén
+        # transactie, dus de score hoort altijd bij de summary van deze run.
         async with async_session_maker() as bg:
             await bg.exec(sa_text(
                 "UPDATE items SET summary=:s, summary_model=:m, "
                 "summary_generated_at=now(), processing_status='ready'::processing_status, "
-                "quality_score=:q, quality_score_reason='auto', quality_score_updated_at=now(), "
                 "queued_at=NULL WHERE id = CAST(:i AS uuid)"
-            ).bindparams(s=summary, m=actual_model, i=item_id, q=quality_score))
+            ).bindparams(s=summary, m=actual_model, i=item_id))
+            await bg.exec(sa_text(
+                "UPDATE items SET quality_score=:q, quality_score_reason='auto', "
+                "quality_score_updated_at=now() "
+                f"WHERE id = CAST(:i AS uuid) AND {_auto_score_guard()}"
+            ).bindparams(q=quality_score, i=item_id))
             await bg.commit()
 
         # Lesson-distill voor tekstartikelen (en handmatige Inbox-items), mits de
