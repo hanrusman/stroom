@@ -1,0 +1,7 @@
+# CI-lint: alleen pyflakes-regels (F) — echte fouten zoals ongedefinieerde
+# namen, ongebruikte imports/variabelen en f-strings zonder placeholders.
+# Bewust geen stijlregels.
+target-version = "py311"
+
+[lint]
+select = ["F"]

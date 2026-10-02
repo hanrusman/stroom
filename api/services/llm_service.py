@@ -1,7 +1,7 @@
 import json
 import httpx
 from fastapi import HTTPException
-from typing import List, Dict, Any
+from typing import List, Dict
 from sqlmodel import select, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 from core.config import settings

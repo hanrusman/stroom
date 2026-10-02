@@ -46,7 +46,6 @@ class PodcastService:
         (which closes when the HTTP response is sent) is never used here.
         """
         from core.db import async_engine
-        from services.llm_service import LLMService
 
         async with AsyncSession(async_engine) as session:
             episode = await session.get(Episode, episode_id)
