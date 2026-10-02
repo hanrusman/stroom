@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  api:
+    name: API (ruff + unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    env:
+      # core.config.Settings eist deze bij import; unit-tests raken geen DB of
+      # LiteLLM. Integratietests (-m integration) draaien alleen in de live
+      # stroom-api container, zie api/tests/README.md.
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
+      ASYNC_DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
+      LITELLM_MASTER_KEY: ci-dummy
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"  # gelijk aan api/Dockerfile
+          cache: pip
+          cache-dependency-path: |
+            api/requirements.txt
+            api/requirements-dev.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt ruff==0.16.10
+      - run: ruff check .
+      - run: pytest -m unit
+
+  web:
+    name: Web (typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
