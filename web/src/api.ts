@@ -568,6 +568,7 @@ export interface ModelInfo {
   litellm: string;    // onderliggende LiteLLM-alias
   label: string;      // UI-label
   category: string;   // 'local' | 'cloud'
+  hidden: boolean;    // geserveerd maar niet kiesbaar; alleen voor het label van een oude keuze
   status: 'ok' | 'degraded' | 'unknown';
   reason?: string | null;
 }

@@ -1,54 +1,82 @@
-"""Curatie-laag voor de modelkeuze in Stroom.
+"""Stroom-specifieke kant van de modelkeuze.
 
-Eén plek die Stroom-modelnamen koppelt aan LiteLLM-aliassen, vriendelijke labels
-en een categorie. De *beschikbaarheid* is dynamisch — die komt live uit LiteLLM
-`/v1/models` (zie routers/settings.py). Deze catalogus levert alleen de curatie
-eromheen: labels, naam↔alias-vertaling, en welke modellen krediet-/quota-gevoelig
-zijn.
+Labels, verbergen en volgorde staan op één plek voor Stroom én Okavango: de
+`model_info` per model in vps-stacks/litellm/config.yaml. LiteLLM geeft die
+ongewijzigd terug via `GET /model/info` (zie routers/settings.py). Een repoint of
+nieuw model is daarmee één edit in die config — geen code-edit hier meer.
 
-Gevolg: een model dat LiteLLM serveert maar hier niet staat, verschijnt alsnog in
-de UI met een afgeleid label. Zet je een nieuw model in `litellm/config.yaml`, dan
-duikt het vanzelf op in Stroom — geen code-edit op vier plekken meer nodig.
+Wat hier blijft is wat alleen Stroom weet:
+- de Stroom-naam ↔ LiteLLM-alias-vertaling (in app_settings/DB staan namen als
+  'qwen' en 'opus', niet de alias);
+- de categorie (lokaal/embed) en welke modellen krediet-/quota-gevoelig zijn.
+Onbekende aliassen zijn per conventie cloud, met de alias als Stroom-naam.
 """
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 
 @dataclass(frozen=True)
 class CatalogEntry:
     name: str          # Stroom-naam (wat in app_settings/DB staat)
     litellm: str       # LiteLLM-alias (wat de proxy serveert)
-    label: str         # UI-label
     category: str      # 'local' | 'cloud' | 'embed'
     # Krediet-/quota-gevoelig: kan tijdelijk falen (bv. Anthropic-credit op,
     # Gemini-quota bereikt). De UI mag deze markeren en de status live pollen.
     flaky: bool = False
-    # Permanent niet bruikbaar (geen credit/geen key) → volledig uit de UI-lijst
-    # filteren. Zet op False zodra het weer werkt om 'm terug te tonen.
-    hidden: bool = False
 
 
 MODEL_CATALOG = [
-    # Lokale / eigen-gehoste modellen (Stroom-naam ≠ alias → vertaling nodig)
-    CatalogEntry("qwen", "stroom-bulk", "Qwen3.6 35B (lokaal)", "local"),
-    # Verborgen: Anthropic-account zonder API-credit + geen Gemini-key meer
-    # (2026-06-22). Fallbacks vangen ze op request-tijd nog op; uit de UI gehaald.
-    CatalogEntry("sonnet", "stroom-sonnet", "Claude Sonnet 4.6", "cloud", flaky=True, hidden=True),
-    CatalogEntry("opus", "stroom-deep", "Claude Opus 4.7", "cloud", flaky=True, hidden=True),
-    CatalogEntry("long", "stroom-long-context", "Gemini 2.5 Pro (lange context)", "cloud", flaky=True, hidden=True),
-    # Cloud-modellen via Ollama Turbo (Stroom-naam == alias)
-    CatalogEntry("cloud-kimi", "cloud-kimi", "Kimi K2.5 (cloud)", "cloud"),
-    CatalogEntry("cloud-qwen-coder", "cloud-qwen-coder", "Qwen3-coder 480B (cloud)", "cloud"),
-    CatalogEntry("cloud-gpt-120b", "cloud-gpt-120b", "gpt-oss 120B (cloud)", "cloud"),
-    CatalogEntry("cloud-gpt-20b", "cloud-gpt-20b", "gpt-oss 20B (snel)", "cloud"),
-    CatalogEntry("cloud-gemma", "cloud-gemma", "Gemma3 27B (cloud)", "cloud"),
-    CatalogEntry("cloud-minimax", "cloud-minimax", "MiniMax M2 (cloud)", "cloud"),
+    # Stroom-naam ≠ alias → vertaling nodig. Cloud-modellen via Ollama Turbo
+    # gebruiken hun alias als naam en hoeven hier niet te staan.
+    CatalogEntry("qwen", "stroom-bulk", "local"),
+    CatalogEntry("sonnet", "stroom-sonnet", "cloud", flaky=True),
+    CatalogEntry("opus", "stroom-deep", "cloud", flaky=True),
+    CatalogEntry("long", "stroom-long-context", "cloud", flaky=True),
     # Embeddings — nooit in de chat-/digest-keuze tonen
-    CatalogEntry("stroom-embed", "stroom-embed", "Embeddings (nomic)", "embed"),
+    CatalogEntry("stroom-embed", "stroom-embed", "embed"),
 ]
+
+# Uitgefaseerde namen → opvolger. De alias bestaat in LiteLLM nog (scripts breken
+# niet), maar wijst naar een ander model dan de naam belooft. Stroom weigert ze
+# daarom in een verzoek en zet een opgeslagen keuze om naar de opvolger (zie
+# digest_model_map). Bewust hier en niet in de LiteLLM-config: deze regel moet ook
+# gelden als LiteLLM even niet antwoordt.
+RETIRED: Dict[str, str] = {
+    # qwen3.5:397b geretireerd 2026-09-25; de alias wijst nu naar Kimi K2.7 Code.
+    "cloud-qwen-coder": "cloud-kimi-code",
+}
 
 BY_NAME: Dict[str, CatalogEntry] = {e.name: e for e in MODEL_CATALOG}
 BY_ALIAS: Dict[str, CatalogEntry] = {e.litellm: e for e in MODEL_CATALOG}
+
+
+@dataclass(frozen=True)
+class LiveModel:
+    """Eén alias zoals LiteLLM 'm serveert, met de curatie uit config.yaml."""
+    alias: str
+    label: Optional[str]   # model_info.label; None → UI valt terug op de naam
+    hidden: bool           # model_info.hidden: wel geserveerd, niet in de keuze
+
+
+def parse_model_info(payload: dict) -> List[LiveModel]:
+    """`GET /model/info` → één LiveModel per alias, in config-volgorde.
+
+    LiteLLM geeft één regel per deployment; een alias met meerdere deployments
+    telt één keer (de eerste bepaalt label/hidden)."""
+    out: List[LiveModel] = []
+    seen = set()
+    for d in payload.get("data", []):
+        alias = d.get("model_name")
+        if not alias or alias in seen:
+            continue
+        seen.add(alias)
+        info = d.get("model_info") or {}
+        out.append(LiveModel(
+            alias=alias,
+            label=info.get("label") or None,
+            hidden=bool(info.get("hidden", False)),
+        ))
+    return out
 
 
 def entry_for_alias(alias: str) -> Optional[CatalogEntry]:

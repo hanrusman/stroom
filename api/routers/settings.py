@@ -10,10 +10,11 @@ from sqlalchemy import text as sa_text
 from core.auth import require_user
 from core.config import settings as app_settings
 from core.db import get_async_session
+from pipeline.digest_model_map import replace_retired, resolve_model
 from pipeline.model_catalog import (
-    MODEL_CATALOG,
     BY_ALIAS,
     is_embedding_alias,
+    parse_model_info,
     stroom_name_for_alias,
 )
 
@@ -54,6 +55,10 @@ async def _load(session) -> ModelDefaults:
     try:
         # Tolerate missing keys (older rows) by merging onto DEFAULTS.
         merged = {**DEFAULTS.model_dump(), **(row[0] or {})}
+        # Opgeslagen keuze op een uitgefaseerde naam → opvolger. Cron (digests) en
+        # scoring lezen deze defaults zonder dat iemand een modelkeuze ziet.
+        merged = {k: replace_retired(v) if isinstance(v, str) else v
+                  for k, v in merged.items()}
         return ModelDefaults(**merged)
     except Exception:
         return DEFAULTS
@@ -66,6 +71,8 @@ async def get_settings(session=Depends(get_async_session), user=Depends(require_
 
 @router.put("/admin/settings", response_model=Settings)
 async def put_settings(body: Settings, session=Depends(get_async_session), user=Depends(require_user)):
+    for name in body.model_defaults.model_dump().values():
+        resolve_model(name)  # uitgefaseerd → 400, niet opslaan
     await session.execute(sa_text("""
         INSERT INTO app_settings (key, value, updated_at)
         VALUES ('model_defaults', CAST(:v AS jsonb), now())
@@ -77,7 +84,8 @@ async def put_settings(body: Settings, session=Depends(get_async_session), user=
 
 
 # ---------------------------------------------------------------------------
-# Dynamische modellijst — wat LiteLLM nú serveert, verrijkt met curatie.
+# Dynamische modellijst — wat LiteLLM nú serveert, met de curatie (label,
+# hidden, volgorde) uit model_info in vps-stacks/litellm/config.yaml.
 # ---------------------------------------------------------------------------
 
 class ModelInfo(BaseModel):
@@ -85,6 +93,9 @@ class ModelInfo(BaseModel):
     litellm: str                    # onderliggende LiteLLM-alias
     label: str                      # UI-label
     category: str                   # 'local' | 'cloud'
+    # Wel geserveerd, niet kiesbaar (geen credit/key, uitgefaseerd). Zit in de
+    # lijst zodat de UI een opgeslagen keuze nog met zijn label kan tonen.
+    hidden: bool = False
     status: str = "ok"              # 'ok' | 'degraded' | 'unknown'
     reason: Optional[str] = None    # toelichting bij 'degraded'/'unknown'
 
@@ -130,7 +141,7 @@ async def _probe_one(client: httpx.AsyncClient, alias: str) -> Optional[Tuple[st
         return None
 
 
-async def _flaky_health(client: httpx.AsyncClient) -> dict:
+async def _flaky_health(client: httpx.AsyncClient, flaky: List[str]) -> dict:
     """Poll de flaky aliassen (parallel, gecached) via /health?model=<alias>.
 
     Geeft per alias ('degraded', reason) of ('ok', None). Aliassen waarvoor de
@@ -146,7 +157,6 @@ async def _flaky_health(client: httpx.AsyncClient) -> dict:
         if _health_cache["ts"] > 0 and now - _health_cache["ts"] < _HEALTH_TTL:
             return _health_cache["status"]
 
-        flaky = [e.litellm for e in MODEL_CATALOG if e.flaky and not e.hidden]
         results = await asyncio.gather(*(_probe_one(client, a) for a in flaky))
         out = {alias: status for r in results if r for alias, status in [r]}
 
@@ -163,51 +173,51 @@ def _short_reason(reason: Optional[str]) -> Optional[str]:
 
 @router.get("/admin/models", response_model=List[ModelInfo])
 async def list_models(request: Request, user=Depends(require_user)):
-    """Modellen die LiteLLM nú serveert, met vriendelijke labels en live status.
+    """Modellen die LiteLLM nú serveert, met labels en live status.
 
     Dynamisch: een model dat in litellm/config.yaml wordt toegevoegd verschijnt
-    hier automatisch. Embeddings worden weggefilterd. Krediet-/quota-gevoelige
-    modellen (Anthropic/Gemini) krijgen een live 'degraded'-status."""
+    hier automatisch, met het label en de volgorde uit die config. Embeddings
+    worden weggefilterd; verborgen modellen komen mee met hidden=True.
+    Krediet-/quota-gevoelige modellen (Anthropic/Gemini) krijgen een live
+    'degraded'-status."""
     http_client: httpx.AsyncClient = request.app.state.http_client
     llm_client: httpx.AsyncClient = request.app.state.llm_client
 
     try:
         resp = await http_client.get(
-            f"{_litellm_base()}/v1/models", headers=_auth_headers(), timeout=10.0
+            f"{_litellm_base()}/model/info", headers=_auth_headers(), timeout=10.0
         )
         resp.raise_for_status()
-        available = [m["id"] for m in resp.json().get("data", []) if m.get("id")]
+        live = parse_model_info(resp.json())
     except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail=f"Kon de modellijst niet bij LiteLLM ophalen: {exc}",
         )
 
-    health = await _flaky_health(llm_client)
+    # Volgorde = volgorde in litellm/config.yaml.
+    chat = [m for m in live if not is_embedding_alias(m.alias)]
 
-    chat_aliases = [a for a in available if not is_embedding_alias(a)]
-
-    # Sorteer: catalogus-volgorde eerst (vertrouwd), onbekende live-modellen erna.
-    order = {e.litellm: i for i, e in enumerate(MODEL_CATALOG)}
-    chat_aliases.sort(key=lambda a: (order.get(a, len(order)), a))
+    flaky = [m.alias for m in chat
+             if not m.hidden and m.alias in BY_ALIAS and BY_ALIAS[m.alias].flaky]
+    health = await _flaky_health(llm_client, flaky)
 
     out: List[ModelInfo] = []
-    for alias in chat_aliases:
-        entry = BY_ALIAS.get(alias)
-        # Permanent-dode modellen (geen credit/geen key) volledig verbergen.
-        if entry is not None and entry.hidden:
-            continue
+    for m in chat:
+        entry = BY_ALIAS.get(m.alias)
         status, reason = "ok", None
-        if alias in health:
-            status, reason = health[alias]
+        if m.alias in health:
+            status, reason = health[m.alias]
         elif entry is not None and entry.flaky:
-            status = "unknown"  # flaky maar health-probe gaf geen uitsluitsel
+            # Flaky maar geen uitsluitsel: probe faalde, of verborgen (niet gepolld).
+            status = "unknown"
 
         out.append(ModelInfo(
-            name=stroom_name_for_alias(alias),
-            litellm=alias,
-            label=entry.label if entry else alias,
+            name=stroom_name_for_alias(m.alias),
+            litellm=m.alias,
+            label=m.label or m.alias,
             category=entry.category if entry else "cloud",
+            hidden=m.hidden,
             status=status,
             reason=reason,
         ))
