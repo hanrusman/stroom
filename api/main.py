@@ -310,6 +310,47 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
     return out
 
 
+def _auto_score_guard(alias: str = "") -> str:
+    """SQL-conditie: de huidige score is van het systeem en mag overschreven
+    worden. Dat is reason 'auto' (worker/backfill), of nooit gescoord: reason
+    én updated_at NULL. De PATCH /quality-score zet altijd updated_at, óók als
+    de caller geen reason meegeeft — zo'n handmatige score (of handmatige
+    neutrale NULL) is ground truth en blijft staan."""
+    p = f"{alias}." if alias else ""
+    return (f"({p}quality_score_reason = 'auto' OR "
+            f"({p}quality_score_reason IS NULL AND {p}quality_score_updated_at IS NULL))")
+
+
+async def _score_item_after_summary(item_id: str, summary: str, title: Optional[str]) -> None:
+    """Score een item waarvan de summary buiten de summarize-worker om is
+    geschreven: transcribe-callback met summary (podcasts/YouTube via
+    samenvat-agent) en handmatige /summarize. Die paden scoorden nooit, en
+    door de oude DEFAULT 5 zag dat eruit als een neutrale score.
+
+    Draait als BackgroundTask zodat de caller niet op de LLM-call wacht.
+    De write vereist dat de summary nog dezelfde is: is er tijdens de
+    LLM-call een nieuwere summary opgeslagen, dan hoort deze score daar niet
+    bij. Fail-open: bij None blijft quality_score NULL en pikt
+    /admin/quality-backfill (only_null) het later op."""
+    if not summary:
+        return
+    score = await _score_with_quality_scorer(app.state.http_client, summary, title)
+    if score is None:
+        return
+    try:
+        from core.db import async_session_maker
+        async with async_session_maker() as bg:
+            await bg.exec(sa_text(
+                "UPDATE items SET quality_score=:q, quality_score_reason='auto', "
+                "quality_score_updated_at=now() "
+                "WHERE id = CAST(:i AS uuid) AND summary = :s "
+                f"AND {_auto_score_guard()}"
+            ).bindparams(q=score, i=item_id, s=summary))
+            await bg.commit()
+    except Exception as e:
+        print(f"[score] opslaan faalde voor {item_id}: {e}", flush=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Generieke client voor RSS/og:image/Vikunja/Obsidian — kort timeout.
@@ -1088,7 +1129,8 @@ async def regenerate_topic_digest(slug: str, background_tasks: BackgroundTasks,
 
 
 @app.post("/huygens/items/{item_id}/summarize", response_model=HuygensItemDetail)
-async def summarize_item(item_id: str, session=Depends(get_async_session),
+async def summarize_item(item_id: str, background_tasks: BackgroundTasks,
+                         session=Depends(get_async_session),
                          user=Depends(require_user)):
     item = await _fetch_item_row(session, item_id)
     transcript = (item["transcript"] or "").strip()
@@ -1155,6 +1197,7 @@ async def summarize_item(item_id: str, session=Depends(get_async_session),
             "processing_status='ready'::processing_status WHERE id = CAST(:i AS uuid)"
         ).bindparams(s=summary.strip(), m=actual_model, i=item_id))
         await session.commit()
+        background_tasks.add_task(_score_item_after_summary, item_id, summary.strip(), item["title"])
 
         # Tekstartikelen krijgen ook lesson-distill (idempotent — slaat over als er
         # al lessen zijn). Alleen bij voldoende geëxtraheerde full-text, niet op een
@@ -1459,8 +1502,9 @@ class TranscribeCallback(BaseModel):
 
 @app.post("/huygens/items/{item_id}/transcribe-callback", response_model=HuygensItemDetail)
 async def transcribe_callback(item_id: str, body: TranscribeCallback,
+                              background_tasks: BackgroundTasks,
                               session=Depends(get_async_session)):
-    await _fetch_item_row(session, item_id)
+    item = await _fetch_item_row(session, item_id)
 
     if body.error:
         await session.exec(sa_text(
@@ -1505,6 +1549,9 @@ async def transcribe_callback(item_id: str, body: TranscribeCallback,
             await session.commit()
         except Exception as exc:
             print(f"[lessons] parse/store faalde voor {item_id}: {exc}")
+        # Zonder summary gaat het item naar summarize_queued en scoort de
+        # worker het; mét summary loopt het niet langs de worker.
+        background_tasks.add_task(_score_item_after_summary, item_id, summary, item["title"])
 
     # Workers (transcribe + summarize) pakken vanzelf de volgende items.
     return await huygens_item(item_id, session)
@@ -3400,24 +3447,39 @@ class QualityBackfillResponse(BaseModel):
     error: Optional[str] = None
 
 
-async def _run_quality_backfill(items_for_scoring: list[dict], http_client) -> None:
-    """Background worker: score items en sla op. Eigen session per run."""
+async def _run_quality_backfill(items_for_scoring: list[dict], http_client,
+                                only_null: bool = False) -> None:
+    """Background worker: score items en sla op. Eigen session per run.
+
+    Tussen selectie en write zit de sequentiële scoring van de hele batch.
+    De UPDATE vereist daarom dat de summary nog dezelfde is als bij selectie
+    (anders hoort de score bij een oudere summary), en herhaalt bij only_null
+    de selectievoorwaarde atomair: een score die intussen handmatig is gezet
+    (of al via een ander pad geschreven) blijft staan."""
     from core.db import async_session_maker
     scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
     if not scores_by_id:
         print("[quality-backfill] scorer gaf geen resultaten terug", flush=True)
         return
+    summary_by_id = {it["id"]: it.get("summary") for it in items_for_scoring}
+    guard = f"AND quality_score IS NULL AND {_auto_score_guard()}" if only_null else ""
+    updated = 0
     async with async_session_maker() as session:
         for item_id, score in scores_by_id.items():
-            await session.exec(sa_text("""
+            res = await session.exec(sa_text(f"""
                 UPDATE items
                 SET quality_score = :score,
                     quality_score_reason = 'auto',
                     quality_score_updated_at = NOW()
                 WHERE id = CAST(:id AS uuid)
-            """).bindparams(score=score, id=item_id))
+                AND summary IS NOT DISTINCT FROM :summary
+                {guard}
+            """).bindparams(score=score, id=item_id, summary=summary_by_id.get(item_id)))
+            updated += res.rowcount
         await session.commit()
-    print(f"[quality-backfill] klaar: {len(scores_by_id)}/{len(items_for_scoring)} gescored", flush=True)
+    print(f"[quality-backfill] klaar: {updated}/{len(items_for_scoring)} gescored "
+          f"({len(scores_by_id) - updated} overgeslagen: intussen gescoord of nieuwe summary)",
+          flush=True)
 
 
 @app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
@@ -3431,7 +3493,10 @@ async def admin_quality_backfill(
     scoring en DB-updates lopen als background task."""
     if not (1 <= body.limit <= 10000):
         raise HTTPException(status_code=400, detail="limit moet 1-10000 zijn")
-    where_clause = "i.quality_score IS NULL" if body.only_null else "TRUE"
+    # only_null slaat handmatig op NULL ("neutraal") gezette items over.
+    where_clause = (
+        f"i.quality_score IS NULL AND {_auto_score_guard('i')}"
+    ) if body.only_null else "TRUE"
     r = await session.exec(sa_text(f"""
         SELECT i.id::text, i.title, i.summary, i.transcript, i.description
         FROM items i
@@ -3451,12 +3516,14 @@ async def admin_quality_backfill(
         item_id, title, summary, transcript, description = row
         text = summary or transcript or description or ""
         if text:
-            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title})
+            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title,
+                                      "summary": summary})
 
     if not items_for_scoring:
         return QualityBackfillResponse(processed=len(items), updated=0)
 
-    background_tasks.add_task(_run_quality_backfill, items_for_scoring, request.app.state.http_client)
+    background_tasks.add_task(_run_quality_backfill, items_for_scoring,
+                              request.app.state.http_client, body.only_null)
     print(f"[quality-backfill] gestart voor {len(items_for_scoring)} items", flush=True)
 
     return QualityBackfillResponse(
