@@ -10,12 +10,17 @@ export const MODEL_LABELS: Record<string, string> = {
   sonnet: 'Claude Sonnet 4.6',
   opus: 'Claude Opus 4.7',
   long: 'Gemini 2.5 Pro (lange context)',
-  'cloud-kimi': 'Kimi K2.5 (cloud)',
-  'cloud-qwen-coder': 'Qwen3-coder 480B (cloud)',
+  'cloud-kimi': 'Kimi K2.6 (cloud)',
+  'cloud-qwen-coder': 'Qwen (uitgefaseerd)',
+  'cloud-kimi-code': 'Kimi K2.7 Code (cloud)',
   'cloud-gpt-120b': 'gpt-oss 120B (cloud)',
   'cloud-gpt-20b': 'gpt-oss 20B (snel)',
-  'cloud-gemma': 'Gemma3 27B (cloud)',
-  'cloud-minimax': 'MiniMax M2 (cloud)',
+  'cloud-gemma': 'Gemma 4 (cloud)',
+  'cloud-minimax': 'MiniMax M3 (cloud)',
+  'cloud-glm': 'GLM 5.3 (cloud)',
+  'cloud-deepseek': 'DeepSeek V4-pro (cloud)',
+  'cloud-mistral': 'Mistral Large 3 (cloud)',
+  'cloud-nemotron': 'Nemotron 3 Ultra (cloud)',
 };
 
 // Vriendelijk label voor een Stroom-modelnaam — valt terug op de naam zelf.

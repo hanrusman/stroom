@@ -36,13 +36,22 @@ MODEL_CATALOG = [
     CatalogEntry("sonnet", "stroom-sonnet", "Claude Sonnet 4.6", "cloud", flaky=True, hidden=True),
     CatalogEntry("opus", "stroom-deep", "Claude Opus 4.7", "cloud", flaky=True, hidden=True),
     CatalogEntry("long", "stroom-long-context", "Gemini 2.5 Pro (lange context)", "cloud", flaky=True, hidden=True),
-    # Cloud-modellen via Ollama Turbo (Stroom-naam == alias)
-    CatalogEntry("cloud-kimi", "cloud-kimi", "Kimi K2.5 (cloud)", "cloud"),
-    CatalogEntry("cloud-qwen-coder", "cloud-qwen-coder", "Qwen3-coder 480B (cloud)", "cloud"),
+    # Cloud-modellen via Ollama Turbo (Stroom-naam == alias). Volgt de LiteLLM-set
+    # van sep 2026, gelijk aan Okavango's models_catalog.py.
+    CatalogEntry("cloud-kimi", "cloud-kimi", "Kimi K2.6 (cloud)", "cloud"),
+    # Verborgen: deprecated compat-alias. Er staat geen Qwen meer op Ollama Cloud
+    # (qwen3.5:397b geretireerd 2026-09-25); de alias wijst nu naar dezelfde
+    # upstream als cloud-kimi-code. Zichtbaar laten zou "Qwen" stilletjes Kimi maken.
+    CatalogEntry("cloud-qwen-coder", "cloud-qwen-coder", "Qwen (uitgefaseerd)", "cloud", hidden=True),
+    CatalogEntry("cloud-kimi-code", "cloud-kimi-code", "Kimi K2.7 Code (cloud)", "cloud"),
     CatalogEntry("cloud-gpt-120b", "cloud-gpt-120b", "gpt-oss 120B (cloud)", "cloud"),
     CatalogEntry("cloud-gpt-20b", "cloud-gpt-20b", "gpt-oss 20B (snel)", "cloud"),
-    CatalogEntry("cloud-gemma", "cloud-gemma", "Gemma3 27B (cloud)", "cloud"),
-    CatalogEntry("cloud-minimax", "cloud-minimax", "MiniMax M2 (cloud)", "cloud"),
+    CatalogEntry("cloud-gemma", "cloud-gemma", "Gemma 4 (cloud)", "cloud"),
+    CatalogEntry("cloud-minimax", "cloud-minimax", "MiniMax M3 (cloud)", "cloud"),
+    CatalogEntry("cloud-glm", "cloud-glm", "GLM 5.3 (cloud)", "cloud"),
+    CatalogEntry("cloud-deepseek", "cloud-deepseek", "DeepSeek V4-pro (cloud)", "cloud"),
+    CatalogEntry("cloud-mistral", "cloud-mistral", "Mistral Large 3 (cloud)", "cloud"),
+    CatalogEntry("cloud-nemotron", "cloud-nemotron", "Nemotron 3 Ultra (cloud)", "cloud"),
     # Embeddings — nooit in de chat-/digest-keuze tonen
     CatalogEntry("stroom-embed", "stroom-embed", "Embeddings (nomic)", "embed"),
 ]
