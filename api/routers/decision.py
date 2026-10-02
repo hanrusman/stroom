@@ -64,5 +64,7 @@ async def decision_score_status():
         "interval_sec": decision_scorer.INTERVAL_SEC,
         "interest_weight": decision_scorer.INTEREST_WEIGHT,
         "max_age_days": decision_scorer.MAX_AGE_DAYS,
+        "calibration_min": decision_scorer.CALIBRATION_MIN,
+        "calibration_days": decision_scorer.CALIBRATION_DAYS,
         **decision_scorer.state,
     }

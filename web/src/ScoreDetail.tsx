@@ -17,11 +17,11 @@ const LABELS: Record<string, string> = {
 
 const pct = (p: number) => `${Math.round(p * 100)}%`;
 
-const Rubric = ({ title, rubric, note }: { title: string; rubric: ScoreRubric; note?: string }) => (
+const Rubric = ({ title, rubric, note, showScore = true }: { title: string; rubric: ScoreRubric; note?: string; showScore?: boolean }) => (
   <div>
     <div className="flex items-baseline justify-between text-xs text-brand-ink/70 mb-1">
       <span className="font-medium">{title}{note && <span className="font-normal text-brand-ink/40"> · {note}</span>}</span>
-      <span className="font-bold text-brand-ink">{rubric.score10}/10</span>
+      {showScore && <span className="font-bold text-brand-ink">{rubric.score10}/10</span>}
     </div>
     <div className="space-y-0.5">
       {Object.entries(rubric.probabilities).map(([label, p]) => (
@@ -46,10 +46,23 @@ export const ScoreDetail = ({ detail }: { detail?: QualityScoreDetail | null }) 
     return <p className="text-xs text-brand-ink/50">Kon niet automatisch gescoord worden: {detail.error}</p>;
   }
   const interestCounts = (detail.interest_weight ?? 0) > 0;
+  const cal = detail.calibration?.method === 'percentile' ? detail.calibration : null;
   return (
     <div className="space-y-3 rounded border border-brand-ink/10 p-3">
       <div className="text-xs font-semibold text-brand-ink/70">Waarom deze score?</div>
-      {detail.quality && <Rubric title="Kwaliteit" rubric={detail.quality} />}
+      {cal && (
+        <div className="flex items-baseline justify-between gap-3 text-xs text-brand-ink/70">
+          <span>
+            Beter dan <strong className="text-brand-ink">{pct(cal.percentile)}</strong> van wat de
+            afgelopen {cal.days} dagen binnenkwam <span className="text-brand-ink/40">(n={cal.n})</span>
+          </span>
+          <span className="font-bold text-brand-ink shrink-0">{cal.score}/10</span>
+        </div>
+      )}
+      {detail.quality && (
+        <Rubric title={cal ? 'Kwaliteit volgens het model' : 'Kwaliteit'} rubric={detail.quality}
+                showScore={!cal} />
+      )}
       {detail.interest && (
         <Rubric title="Interesse (jouw profiel)" rubric={detail.interest}
                 note={interestCounts ? `telt ${pct(detail.interest_weight!)} mee` : 'telt niet mee'} />
@@ -68,7 +81,9 @@ export const ScoreDetail = ({ detail }: { detail?: QualityScoreDetail | null }) 
 /** Korte samenvatting voor een tooltip op de score. */
 export const scoreDetailTooltip = (detail?: QualityScoreDetail | null): string | undefined => {
   if (!detail || detail.error || !detail.quality) return undefined;
-  const parts = [`kwaliteit ${detail.quality.score10}/10`];
+  const cal = detail.calibration?.method === 'percentile' ? detail.calibration : null;
+  const parts = [cal ? `beter dan ${pct(cal.percentile)} van de laatste ${cal.days} dagen`
+                     : `kwaliteit ${detail.quality.score10}/10`];
   if (detail.interest) parts.push(`interesse ${detail.interest.score10}/10`);
   if (detail.clickbait != null) parts.push(`clickbait ${pct(detail.clickbait)}`);
   return parts.join(' · ');
