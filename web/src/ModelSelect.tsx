@@ -1,6 +1,6 @@
 import React from 'react';
 import { ModelInfo } from './api';
-import { DigestModel, modelLabel } from './admin_model_constants';
+import { DigestModel } from './admin_model_constants';
 
 interface Props {
   value: DigestModel;
@@ -10,11 +10,13 @@ interface Props {
   className?: string;
 }
 
-/** Modelkeuze gevoed door de live LiteLLM-lijst (permanent-dode modellen worden
- *  server-side al weggefilterd). De huidige waarde blijft altijd selecteerbaar,
- *  ook als die niet meer geserveerd wordt. */
+/** Modelkeuze gevoed door de live LiteLLM-lijst. Verborgen modellen zijn niet
+ *  kiesbaar, maar de huidige waarde blijft altijd selecteerbaar — ook als die
+ *  verborgen is of niet meer geserveerd wordt. */
 export function ModelSelect({ value, onChange, models, disabled, className }: Props) {
-  const present = models.some(m => m.name === value);
+  const visible = models.filter(m => !m.hidden);
+  const present = visible.some(m => m.name === value);
+  const currentLabel = models.find(m => m.name === value)?.label || value;
 
   return (
     <select
@@ -24,10 +26,10 @@ export function ModelSelect({ value, onChange, models, disabled, className }: Pr
       className={className}
     >
       {!present && value && (
-        <option value={value}>{modelLabel(value)}</option>
+        <option value={value}>{currentLabel}</option>
       )}
-      {models.map(m => (
-        <option key={m.name} value={m.name}>{m.label || modelLabel(m.name)}</option>
+      {visible.map(m => (
+        <option key={m.name} value={m.name}>{m.label || m.name}</option>
       ))}
     </select>
   );
