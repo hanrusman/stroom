@@ -18,7 +18,8 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
          fetchSourceDetail, SourceDetail, backfillSource,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
-         LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
+         LessonsDigest, LessonsDigestFilter, QualityScoreUpdate, QualityScoreDetail } from './api';
+import { ScoreDetail, scoreDetailTooltip } from './ScoreDetail';
 import { ModelSelect } from './ModelSelect';
 
 const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
@@ -106,7 +107,7 @@ const Meta = ({ item }: { item: HuygensItem }) => {
   );
 };
 
-const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void; title?: string; summary?: string }) => {
+const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary, detail }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void; title?: string; summary?: string; detail?: QualityScoreDetail | null }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [newScore, setNewScore] = useState<number | null>(score);
@@ -156,6 +157,7 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
           <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
 
           <div className="space-y-4">
+            <ScoreDetail detail={detail} />
             <div>
               <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
               <div className="grid grid-cols-10 gap-1">
@@ -250,7 +252,7 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
   return (
     <button
       onClick={() => setIsEditing(true)}
-      title="Klik om kwaliteitsscore aan te passen"
+      title={[scoreDetailTooltip(detail), 'Klik voor uitleg of om de score aan te passen'].filter(Boolean).join(' — ')}
       className={`font-bold ${scoreColor} hover:opacity-70 cursor-pointer`}
     >
       {score ? `${score}/10` : '—'}
@@ -1753,6 +1755,7 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; o
                   onUpdate={(newScore) => setItem(prev => prev ? { ...prev, quality_score: newScore } : prev)}
                   title={item.title}
                   summary={item.summary}
+                  detail={item.quality_score_detail}
                 /></>
               </div>
             </div>
