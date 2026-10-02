@@ -2,7 +2,7 @@
 
 Dekt de races rond auto-scoring: handmatige feedback zonder reason, een
 handmatige wijziging tussen backfill-select en -write, en een nieuwere
-summary vóórdat de background-scorer schrijft.
+summary vóórdat de background-scorer of de backfill schrijft.
 
 Draait alleen met STROOM_TEST_DB_URL (asyncpg-URL naar een wegwerp-database),
 anders skip. Alles gebeurt in schema `stroom_test`, dus ook een verkeerd
@@ -181,7 +181,15 @@ async def test_backfill_only_null_skips_manual_neutral(db):
 
     (task,) = background_tasks.tasks
     assert {it["id"] for it in task.args[0]} == {never_scored, auto_failed}
+    # De geselecteerde summary gaat mee, voor de stale-summary-check bij de write.
+    assert {it["summary"] for it in task.args[0]} == {"Samenvatting"}
     assert task.args[2] is True  # only_null gaat mee naar de write
+
+
+def _backfill_items(*item_ids: str) -> list[dict]:
+    """Zoals admin_quality_backfill ze aanlevert, met de summary van _insert."""
+    return [{"id": i, "text": "Samenvatting", "title": "Titel", "summary": "Samenvatting"}
+            for i in item_ids]
 
 
 async def test_backfill_keeps_manual_change_made_after_select(db, monkeypatch):
@@ -194,9 +202,28 @@ async def test_backfill_keeps_manual_change_made_after_select(db, monkeypatch):
         return {patched: 9, untouched: 7}
 
     monkeypatch.setattr(main, "_score_batch_with_quality_scorer", fake_batch)
-    items = [{"id": patched, "text": "a", "title": "t"},
-             {"id": untouched, "text": "b", "title": "t"}]
-    await main._run_quality_backfill(items, None, only_null=True)
+    await main._run_quality_backfill(_backfill_items(patched, untouched), None, only_null=True)
 
     assert await _score_row(db, patched) == (2, None)
+    assert await _score_row(db, untouched) == (7, "auto")
+
+
+@pytest.mark.parametrize("only_null", [True, False])
+async def test_backfill_drops_score_for_outdated_summary(db, monkeypatch, only_null):
+    resummarized = await _insert(db)
+    untouched = await _insert(db)
+
+    async def fake_batch(http_client, items):
+        # Een andere flow (worker, callback) slaat intussen een nieuwe summary op.
+        async with db.begin() as conn:
+            await conn.execute(text(
+                "UPDATE items SET summary = 'Nieuwe samenvatting' WHERE id = CAST(:i AS uuid)"
+            ), {"i": resummarized})
+        return {resummarized: 9, untouched: 7}
+
+    monkeypatch.setattr(main, "_score_batch_with_quality_scorer", fake_batch)
+    await main._run_quality_backfill(_backfill_items(resummarized, untouched), None,
+                                     only_null=only_null)
+
+    assert await _score_row(db, resummarized) == (None, None)
     assert await _score_row(db, untouched) == (7, "auto")

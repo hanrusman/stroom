@@ -3455,14 +3455,16 @@ async def _run_quality_backfill(items_for_scoring: list[dict], http_client,
     """Background worker: score items en sla op. Eigen session per run.
 
     Tussen selectie en write zit de sequentiële scoring van de hele batch.
-    Bij only_null wordt de selectievoorwaarde daarom bij de UPDATE atomair
-    herhaald: een score die intussen handmatig is gezet (of al via een ander
-    pad geschreven) blijft staan."""
+    De UPDATE vereist daarom dat de summary nog dezelfde is als bij selectie
+    (anders hoort de score bij een oudere summary), en herhaalt bij only_null
+    de selectievoorwaarde atomair: een score die intussen handmatig is gezet
+    (of al via een ander pad geschreven) blijft staan."""
     from core.db import async_session_maker
     scores_by_id = await _score_batch_with_quality_scorer(http_client, items_for_scoring)
     if not scores_by_id:
         print(f"[quality-backfill] scorer gaf geen resultaten terug", flush=True)
         return
+    summary_by_id = {it["id"]: it.get("summary") for it in items_for_scoring}
     guard = f"AND quality_score IS NULL AND {_auto_score_guard()}" if only_null else ""
     updated = 0
     async with async_session_maker() as session:
@@ -3473,12 +3475,14 @@ async def _run_quality_backfill(items_for_scoring: list[dict], http_client,
                     quality_score_reason = 'auto',
                     quality_score_updated_at = NOW()
                 WHERE id = CAST(:id AS uuid)
+                AND summary IS NOT DISTINCT FROM :summary
                 {guard}
-            """).bindparams(score=score, id=item_id))
+            """).bindparams(score=score, id=item_id, summary=summary_by_id.get(item_id)))
             updated += res.rowcount
         await session.commit()
     print(f"[quality-backfill] klaar: {updated}/{len(items_for_scoring)} gescored "
-          f"({len(scores_by_id) - updated} intussen al gescoord, overgeslagen)", flush=True)
+          f"({len(scores_by_id) - updated} overgeslagen: intussen gescoord of nieuwe summary)",
+          flush=True)
 
 
 @app.post("/admin/quality-backfill", response_model=QualityBackfillResponse)
@@ -3515,7 +3519,8 @@ async def admin_quality_backfill(
         item_id, title, summary, transcript, description = row
         text = summary or transcript or description or ""
         if text:
-            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title})
+            items_for_scoring.append({"id": item_id, "text": text[:8000], "title": title,
+                                      "summary": summary})
 
     if not items_for_scoring:
         return QualityBackfillResponse(processed=len(items), updated=0)
