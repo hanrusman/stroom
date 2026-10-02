@@ -1,8 +1,5 @@
-import json
-from datetime import datetime, timezone
 import httpx
 from fastapi import HTTPException
-from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from core.config import settings
 from models.base import Save, Insight, Item, InsightCategory
@@ -51,7 +48,7 @@ class ObsidianService:
         lines.extend([
             "---",
             f"**Bron:** [{item.title}]({item.media_url or ''})", 
-            f"**Geëxporteerd via Stroom**"
+            "**Geëxporteerd via Stroom**"
         ])
         
         return "\n".join(lines)

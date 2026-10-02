@@ -19,13 +19,15 @@ pytestmark = pytest.mark.unit
 
 def test_nightly_skips_when_already_running():
     """Vlag staat al op True → endpoint returnt meteen de skip-dict en raakt
-    de session niet aan (vandaar session=None: zou crashen bij gebruik)."""
+    de session niet aan (vandaar session=None: zou crashen bij gebruik).
+    Query-params expliciet meegeven: bij een directe aanroep lost FastAPI de
+    `Query(...)`-defaults niet op."""
     main._nightly_running = True
     try:
-        result = asyncio.run(main.admin_cron_nightly(light=True, session=None))
+        result = asyncio.run(main.admin_cron_nightly(light=True, digests=True, session=None))
     finally:
         main._nightly_running = False
-    assert result == {"ok": False, "skipped": "already_running", "light": True}
+    assert result == {"ok": False, "skipped": "already_running", "light": True, "digests": True}
 
 
 def test_nightly_flag_reset_after_skip():
@@ -33,7 +35,7 @@ def test_nightly_flag_reset_after_skip():
     lopende run niet per ongeluk terugzetten naar False."""
     main._nightly_running = True
     try:
-        asyncio.run(main.admin_cron_nightly(light=False, session=None))
+        asyncio.run(main.admin_cron_nightly(light=False, digests=True, session=None))
         assert main._nightly_running is True
     finally:
         main._nightly_running = False
