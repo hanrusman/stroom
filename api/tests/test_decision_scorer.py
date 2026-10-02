@@ -169,3 +169,21 @@ async def test_decision_mode_defers_inline_scoring(monkeypatch):
 
     monkeypatch.setattr(main, "_get_score_model", must_not_run)
     assert await main._score_with_quality_scorer(None, "tekst", "titel") is None
+
+
+def test_calibrated_score_maps_percentile_to_floors():
+    ref = sorted(i / 100 for i in range(100))      # 0.00 .. 0.99
+    assert ds.calibrated_score(0.99, ref) == (10, 1.0)
+    assert ds.calibrated_score(0.94, ref)[0] == 10   # 95/100 <= 0.94 -> pct 0.95
+    assert ds.calibrated_score(0.93, ref)[0] == 9
+    assert ds.calibrated_score(0.84, ref)[0] == 9
+    assert ds.calibrated_score(0.83, ref)[0] == 8
+    assert ds.calibrated_score(0.0, ref)[0] == 1
+    assert ds.calibrated_score(-1.0, ref) == (1, 0.0)
+
+
+def test_parse_stores_raw_for_calibration():
+    _, detail = ds.parse_answers(_answers(quality=3.0, interest=0.0), interest_weight=0.0)
+    assert detail["raw"] == 0.75
+    _, detail = ds.parse_answers(_answers(quality=4.0, interest=0.0), interest_weight=0.5)
+    assert detail["raw"] == 0.5

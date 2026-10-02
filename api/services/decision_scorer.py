@@ -16,6 +16,7 @@ quality_score_detail bewaren we wat ze wél geven: deelscores, de kansverdeling
 per niveau en confidence, plus de versie van het interesseprofiel.
 """
 import asyncio
+import bisect
 import hashlib
 import json
 import os
@@ -48,6 +49,19 @@ MAX_AGE_DAYS = int(os.environ.get("DECISION_MAX_AGE_DAYS", "3"))
 # Zoveel items achter elkaar mislukt = storing, batch afbreken.
 MAX_CONSECUTIVE_FAILURES = 3
 RETRY_DELAY_SEC = 2.0
+
+# Percentiel-ijking van de eindscore. nimble zet zelden kans op het hoogste
+# rubriekniveau: het verwachte niveau komt vrijwel nooit boven ~0.81 van de
+# schaal (1 + 9*0.81 = 8) en de top is samengeperst (eval: random items p75
+# 0.727, p90 0.752, p95 0.761). Toch zat in die bovenste 10% al 36% van de
+# gelikete items. Daarom is de eindscore de plek t.o.v. alles wat de laatste
+# CALIBRATION_DAYS gescoord is: 10 = beste 5%, 9 = de 10% daaronder, enz.
+# Onder CALIBRATION_MIN items blijft de lineaire rubriekscore staan.
+CALIBRATION_DAYS = int(os.environ.get("DECISION_CALIBRATION_DAYS", "30"))
+CALIBRATION_MIN = int(os.environ.get("DECISION_CALIBRATION_MIN", "200"))
+# (score, minimale percentielpositie): 10 vanaf de bovenste 5%, 9 vanaf 15%, ...
+PERCENTILE_FLOORS = ((10, 0.95), (9, 0.85), (8, 0.70), (7, 0.55), (6, 0.40),
+                     (5, 0.28), (4, 0.18), (3, 0.10), (2, 0.04))
 
 PROFILE_KEY = "decision_profile"
 PROFILE_MODEL = os.environ.get("DECISION_PROFILE_MODEL", "cloud-kimi")
@@ -128,8 +142,18 @@ def parse_answers(answers: dict, *, interest_weight: float = INTEREST_WEIGHT) ->
         "interest": interest,
         "clickbait": round(float(answers["clickbait"]["noul"]), 4) if "clickbait" in answers else None,
         "interest_weight": interest_weight,
+        "raw": round(frac, 4),  # invoer voor de percentiel-ijking
     }
     return int(round(1 + 9 * frac)), detail
+
+
+def calibrated_score(raw: float, reference_sorted: list) -> tuple[int, float]:
+    """Plek van `raw` in de (gesorteerde) referentie -> (score 1-10, percentiel)."""
+    pct = bisect.bisect_right(reference_sorted, raw) / len(reference_sorted)
+    for score, floor in PERCENTILE_FLOORS:
+        if pct >= floor:
+            return score, round(pct, 4)
+    return 1, round(pct, 4)
 
 
 # --- HTTP naar stroom-decision -------------------------------------------
@@ -278,26 +302,28 @@ state: dict = {"last_run_at": None, "last_result": None, "outage_since": None,
 
 
 async def _select_candidates(session) -> list:
+    """Recente items zonder decision-score: eerst ongescoorde, dan items met nog
+    een oude cloud-auto-score (zodat alle recente scores op één schaal staan).
+    detail IS NULL sluit ook error-gemarkeerde items uit."""
     r = await session.exec(sa_text(f"""
         SELECT id::text, title, summary FROM items
-        WHERE quality_score IS NULL
+        WHERE quality_score_detail IS NULL
           AND coalesce(summary, '') <> ''
           AND {auto_score_guard()}
-          AND (quality_score_detail IS NULL OR quality_score_detail->>'error' IS NULL)
           AND summary_generated_at > now() - make_interval(days => :days)
-        ORDER BY summary_generated_at DESC
+        ORDER BY (quality_score IS NULL) DESC, summary_generated_at DESC
         LIMIT :n
     """).bindparams(days=MAX_AGE_DAYS, n=BATCH_SIZE))
     return r.all()
 
 
 async def _write_score(session, item_id: str, summary: str, score: int, detail: dict) -> bool:
-    """Atomair: alleen als het item nog ongescoord is, de score van het systeem
-    is en de summary dezelfde als bij selectie."""
+    """Atomair: alleen als het item nog geen decision-score heeft, de score van
+    het systeem is en de summary dezelfde als bij selectie."""
     res = await session.exec(sa_text(f"""
         UPDATE items SET quality_score = :q, quality_score_reason = 'auto',
                quality_score_updated_at = now(), quality_score_detail = CAST(:d AS jsonb)
-        WHERE id = CAST(:i AS uuid) AND quality_score IS NULL AND summary = :s
+        WHERE id = CAST(:i AS uuid) AND quality_score_detail IS NULL AND summary = :s
           AND {auto_score_guard()}
     """).bindparams(q=score, d=json.dumps(detail), i=item_id, s=summary))
     await session.commit()
@@ -307,7 +333,7 @@ async def _write_score(session, item_id: str, summary: str, score: int, detail: 
 async def _mark_item_error(session, item_id: str, error: str) -> None:
     await session.exec(sa_text("""
         UPDATE items SET quality_score_detail = CAST(:d AS jsonb)
-        WHERE id = CAST(:i AS uuid) AND quality_score IS NULL
+        WHERE id = CAST(:i AS uuid) AND quality_score_detail IS NULL
     """).bindparams(d=json.dumps({"error": error[:300], "model": DECISION_MODEL}), i=item_id))
     await session.commit()
 
@@ -336,6 +362,65 @@ async def run_batch(session_maker, llm, client: Optional[httpx.AsyncClient] = No
 
 
 async def _run_batch(session_maker, llm, client) -> dict:
+    result = await _score_candidates(session_maker, llm, client)
+    # Ook zonder nieuwe items: het venster schuift, dus de ijking ook.
+    try:
+        async with session_maker() as session:
+            result["calibration"] = await recalibrate(session)
+        if result["calibration"].get("updated"):
+            print(f"[decision] herijkt: {result['calibration']}", flush=True)
+    except Exception as e:
+        print(f"[decision] herijken faalde: {e!r}", flush=True)
+        result["calibration"] = {"error": str(e)[:200]}
+    return result
+
+
+# Ruwe invoer van de ijking; items van vóór "raw" in het detail hebben
+# alleen de quality-fractie (interest_weight was toen 0, dus identiek).
+_RAW_SQL = ("coalesce((quality_score_detail->>'raw')::float, "
+            "(quality_score_detail->'quality'->>'fraction')::float)")
+
+
+async def recalibrate(session) -> dict:
+    """Herijk de decision-scores van de laatste CALIBRATION_DAYS t.o.v. elkaar.
+
+    De referentie is alles met een decision-score in het venster, ook items
+    die daarna handmatig zijn aangepast; bijgewerkt worden alleen auto-scores.
+    quality_score_updated_at blijft staan: dit is geen nieuwe beoordeling."""
+    rows = (await session.exec(sa_text(f"""
+        SELECT id::text, {_RAW_SQL} AS raw, quality_score, quality_score_reason,
+               (quality_score_detail->'calibration'->>'percentile')::float AS cur_pct
+        FROM items
+        WHERE quality_score_detail->>'model' IS NOT NULL
+          AND (quality_score_detail->>'scored_at')::timestamptz
+              > now() - make_interval(days => :days)
+    """).bindparams(days=CALIBRATION_DAYS))).all()
+    reference = sorted(r[1] for r in rows if r[1] is not None)
+    if len(reference) < CALIBRATION_MIN:
+        return {"method": "linear", "n": len(reference), "updated": 0}
+
+    updated = 0
+    for item_id, raw, current, reason, cur_pct in rows:
+        if raw is None or reason != "auto":
+            continue
+        score, pct = calibrated_score(raw, reference)
+        if score == current and cur_pct is not None and abs(pct - cur_pct) < 0.01:
+            continue
+        cal = {"method": "percentile", "score": score, "percentile": pct,
+               "n": len(reference), "days": CALIBRATION_DAYS}
+        res = await session.exec(sa_text("""
+            UPDATE items SET quality_score = :q,
+                   quality_score_detail = jsonb_set(quality_score_detail, '{calibration}',
+                                                    CAST(:c AS jsonb))
+            WHERE id = CAST(:i AS uuid) AND quality_score_reason = 'auto'
+              AND quality_score_detail->>'model' IS NOT NULL
+        """).bindparams(q=score, c=json.dumps(cal), i=item_id))
+        updated += res.rowcount
+    await session.commit()
+    return {"method": "percentile", "n": len(reference), "updated": updated}
+
+
+async def _score_candidates(session_maker, llm, client) -> dict:
     async with session_maker() as session:
         rows = await _select_candidates(session)
     result = {"selected": len(rows), "scored": 0, "skipped": 0, "item_errors": 0, "error": None}

@@ -159,7 +159,17 @@ export interface ScoreRubric {
   confidence: number | null;
 }
 
+export interface ScoreCalibration {
+  method: 'percentile' | 'linear';
+  score: number;
+  percentile: number;   // 0-1: aandeel van de referentie met een lagere of gelijke waarde
+  n: number;
+  days: number;
+}
+
 export interface QualityScoreDetail {
+  calibration?: ScoreCalibration;
+  raw?: number;
   quality?: ScoreRubric;
   interest?: ScoreRubric | null;
   clickbait?: number | null;
@@ -847,6 +857,7 @@ export interface DecisionBatchResult {
   skipped?: number | string;
   item_errors?: number;
   error?: string | null;
+  calibration?: { method?: 'percentile' | 'linear'; n?: number; updated?: number; error?: string };
 }
 
 export interface DecisionScoreStatus {
@@ -856,6 +867,8 @@ export interface DecisionScoreStatus {
   interval_sec: number;
   interest_weight: number;
   max_age_days: number;
+  calibration_min?: number;
+  calibration_days?: number;
   last_run_at: string | null;
   last_result: DecisionBatchResult | null;
   outage_since: string | null;

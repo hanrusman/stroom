@@ -147,6 +147,13 @@ export const DecisionProfilePanel = () => {
                   )}
                 </div>
               )}
+              {status.enabled && last?.calibration?.method && (
+                <div>
+                  Schaal: {last.calibration.method === 'percentile'
+                    ? <>geijkt op {last.calibration.n} items — 10 = beste 5%, 9 = de 10% daaronder</>
+                    : <>nog lineair (max. ~8); ijken start vanaf {status.calibration_min ?? 200} items, nu {last.calibration.n}</>}
+                </div>
+              )}
               {status.outage_since && (
                 <div className="flex items-center gap-1.5 text-amber-700">
                   <AlertTriangle size={13} />
