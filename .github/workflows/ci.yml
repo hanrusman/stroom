@@ -19,6 +19,20 @@ jobs:
     defaults:
       run:
         working-directory: api
+    services:
+      # Wegwerp-Postgres voor de `db`-tests (die werken in schema stroom_test).
+      postgres:
+        image: pgvector/pgvector:pg16  # gelijk aan stroom-db
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: ci
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     env:
       # core.config.Settings eist deze bij import; unit-tests raken geen DB of
       # LiteLLM. Integratietests (-m integration) draaien alleen in de live
@@ -26,6 +40,7 @@ jobs:
       DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
       ASYNC_DATABASE_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
       LITELLM_MASTER_KEY: ci-dummy
+      STROOM_TEST_DB_URL: postgresql+asyncpg://ci:ci@localhost:5432/ci
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -37,7 +52,7 @@ jobs:
             api/requirements-dev.txt
       - run: pip install -r requirements.txt -r requirements-dev.txt ruff==0.16.10
       - run: ruff check .
-      - run: pytest -m unit
+      - run: pytest -m "unit or db"
 
   web:
     name: Web (typecheck + build)
