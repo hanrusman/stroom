@@ -830,3 +830,58 @@ export async function fetchInboxTopics(): Promise<{ slug: string; name: string }
   const r = await apiFetch('/api/inbox/topics');
   return r.json();
 }
+
+// --- Decision-scorer (nimble): interesseprofiel + status ---
+
+export interface DecisionProfile {
+  text: string;
+  source: 'auto' | 'manual';
+  n_lessons: number | null;
+  version: string;
+  updated_at: string;
+}
+
+export interface DecisionBatchResult {
+  selected?: number;
+  scored?: number;
+  skipped?: number | string;
+  item_errors?: number;
+  error?: string | null;
+}
+
+export interface DecisionScoreStatus {
+  enabled: boolean;
+  mode: string;
+  model: string;
+  interval_sec: number;
+  interest_weight: number;
+  max_age_days: number;
+  last_run_at: string | null;
+  last_result: DecisionBatchResult | null;
+  outage_since: string | null;
+  outage_notified: boolean;
+}
+
+export async function fetchDecisionProfile(): Promise<{ profile: DecisionProfile | null; enabled: boolean; model: string }> {
+  const r = await apiFetch('/api/admin/decision-profile');
+  return r.json();
+}
+
+export async function saveDecisionProfile(text: string): Promise<{ profile: DecisionProfile }> {
+  const r = await apiFetch('/api/admin/decision-profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  return r.json();
+}
+
+export async function rebuildDecisionProfile(): Promise<{ profile: DecisionProfile }> {
+  const r = await apiFetch('/api/admin/decision-profile/rebuild', { method: 'POST' });
+  return r.json();
+}
+
+export async function fetchDecisionScoreStatus(): Promise<DecisionScoreStatus> {
+  const r = await apiFetch('/api/admin/decision-score/status');
+  return r.json();
+}
