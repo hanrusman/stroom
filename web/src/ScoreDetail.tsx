@@ -17,6 +17,15 @@ const LABELS: Record<string, string> = {
 
 const pct = (p: number) => `${Math.round(p * 100)}%`;
 
+// Postgres-jsonb bewaart object-keys niet in invoervolgorde; zet de niveaus
+// terug in rubriekvolgorde (van laag naar hoog), onbekende labels achteraan.
+const ORDER = Object.keys(LABELS);
+const orderedEntries = (probs: Record<string, number>) =>
+  Object.entries(probs).sort(([a], [b]) => {
+    const ia = ORDER.indexOf(a), ib = ORDER.indexOf(b);
+    return (ia < 0 ? ORDER.length : ia) - (ib < 0 ? ORDER.length : ib);
+  });
+
 const Rubric = ({ title, rubric, note, showScore = true }: { title: string; rubric: ScoreRubric; note?: string; showScore?: boolean }) => (
   <div>
     <div className="flex items-baseline justify-between text-xs text-brand-ink/70 mb-1">
@@ -24,7 +33,7 @@ const Rubric = ({ title, rubric, note, showScore = true }: { title: string; rubr
       {showScore && <span className="font-bold text-brand-ink">{rubric.score10}/10</span>}
     </div>
     <div className="space-y-0.5">
-      {Object.entries(rubric.probabilities).map(([label, p]) => (
+      {orderedEntries(rubric.probabilities).map(([label, p]) => (
         <div key={label} className="flex items-center gap-2 text-[11px] text-brand-ink/60">
           <span className="w-32 shrink-0 truncate" title={label}>{LABELS[label] ?? label}</span>
           <div className="flex-1 h-1.5 bg-brand-surface rounded">
