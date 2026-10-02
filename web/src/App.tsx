@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -151,75 +152,80 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary, detail }:
   };
 
   if (isEditing) {
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div className="bg-brand-cream rounded-lg shadow-xl max-w-md w-full p-6">
-          <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
+    // Via een portal naar <body>: de editor staat in een mono/uppercase meta-
+    // regel en zou die opmaak anders erven. De kaart is maximaal schermhoog met
+    // een eigen scrollgebied; de knoppen staan buiten dat gebied, altijd in beeld.
+    return createPortal(
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 font-sans normal-case tracking-normal text-base">
+        <div className="bg-brand-cream rounded-lg shadow-xl max-w-md w-full max-h-[calc(100dvh-2rem)] flex flex-col">
+          <div className="overflow-y-auto overscroll-contain p-6 pb-4">
+            <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
 
-          <div className="space-y-4">
-            <ScoreDetail detail={detail} />
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
-              <div className="grid grid-cols-10 gap-1">
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setNewScore(n)}
-                    className={`py-2 text-sm font-medium rounded transition-colors ${
-                      newScore === n
-                        ? 'bg-brand-accent text-white'
-                        : 'bg-brand-surface text-brand-ink hover:bg-brand-surface-low'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => setNewScore(null)}
-                className={`mt-1 text-xs transition-colors ${newScore === null ? 'text-brand-ink/70 font-medium' : 'text-brand-ink/30 hover:text-brand-ink/50'}`}
-              >
-                Geen score
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Reden</label>
-              <select
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream"
-              >
-                {Object.entries(reasonLabels).map(([key, label]) => (
-                  <option key={key} value={key}>{label}</option>
-                ))}
-              </select>
-              {reason === 'personal_interest' && title && (
+            <div className="space-y-4">
+              <ScoreDetail detail={detail} />
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
+                <div className="grid grid-cols-10 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setNewScore(n)}
+                      className={`py-2 text-sm font-medium rounded transition-colors ${
+                        newScore === n
+                          ? 'bg-brand-accent text-white'
+                          : 'bg-brand-surface text-brand-ink hover:bg-brand-surface-low'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
                 <button
-                  onClick={() => setShowInterestLearner(true)}
-                  className="mt-1.5 text-xs text-brand-accent hover:underline flex items-center gap-1"
+                  type="button"
+                  onClick={() => setNewScore(null)}
+                  className={`mt-1 text-xs transition-colors ${newScore === null ? 'text-brand-ink/70 font-medium' : 'text-brand-ink/30 hover:text-brand-ink/50'}`}
                 >
-                  Ontdek je interesses voor dit item
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  Geen score
                 </button>
-              )}
-            </div>
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Aanvullende context..."
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream text-sm"
-                rows={3}
-              />
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-1">Reden</label>
+                <select
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream"
+                >
+                  {Object.entries(reasonLabels).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+                {reason === 'personal_interest' && title && (
+                  <button
+                    onClick={() => setShowInterestLearner(true)}
+                    className="mt-1.5 text-xs text-brand-accent hover:underline flex items-center gap-1"
+                  >
+                    Ontdek je interesses voor dit item
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Aanvullende context..."
+                  className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream text-sm"
+                  rows={3}
+                />
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 mt-6">
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-brand-ink/10">
             <button
               onClick={handleCancel}
               disabled={busy}
@@ -245,7 +251,8 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary, detail }:
             onClose={() => setShowInterestLearner(false)}
           />
         )}
-      </div>
+      </div>,
+      document.body,
     );
   }
 
