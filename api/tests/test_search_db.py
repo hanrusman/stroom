@@ -365,3 +365,40 @@ async def test_hybride_respecteert_uitsluiting_in_semantische_tak(db):
         "Tour de France", "Etappe in Den Haag"}
     assert await _search(engine, "fiets -kabinet") == [("Tour de France", "semantic")]
     assert fake.calls[-1] == ("query", ["fiets"])
+
+
+async def test_uitsluiting_onder_or_geldt_alleen_voor_die_tak(db):
+    engine, _ = db
+    await _insert(engine, "Fiets kabinet")
+    await _insert(engine, "Koken kabinet")
+    await _insert(engine, "Koken thuis")
+    await _migrate(engine)
+
+    # websearch: fiets | (koken & !kabinet)
+    assert {t for t, _ in await _search(engine, "fiets OR koken -kabinet", mode="keyword")} == {
+        "Fiets kabinet", "Koken thuis"}
+
+
+async def test_minteken_binnen_frase_is_geen_uitsluiting(db):
+    engine, fake = db
+    await _insert(engine, "Curl -X POST uitgelegd")
+    await _insert(engine, "Curl GET")
+    await _migrate(engine)
+    await _embed_all(engine)
+
+    assert [t for t, _ in await _search(engine, '"curl -X POST"', mode="keyword")] == [
+        "Curl -X POST uitgelegd"]
+    await _search(engine, '"curl -X POST"')
+    assert fake.calls[-1] == ("query", ['"curl -X POST"'])
+
+
+async def test_frase_met_dubbel_stopwoord(db):
+    engine, _ = db
+    await _insert(engine, "De verkiezingen in Nederland")
+    await _insert(engine, "Verkiezingen Nederland")  # afstand 1, niet 2
+    await _migrate(engine)
+
+    # 'in' is in beide talen een stopwoord: de frase wordt 'verkiez' <2> 'nederland'.
+
+    assert [t for t, _ in await _search(engine, '"verkiezing in nederland"', mode="keyword")] == [
+        "De verkiezingen in Nederland"]

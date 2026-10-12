@@ -1,7 +1,7 @@
 """Zoeken: zoekvectoren bijhouden + hybride (keyword + semantisch) zoeken.
 
-Keyword = Postgres FTS over search_tsv met NL+EN-stemming (stroom_tsquery,
-migratie 024). Semantisch = cosine-afstand op items.search_embedding, een
+Keyword = Postgres FTS over search_tsv met NL+EN-stemming (migratie 024;
+de zoekvraag wordt omgezet in services/search_query). Semantisch = cosine-afstand op items.search_embedding, een
 multilingual-e5-small vector (384 dim) uit de stroom-embed sidecar. Hybride
 voegt beide ranglijsten samen met Reciprocal Rank Fusion: geen gedoe met het
 schalen van ts_rank tegen cosine, en een item dat in beide lijsten hoog staat
@@ -13,11 +13,12 @@ backfill duurt daardoor uren; recente items gaan voor.
 """
 import asyncio
 import os
-import re
 from typing import Optional
 
 import httpx
 from sqlalchemy import text as sa_text
+
+from services import search_query
 
 EMBED_SERVICE_URL = os.environ.get("EMBED_SERVICE_URL", "").rstrip("/")
 ENABLED = (os.environ.get("SEARCH_EMBED_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -37,10 +38,6 @@ MAX_DISTANCE = float(os.environ.get("SEARCH_SEMANTIC_MAX_DISTANCE", "0.17"))
 POOL = 50
 RRF_K = 60
 
-# Zelfde patroon als stroom_tsquery_excl in migratie 024: -woord en -"frase".
-_EXCLUSION = re.compile(r'(^|\s)-("[^"]*"|[^\s"]+)')
-
-
 def _vec_literal(vec: list[float]) -> str:
     return "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
 
@@ -57,7 +54,7 @@ async def embed_query(client: httpx.AsyncClient, q: str) -> Optional[list[float]
     """Query-vector, of None als de sidecar er niet is of te traag is —
     de caller valt dan terug op alleen keyword."""
     # Uitsluitingen niet meeembedden: 'tour -kabinet' moet niet naar kabinet zoeken.
-    text = _EXCLUSION.sub(r"\1", q).strip()
+    text = search_query.positive_text(q)
     if not EMBED_SERVICE_URL or not text:
         return None
     try:
@@ -115,30 +112,39 @@ async def search(session, q: str, qvec: Optional[list[float]], fmt: Optional[str
     """Rijen (id, title, format, source_name, published_at, snippet, score, match).
     mode: 'hybrid' | 'keyword' | 'semantic'. Zonder qvec vervalt het
     semantische deel."""
-    use_kw = mode in ("hybrid", "keyword")
+    tsq, excl = await search_query.build(session, q)
+    use_kw = mode in ("hybrid", "keyword") and tsq is not None
     use_sem = mode in ("hybrid", "semantic") and qvec is not None
     if not use_kw and not use_sem:
         return []
 
     fmt_filter = "AND i.format = CAST(:fmt AS item_format)" if fmt else ""
-    params: dict = {"q": q, "lim": limit, "pool": max(POOL, limit), "k": RRF_K}
+    params: dict = {"lim": limit, "pool": max(POOL, limit), "k": RRF_K}
+    if tsq:
+        params["tsq"] = tsq
     if fmt:
         params["fmt"] = fmt
     ranked = []
     if use_kw:
         ranked.append(f"""
             SELECT i.id, row_number() OVER (
-                       ORDER BY ts_rank(i.search_tsv, stroom_tsquery(:q)) DESC,
+                       ORDER BY ts_rank(i.search_tsv, CAST(:tsq AS tsquery)) DESC,
                                 i.published_at DESC NULLS LAST) AS r,
                    'keyword' AS src
             FROM items i
-            WHERE i.search_tsv @@ stroom_tsquery(:q)
+            WHERE i.search_tsv @@ CAST(:tsq AS tsquery)
               AND i.status <> 'archived'::item_status {fmt_filter}
             ORDER BY r LIMIT :pool
         """)
     if use_sem:
         params["qv"] = _vec_literal(qvec)
         params["maxd"] = MAX_DISTANCE
+        excl_filter = ""
+        if excl:
+            # Uitsluitingen die voor de hele vraag gelden ('tour -kabinet'),
+            # niet die onder een OR ('fiets OR koken -kabinet').
+            params["excl"] = excl
+            excl_filter = "AND NOT i.search_tsv @@ CAST(:excl AS tsquery)"
         # ef_search >= pool, anders levert de HNSW-scan minder dan :pool
         # kandidaten op vóór de status/format-filters.
         await session.exec(sa_text(f"SET LOCAL hnsw.ef_search = {max(100, 2 * params['pool'])}"))
@@ -148,14 +154,16 @@ async def search(session, q: str, qvec: Optional[list[float]], fmt: Optional[str
                 SELECT i.id, i.search_embedding <=> CAST(:qv AS vector) AS d
                 FROM items i
                 WHERE i.search_embedding IS NOT NULL
-                  AND i.status <> 'archived'::item_status {fmt_filter}
-                  -- -woord / -"frase" uit de zoekvraag gelden hier ook.
-                  AND NOT coalesce(i.search_tsv @@ stroom_tsquery_excl(:q), false)
+                  AND i.status <> 'archived'::item_status {fmt_filter} {excl_filter}
                 ORDER BY d LIMIT :pool
             ) nn
             WHERE d <= :maxd
         """)
     union = " UNION ALL ".join(f"({sql})" for sql in ranked)
+    body = "coalesce(i.summary, i.description, left(i.transcript, 4000), '')"
+    snippet = (f"ts_headline('dutch', {body}, CAST(:tsq AS tsquery), "
+               "'MaxFragments=2,MinWords=8,MaxWords=22,StartSel=<mark>,StopSel=</mark>')"
+               if tsq else f"left({body}, 200)")
 
     r = await session.exec(sa_text(f"""
         WITH ranked AS ({union}),
@@ -165,11 +173,7 @@ async def search(session, q: str, qvec: Optional[list[float]], fmt: Optional[str
             FROM ranked GROUP BY id
         )
         SELECT i.id::text, i.title, i.format::text, s.name, i.published_at,
-               ts_headline('dutch',
-                           coalesce(i.summary, i.description, left(i.transcript, 4000), ''),
-                           stroom_tsquery(:q),
-                           'MaxFragments=2,MinWords=8,MaxWords=22,StartSel=<mark>,StopSel=</mark>'),
-               f.score, f.match
+               {snippet}, f.score, f.match
         FROM fused f
         JOIN items i ON i.id = f.id
         JOIN sources s ON s.id = i.source_id

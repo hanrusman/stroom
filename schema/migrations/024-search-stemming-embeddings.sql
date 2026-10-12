@@ -11,9 +11,9 @@
 --    Nederlandse vector komen en in lange transcripts vastlopen op het
 --    maximum (16383), waardoor Engelse frases daar niet meer matchen.
 --
---    stroom_tsquery() zet de zoekvraag om: de positieve termen in NL OF EN,
---    de uitsluitingen (-woord, -"frase") in NL EN EN. Anders zou de andere
---    taaltak een uitgesloten item alsnog doorlaten.
+--    De zoekvraag wordt in services/search_query.py omgezet: elk woord in de
+--    websearch-boom wordt (NL-stam | EN-stam), zodat OR-voorrang, frases en
+--    uitsluitingen hun betekenis houden.
 --
 --    Alles herberekenen kost ~16 min CPU (5%-steekproef 2026-10-12: 49 s; de
 --    merge verdubbelt de kosten t.o.v. `||`). Een nieuwe GENERATED-kolom zou de
@@ -33,23 +33,6 @@
 --    search_source_version zodra de passage verandert (titel, summary,
 --    description of transcript-begin); de vector is actueel zolang
 --    search_embedded_version daaraan gelijk is.
-
-CREATE OR REPLACE FUNCTION stroom_tsquery_excl(q text) RETURNS tsquery
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT CASE WHEN n <> '' AND numnode(x) > 0 THEN x END
-  FROM (SELECT n, CASE WHEN n <> '' THEN websearch_to_tsquery('dutch', n)
-                                      || websearch_to_tsquery('english', n) END AS x
-        FROM (SELECT coalesce(string_agg(m[2], ' or '), '') AS n
-              FROM regexp_matches(q, '(^|\s)-("[^"]*"|[^\s"]+)', 'g') AS m) neg) t
-$$;
-
-CREATE OR REPLACE FUNCTION stroom_tsquery(q text) RETURNS tsquery
-LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
-  SELECT CASE WHEN ex IS NULL THEN pos ELSE pos && !! ex END
-  FROM (SELECT websearch_to_tsquery('dutch', p) || websearch_to_tsquery('english', p) AS pos,
-               stroom_tsquery_excl(q) AS ex
-        FROM (SELECT regexp_replace(q, '(^|\s)-("[^"]*"|[^\s"]+)', '\1', 'g') AS p) s) t
-$$;
 
 CREATE OR REPLACE FUNCTION stroom_tsv_merge(a tsvector, b tsvector) RETURNS tsvector
 LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $$
