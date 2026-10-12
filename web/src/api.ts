@@ -114,6 +114,28 @@ export async function fetchHuygens(slug: string): Promise<HuygensTopic> {
   return r.json();
 }
 
+export type SearchMode = 'hybrid' | 'keyword' | 'semantic';
+
+export interface SearchHit {
+  id: string;
+  title: string;
+  format: ItemFormat;
+  source_name: string;
+  published_at: string | null;
+  // Tekst met <mark>…</mark> rond de treffers (ts_headline); verder ongeëscaped.
+  snippet: string;
+  rank: number;
+  match: 'keyword' | 'semantic' | 'both';
+}
+
+export async function searchItems(q: string, opts: { format?: ItemFormat | null; mode?: SearchMode; limit?: number; signal?: AbortSignal } = {}): Promise<SearchHit[]> {
+  const p = new URLSearchParams({ q, limit: String(opts.limit ?? 30) });
+  if (opts.format) p.set('format', opts.format);
+  if (opts.mode) p.set('mode', opts.mode);
+  const r = await apiFetch(`/api/search?${p.toString()}`, { signal: opts.signal });
+  return r.json();
+}
+
 export type ItemStatus = 'new' | 'pinned' | 'later' | 'archived';
 export type ProcessingStatus = 'pending' | 'queued' | 'transcribe_queued' | 'summarize_queued' | 'transcribing' | 'summarizing' | 'ready' | 'failed';
 
