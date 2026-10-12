@@ -13,7 +13,7 @@ from models.base import (
 )
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
-from services import decision_scorer
+from services import decision_scorer, search_index
 from services.score_guards import auto_score_guard as _auto_score_guard
 import asyncio
 import hmac
@@ -400,6 +400,9 @@ async def lifespan(app: FastAPI):
         worker_tasks.append(asyncio.create_task(_summarize_worker(i, async_session_maker)))
     worker_tasks.append(asyncio.create_task(_transcribe_worker(async_session_maker)))
     worker_tasks.append(asyncio.create_task(_queue_depth_logger(async_session_maker)))
+    if search_index.ENABLED:
+        worker_tasks.append(asyncio.create_task(
+            search_index.embed_loop(async_session_maker, app.state.http_client)))
     if decision_scorer.ENABLED:
         worker_tasks.append(asyncio.create_task(_decision_score_loop(async_session_maker)))
         print(f"[lifespan] decision-scorer aan: {decision_scorer.DECISION_MODEL} via "
@@ -706,45 +709,31 @@ class SearchHit(BaseModel):
     published_at: Optional[str]
     snippet: str
     rank: float
+    match: Literal["keyword", "semantic", "both"]
 
 
 @app.get("/search", response_model=List[SearchHit])
 async def search_items(q: str = Query(..., min_length=2),
                        format: Optional[str] = Query(None),
                        limit: int = Query(20, le=100),
+                       mode: Literal["hybrid", "keyword", "semantic"] = Query("hybrid"),
                        session=Depends(get_async_session)):
-    """Postgres FTS over title+summary+transcript+description.
-    `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'."""
-    fmt_filter = ""
-    params: dict = {"q": q, "lim": limit}
-    if format in ("article", "podcast", "video"):
-        fmt_filter = "AND i.format = :fmt::item_format"
-        params["fmt"] = format
-
-    r = await session.exec(sa_text(
-        f"""
-        SELECT i.id::text, i.title, i.format::text, s.name,
-               i.published_at,
-               ts_headline('simple',
-                           coalesce(i.summary, i.description, left(i.transcript, 4000), ''),
-                           websearch_to_tsquery('simple', :q),
-                           'MaxFragments=2,MinWords=8,MaxWords=22,StartSel=<mark>,StopSel=</mark>') as snippet,
-               ts_rank(i.search_tsv, websearch_to_tsquery('simple', :q)) as rank
-        FROM items i
-        JOIN sources s ON s.id = i.source_id
-        WHERE i.search_tsv @@ websearch_to_tsquery('simple', :q)
-          AND i.status <> 'archived'::item_status
-          {fmt_filter}
-        ORDER BY rank DESC, i.published_at DESC NULLS LAST
-        LIMIT :lim
-        """
-    ).bindparams(**params))
-    rows = r.all()
+    """Hybride zoeken: FTS met NL+EN-stemming over title+summary+transcript+description,
+    plus semantisch via de zoekvectoren, samengevoegd met RRF (zie services/search_index).
+    `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'.
+    Is de embed-sidecar onbereikbaar, dan valt hybrid terug op alleen keyword.
+    `rank` is de RRF-score; `match` zegt uit welke ranglijst(en) de hit komt."""
+    fmt = format if format in ("article", "podcast", "video") else None
+    qvec = None
+    if mode != "keyword":
+        qvec = await search_index.embed_query(app.state.http_client, q)
+    rows = await search_index.search(session, q, qvec, fmt, limit, mode)
     return [SearchHit(
         id=row[0], title=row[1], format=row[2], source_name=row[3],
         published_at=str(row[4]) if row[4] else None,
         snippet=row[5] or "",
         rank=float(row[6]),
+        match=row[7],
     ) for row in rows]
 
 

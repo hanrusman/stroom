@@ -215,12 +215,12 @@ async def search_transcripts(
                i.summary,
                i.transcript,
                i.transcript_segments,
-               ts_rank(i.search_tsv, plainto_tsquery('simple', :q)) AS rank
+               ts_rank(i.search_tsv, stroom_tsquery(:q)) AS rank
         FROM items i
         JOIN sources s ON s.id = i.source_id
         WHERE i.transcript IS NOT NULL
           AND i.transcript <> ''
-          AND i.search_tsv @@ plainto_tsquery('simple', :q)
+          AND i.search_tsv @@ stroom_tsquery(:q)
         ORDER BY rank DESC, i.published_at DESC NULLS LAST
         LIMIT :lim
     """).bindparams(q=q, lim=limit)
