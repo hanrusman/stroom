@@ -1796,14 +1796,17 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; o
   );
 };
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; q: string | null } => {
+const parseSearchFormat = (v: string | null): ItemFormat | null =>
+  v === 'article' || v === 'podcast' || v === 'video' ? v : null;
+
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; q: string | null; fmt: ItemFormat | null } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
     sourceId: p.get('source'),
     admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
     // ?q= (ook leeg) = zoekpagina open
-    q: p.get('q'),
+    q: p.get('q'), fmt: parseSearchFormat(p.get('fmt')),
   };
 };
 
@@ -2660,16 +2663,18 @@ const SEARCH_FORMATS: { value: ItemFormat | null; label: string }[] = [
   { value: 'video', label: 'Video' },
 ];
 
-function SearchPage({ query, onQueryChange, onBack, onOpenItem }: {
-  query: string; onQueryChange: (q: string) => void;
+// Gecontroleerd door AuthedApp, dat vraag en formaat uit de URL haalt: de
+// pagina wordt ontkoppeld zodra je een resultaat opent, en browser-terug moet
+// invoer, filter en resultaten weer gelijk zetten met de URL.
+function SearchPage({ query, format, onChange, onBack, onOpenItem }: {
+  query: string; format: ItemFormat | null;
+  onChange: (next: { q?: string; format?: ItemFormat | null }) => void;
   onBack: () => void; onOpenItem: (id: string) => void;
 }) {
-  const [input, setInput] = useState(query);
-  const [format, setFormat] = useState<ItemFormat | null>(null);
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const q = input.trim();
+  const q = query.trim();
 
   useEffect(() => {
     if (q.length < 2) { setHits(null); setError(null); setLoading(false); return; }
@@ -2700,8 +2705,8 @@ function SearchPage({ query, onQueryChange, onBack, onOpenItem }: {
         <label className="flex items-center gap-3 border-b-2 border-brand-ink/15 focus-within:border-brand-accent transition-colors pb-2">
           <Search size={20} className="text-brand-ink/40 shrink-0" aria-hidden />
           <span className="sr-only">Zoekterm</span>
-          <input type="search" autoFocus value={input}
-            onChange={e => { setInput(e.target.value); onQueryChange(e.target.value); }}
+          <input type="search" autoFocus value={query}
+            onChange={e => onChange({ q: e.target.value })}
             placeholder="Zoek in titels, samenvattingen en transcripts"
             className="w-full bg-transparent font-serif text-xl md:text-2xl text-brand-ink placeholder:text-brand-ink/30 outline-none" />
           {loading && <Loader2 size={18} className="animate-spin text-brand-ink/40 shrink-0" aria-label="Zoeken…" />}
@@ -2715,7 +2720,7 @@ function SearchPage({ query, onQueryChange, onBack, onOpenItem }: {
 
       <div className="flex gap-2 mb-10 flex-wrap">
         {SEARCH_FORMATS.map(f => (
-          <button key={f.label} onClick={() => setFormat(f.value)} aria-pressed={format === f.value}
+          <button key={f.label} onClick={() => onChange({ format: f.value })} aria-pressed={format === f.value}
             className={`px-4 py-1.5 rounded-full text-[12px] font-medium transition-all ${
               format === f.value ? 'bg-brand-accent text-brand-cream shadow-sm'
               : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
@@ -2782,16 +2787,18 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
   const [searchQuery, setSearchQuery] = useState<string | null>(() => readUrl().q);
+  const [searchFormat, setSearchFormat] = useState<ItemFormat | null>(() => readUrl().fmt);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, sourceId, admin, lessons, q } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, q, fmt } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
       setSearchQuery(q);
+      setSearchFormat(fmt);
       if (topic) setActiveSlug(topic);
     };
     window.addEventListener('popstate', onPop);
@@ -2805,18 +2812,26 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
     url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setItemId(null);
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
     setSearchQuery(null);
+    setSearchFormat(null);
     setActiveFilter('all');
     setActiveWindow('all');
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
   const openSearch = () => {
+    // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
+    // naar een oudere vraag springen dan het invoerveld toonde).
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView) {
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      return;
+    }
     const url = new URL(window.location.href);
     const q = url.searchParams.get('q') ?? '';
     url.searchParams.set('q', q);
@@ -2826,6 +2841,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.delete('lessons');
     window.history.pushState({}, '', url.toString());
     setSearchQuery(q);
+    setSearchFormat(parseSearchFormat(url.searchParams.get('fmt')));
     setItemId(null);
     setSourceId(null);
     setAdminMode(false);
@@ -2833,20 +2849,29 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
-  // Typen vervangt de URL (geen history-entry per toetsaanslag), zodat terug
-  // vanuit een geopend resultaat bij dezelfde zoekvraag uitkomt.
-  const updateSearchQuery = (q: string) => {
+  // Typen en filteren vervangen de URL (geen history-entry per toetsaanslag),
+  // zodat terug vanuit een geopend resultaat bij dezelfde vraag uitkomt.
+  const updateSearch = (next: { q?: string; format?: ItemFormat | null }) => {
     const url = new URL(window.location.href);
-    url.searchParams.set('q', q);
+    if (next.q !== undefined) {
+      url.searchParams.set('q', next.q);
+      setSearchQuery(next.q);
+    }
+    if (next.format !== undefined) {
+      if (next.format) url.searchParams.set('fmt', next.format);
+      else url.searchParams.delete('fmt');
+      setSearchFormat(next.format);
+    }
     window.history.replaceState({}, '', url.toString());
-    setSearchQuery(q);
   };
 
   const closeSearch = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setSearchQuery(null);
+    setSearchFormat(null);
   };
 
   const openLessons = () => {
@@ -2855,6 +2880,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
     url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setLessonsView(true);
     setItemId(null);
@@ -2875,6 +2901,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.set('admin', '1');
     url.searchParams.delete('item');
     url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setAdminMode(true);
     setItemId(null);
@@ -3000,7 +3027,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
         ) : searchQuery !== null ? (
-          <SearchPage query={searchQuery} onQueryChange={updateSearchQuery}
+          <SearchPage query={searchQuery} format={searchFormat} onChange={updateSearch}
             onBack={closeSearch} onOpenItem={openItem} />
         ) : (
           <>
