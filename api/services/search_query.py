@@ -183,7 +183,17 @@ def global_exclusions(node: Optional[Node]) -> Optional[Node]:
     return excl
 
 
-_STEMMABLE = re.compile(r"^[^\W\d_]+$")  # alleen letters; getallen e.d. gaan via 'simple'
+# Per token van de vraag: het ruwe lexeem ('simple') naast wat de 'dutch'- en
+# 'english'-config ervan maken. Zelfde parser, dus dezelfde tokens in dezelfde
+# volgorde; zo volgt de stemming de tokentypen en dictionaries van de index,
+# ook voor samengestelde woorden ('data-centers' → data-center / data-cent).
+_STEMS_SQL = """
+    SELECT s.lexemes[1], d.lexemes, e.lexemes
+    FROM ts_debug('simple', :q) WITH ORDINALITY AS s(a, b, c, f, g, lexemes, n)
+    JOIN ts_debug('dutch', :q) WITH ORDINALITY AS d(a, b, c, f, g, lexemes, n) USING (n)
+    JOIN ts_debug('english', :q) WITH ORDINALITY AS e(a, b, c, f, g, lexemes, n) USING (n)
+    WHERE s.lexemes IS NOT NULL AND cardinality(s.lexemes) > 0
+"""
 
 
 async def build(session, q: str) -> tuple[Optional[str], Optional[str]]:
@@ -193,18 +203,11 @@ async def build(session, q: str) -> tuple[Optional[str], Optional[str]]:
     raw = (await session.exec(sa_text(
         "SELECT websearch_to_tsquery('simple', :q)::text").bindparams(q=q))).scalar()
     tree = parse(raw or "")
-    words = sorted(w for w in lexemes(tree) if _STEMMABLE.match(w))
     stems: dict[str, list[str]] = {}
-    if words:
-        rows = (await session.exec(sa_text("""
-            SELECT w, ts_lexize('dutch_stem', w), ts_lexize('english_stem', w)
-            FROM unnest(CAST(:ws AS text[])) AS w
-        """).bindparams(ws=words))).all()
-        for w, nl, en in rows:
-            # [] = stopwoord in die taal; NULL (niet herkend) = woord zelf.
-            if nl is None and en is None:
-                continue
-            stems[w] = list(dict.fromkeys((nl or []) + (en or [])))
+    for word, nl, en in (await session.exec(sa_text(_STEMS_SQL).bindparams(q=q))).all():
+        # [] = stopwoord in die taal; NULL = geen dictionary, het woord zelf telt.
+        alts = (nl if nl is not None else [word]) + (en if en is not None else [word])
+        stems[word] = list(dict.fromkeys(stems.get(word, []) + alts))
     tsq = expand(tree, stems)
     excl = expand(global_exclusions(tree), stems)
     return (serialize(tsq) if tsq else None, serialize(excl) if excl else None)

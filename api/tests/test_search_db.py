@@ -402,3 +402,16 @@ async def test_frase_met_dubbel_stopwoord(db):
 
     assert [t for t, _ in await _search(engine, '"verkiezing in nederland"', mode="keyword")] == [
         "De verkiezingen in Nederland"]
+
+
+@pytest.mark.parametrize("title,q", [
+    ("Waarom open-source wint", "open-source"),
+    ("Nieuwe data-centers in Groningen", "data-centers"),
+    ("Covid-19 cijfers", "covid-19"),
+])
+async def test_samengestelde_woorden_matchen_de_index(db, title, q):
+    engine, _ = db
+    await _insert(engine, title)
+    await _migrate(engine)
+
+    assert [t for t, _ in await _search(engine, q, mode="keyword")] == [title]
