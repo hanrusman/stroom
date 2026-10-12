@@ -224,7 +224,40 @@ async def test_frase_en_uitsluiting_blijven_werken(db):
         "Tour de France etappe"]
 
 
+async def test_uitsluiting_geldt_voor_beide_stemvarianten(db):
+    engine, _ = db
+    await _insert(engine, "Tour runs")
+    await _insert(engine, "Tour de France")
+    await _migrate(engine)
+
+    assert "Tour runs" in [t for t, _ in await _search(engine, "running", mode="keyword")]
+    assert [t for t, _ in await _search(engine, "tour -running", mode="keyword")] == [
+        "Tour de France"]
+    assert [t for t, _ in await _search(engine, 'tour -"tour runs"', mode="keyword")] == [
+        "Tour de France"]
+
+
+async def test_engelse_frase_matcht_achter_in_lang_transcript(db):
+    engine, _ = db
+    item = await _insert(engine, "Lange podcast")
+    await _migrate(engine)
+    async with engine.begin() as conn:
+        await conn.execute(text(
+            "UPDATE items SET transcript = repeat('woord ', 10000) || 'running elections' "
+            "WHERE id = CAST(:i AS uuid)"), {"i": item})
+
+    assert await _search(engine, '"run election"', mode="keyword") == [
+        ("Lange podcast", "keyword")]
+
+
 # --- embed-batch ---
+
+async def _set(engine, item, **cols) -> None:
+    sets = ", ".join(f"{c} = :{c}" for c in cols)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"UPDATE items SET {sets} WHERE id = CAST(:i AS uuid)"),
+                           {"i": item, **cols})
+
 
 async def test_embed_batch_vult_vectoren_en_embedt_opnieuw_na_nieuwe_summary(db):
     engine, fake = db
@@ -232,16 +265,32 @@ async def test_embed_batch_vult_vectoren_en_embedt_opnieuw_na_nieuwe_summary(db)
     await _migrate(engine)
 
     await _embed_all(engine)
-    assert fake.calls[-1][0] == "passage"
+    assert fake.calls[-1] == ("passage", ["Zonder samenvatting"])
     assert await si.embed_batch(_maker(engine), None) == 0  # niets meer te doen
 
-    async with engine.begin() as conn:
-        await conn.execute(text(
-            "UPDATE items SET summary = 'Over wielrennen', "
-            "summary_generated_at = now() + interval '1 second' WHERE id = CAST(:i AS uuid)"),
-            {"i": item})
+    await _set(engine, item, summary="Over wielrennen")
     assert await si.embed_batch(_maker(engine), None) == 1
-    assert "Over wielrennen" in fake.calls[-1][1][0]
+    assert fake.calls[-1][1] == ["Zonder samenvatting\n\nOver wielrennen"]
+
+
+async def test_embed_batch_embedt_opnieuw_na_wijziging_van_titel_of_description(db):
+    engine, fake = db
+    item = await _insert(engine, "Wielrennen")
+    await _migrate(engine)
+    await _embed_all(engine)
+
+    await _set(engine, item, title="Koken")
+    assert await si.embed_batch(_maker(engine), None) == 1
+    assert fake.calls[-1][1] == ["Koken"]
+    assert await _search(engine, "koken", mode="semantic") == [("Koken", "semantic")]
+
+    await _set(engine, item, description="Stoofpot")
+    assert await si.embed_batch(_maker(engine), None) == 1
+    assert fake.calls[-1][1] == ["Koken\n\nStoofpot"]
+
+    # Ongewijzigde passage (zelfde titel, transcript buiten de passage): geen werk.
+    await _set(engine, item, title="Koken", transcript="lang transcript")
+    assert await si.embed_batch(_maker(engine), None) == 0
 
 
 async def test_embed_batch_schrijft_niet_over_een_nieuwere_summary(db, monkeypatch):
@@ -250,11 +299,7 @@ async def test_embed_batch_schrijft_niet_over_een_nieuwere_summary(db, monkeypat
     await _migrate(engine)
 
     async def embed_during_new_summary(client, texts, prefix, timeout):
-        async with engine.begin() as conn:
-            await conn.execute(text(
-                "UPDATE items SET summary = 'nieuw', "
-                "summary_generated_at = summary_generated_at + interval '1 second' "
-                "WHERE id = CAST(:i AS uuid)"), {"i": item})
+        await _set(engine, item, summary="nieuw")
         return [_fake_vector(t) for t in texts]
     monkeypatch.setattr(si, "embed", embed_during_new_summary)
     await si.embed_batch(_maker(engine), None)
@@ -263,6 +308,7 @@ async def test_embed_batch_schrijft_niet_over_een_nieuwere_summary(db, monkeypat
         emb = (await conn.execute(text(
             "SELECT search_embedding FROM items WHERE id = CAST(:i AS uuid)"), {"i": item})).scalar()
     assert emb is None
+    assert await si.embed_batch(_maker(engine), None) == 1  # volgende ronde: nieuwe summary
 
 
 # --- hybride zoeken ---
@@ -304,3 +350,18 @@ async def test_zonder_query_vector_valt_hybride_terug_op_keyword(db):
         rows = await si.search(s, "kabinet", None, None, 10, "hybrid")
         assert [(r[1], r[7]) for r in rows] == [("Kabinet valt", "keyword")]
         assert await si.search(s, "kabinet", None, None, 10, "semantic") == []
+
+
+async def test_hybride_respecteert_uitsluiting_in_semantische_tak(db):
+    engine, fake = db
+    await _insert(engine, "Tour de France", summary="wielrennen")
+    item = await _insert(engine, "Etappe in Den Haag", summary="wielrennen")
+    await _migrate(engine)
+    # 'kabinet' staat alleen in de description: in search_tsv, niet in de passage.
+    await _set(engine, item, description="Langs het kabinet")
+    await _embed_all(engine)
+
+    assert {t for t, _ in await _search(engine, "fiets")} == {
+        "Tour de France", "Etappe in Den Haag"}
+    assert await _search(engine, "fiets -kabinet") == [("Tour de France", "semantic")]
+    assert fake.calls[-1] == ("query", ["fiets"])

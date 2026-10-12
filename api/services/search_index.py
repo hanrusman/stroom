@@ -13,6 +13,7 @@ backfill duurt daardoor uren; recente items gaan voor.
 """
 import asyncio
 import os
+import re
 from typing import Optional
 
 import httpx
@@ -26,8 +27,6 @@ BATCH_PAUSE_SEC = float(os.environ.get("SEARCH_EMBED_PAUSE_SEC", "5"))
 IDLE_SEC = float(os.environ.get("SEARCH_EMBED_IDLE_SEC", "300"))
 PASSAGE_TIMEOUT_SEC = float(os.environ.get("SEARCH_EMBED_TIMEOUT_SEC", "120"))
 QUERY_TIMEOUT_SEC = float(os.environ.get("SEARCH_QUERY_EMBED_TIMEOUT_SEC", "5"))
-# e5 truncatet zelf op 512 tokens; meer tekst sturen is alleen netwerk.
-PASSAGE_CHARS = 2000
 # Semantische hits verder dan deze cosine-afstand tellen niet mee: zonder
 # drempel levert de vectorzoektocht altijd `pool` items op, ook bij onzin.
 # e5-small perst alles samen: in een steekproef van 320 recente items (2026-10-12)
@@ -38,13 +37,8 @@ MAX_DISTANCE = float(os.environ.get("SEARCH_SEMANTIC_MAX_DISTANCE", "0.17"))
 POOL = 50
 RRF_K = 60
 
-# Hetzelfde tekstfragment voor selectie, embedding en de fallback-volgorde.
-_PASSAGE_BODY = ("coalesce(nullif(i.summary, ''), nullif(i.description, ''), "
-                 f"left(i.transcript, {PASSAGE_CHARS}), '')")
-
-
-def passage_text(title: Optional[str], body: Optional[str]) -> str:
-    return f"{title or ''}\n\n{(body or '')[:PASSAGE_CHARS]}".strip()
+# Zelfde patroon als stroom_tsquery_excl in migratie 024: -woord en -"frase".
+_EXCLUSION = re.compile(r'(^|\s)-("[^"]*"|[^\s"]+)')
 
 
 def _vec_literal(vec: list[float]) -> str:
@@ -62,41 +56,45 @@ async def embed(client: httpx.AsyncClient, texts: list[str], prefix: str,
 async def embed_query(client: httpx.AsyncClient, q: str) -> Optional[list[float]]:
     """Query-vector, of None als de sidecar er niet is of te traag is —
     de caller valt dan terug op alleen keyword."""
-    if not EMBED_SERVICE_URL:
+    # Uitsluitingen niet meeembedden: 'tour -kabinet' moet niet naar kabinet zoeken.
+    text = _EXCLUSION.sub(r"\1", q).strip()
+    if not EMBED_SERVICE_URL or not text:
         return None
     try:
-        return (await embed(client, [q], "query", QUERY_TIMEOUT_SEC))[0]
+        return (await embed(client, [text], "query", QUERY_TIMEOUT_SEC))[0]
     except Exception as e:
         print(f"[search] query-embedding faalde, alleen keyword: {e!r}", flush=True)
         return None
 
 
 async def embed_batch(async_session_maker, client: httpx.AsyncClient) -> int:
-    """Embed één batch items zonder (actuele) zoekvector. Geeft het aantal
-    geschreven vectoren terug; 0 = niets te doen."""
+    """Embed één batch items zonder actuele zoekvector. Geeft het aantal
+    geschreven vectoren terug; 0 = niets te doen.
+
+    Actueel = search_embedded_version gelijk aan search_source_version; de
+    trigger uit migratie 024 verhoogt die laatste zodra de passage verandert."""
     async with async_session_maker() as session:
-        rows = (await session.exec(sa_text(f"""
-            SELECT i.id::text, i.title, {_PASSAGE_BODY}, i.summary_generated_at
+        rows = (await session.exec(sa_text("""
+            SELECT i.id::text,
+                   stroom_search_passage(i.title, i.summary, i.description, i.transcript),
+                   i.search_source_version
             FROM items i
-            WHERE i.search_embedding IS NULL
-               OR i.summary_generated_at > i.search_embedded_at
+            WHERE i.search_embedded_version IS DISTINCT FROM i.search_source_version
             ORDER BY i.published_at DESC NULLS LAST
             LIMIT :n
         """).bindparams(n=BATCH_SIZE))).all()
     if not rows:
         return 0
-    vectors = await embed(client, [passage_text(r[1], r[2]) for r in rows],
-                          "passage", PASSAGE_TIMEOUT_SEC)
+    vectors = await embed(client, [r[1] for r in rows], "passage", PASSAGE_TIMEOUT_SEC)
     async with async_session_maker() as session:
         for r, vec in zip(rows, vectors):
-            # Is er tijdens het embedden een nieuwe summary gekomen, dan hoort
-            # deze vector daar niet bij; de volgende ronde pakt het item weer op.
+            # Is de passage tijdens het embedden veranderd, dan hoort deze
+            # vector er niet bij; de volgende ronde pakt het item weer op.
             await session.exec(sa_text("""
                 UPDATE items SET search_embedding = CAST(:v AS vector),
-                                 search_embedded_at = now()
-                WHERE id = CAST(:i AS uuid)
-                  AND summary_generated_at IS NOT DISTINCT FROM :sg
-            """).bindparams(v=_vec_literal(vec), i=r[0], sg=r[3]))
+                                 search_embedded_version = :ver
+                WHERE id = CAST(:i AS uuid) AND search_source_version = :ver
+            """).bindparams(v=_vec_literal(vec), i=r[0], ver=r[2]))
         await session.commit()
     return len(rows)
 
@@ -151,6 +149,8 @@ async def search(session, q: str, qvec: Optional[list[float]], fmt: Optional[str
                 FROM items i
                 WHERE i.search_embedding IS NOT NULL
                   AND i.status <> 'archived'::item_status {fmt_filter}
+                  -- -woord / -"frase" uit de zoekvraag gelden hier ook.
+                  AND NOT coalesce(i.search_tsv @@ stroom_tsquery_excl(:q), false)
                 ORDER BY d LIMIT :pool
             ) nn
             WHERE d <= :maxd
