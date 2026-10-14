@@ -1221,7 +1221,7 @@ async def summarize_item(item_id: str, background_tasks: BackgroundTasks,
                 await _distill_lessons_for_item(item_id, summary.strip(), article_body,
                                                 llm, async_session_maker)
             except Exception as exc:
-                print(f"[summarize_item] distill faalde voor {item_id}: {exc}", flush=True)
+                print(f"[summarize_item] distill faalde voor {item_id}: {exc!r}", flush=True)
     except Exception as exc:
         await session.exec(sa_text(
             "UPDATE items SET processing_status='failed'::processing_status, processing_error=:e "
@@ -1979,6 +1979,10 @@ _ARTICLE_SUMMARY_SYSTEM = (
 # Minimaal aantal chars in de geëxtraheerde body voordat lesson-distill draait.
 # Beschermt tegen oppervlakkige/verzonnen lessen op een RSS-teaser i.p.v. full-text.
 ARTICLE_MIN_BODY_FOR_LESSONS = int(os.environ.get('ARTICLE_MIN_BODY_FOR_LESSONS', 800))
+# De host-Qwen (stroom-bulk) wordt gedeeld met andere huurders; direct na de
+# :01-cron zijn de slots vol en wachtte distill >180s (de call_llm-default) —
+# ~7% van de artikelen kreeg zo nooit lessen. Los duurt de call ~20-25s.
+DISTILL_TIMEOUT_SEC = float(os.environ.get('DISTILL_TIMEOUT_SEC', 420))
 
 
 def _pick_summary_route(raw: str, duration_seconds: int | None,
@@ -2139,14 +2143,11 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
         # full-text echt geëxtraheerd is — niet alleen een RSS-teaser, anders
         # krijg je oppervlakkige/verzonnen lessen. _distill_lessons_for_item slaat
         # zelf over als het item al lessen heeft (idempotent bij retry).
-        # Best-effort: faalt distill, dan blijft summary nog steeds geldig.
+        # Best-effort en los van de worker: de summary staat al, en een trage
+        # distill mag de queue (en de worker-heartbeat) niet ophouden.
         if ((is_article or source_name == _INBOX_SOURCE_NAME)
                 and len(article_body) >= ARTICLE_MIN_BODY_FOR_LESSONS):
-            try:
-                await _distill_lessons_for_item(item_id, summary, article_body,
-                                                llm_service, async_session_maker)
-            except Exception as exc:
-                print(f"[sum-worker] distill faalde voor {item_id}: {exc}", flush=True)
+            _spawn_distill(item_id, summary, article_body, llm_service, async_session_maker)
 
         return True
     except Exception as exc:
@@ -2160,6 +2161,26 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
         except Exception:
             pass
         return False
+
+
+_distill_tasks: set[asyncio.Task] = set()
+# Max gelijktijdige distills richting de gedeelde host-Qwen.
+_distill_sem = asyncio.Semaphore(2)
+
+
+def _spawn_distill(item_id: str, summary: str, article_body: str,
+                   llm_service, async_session_maker) -> None:
+    async def _run():
+        try:
+            async with _distill_sem:
+                await _distill_lessons_for_item(item_id, summary, article_body,
+                                                llm_service, async_session_maker)
+        except Exception as exc:
+            print(f"[sum-worker] distill faalde voor {item_id}: {exc!r}", flush=True)
+
+    task = asyncio.create_task(_run())
+    _distill_tasks.add(task)  # referentie houden, anders kan GC de task opruimen
+    task.add_done_callback(_distill_tasks.discard)
 
 
 async def _distill_lessons_for_item(item_id: str, summary: str, article_body: str,
@@ -2190,7 +2211,7 @@ async def _distill_lessons_for_item(item_id: str, summary: str, article_body: st
         "stroom-bulk",
         [{"role": "system", "content": system},
          {"role": "user", "content": f"Samenvatting: {summary}\n\nArtikel tekst:\n{body_text}"}],
-        temperature=0.4, response_format="json_object",
+        temperature=0.4, response_format="json_object", timeout=DISTILL_TIMEOUT_SEC,
     )
     import json as _json
     from services.llm_service import parse_llm_json
