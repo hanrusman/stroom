@@ -1841,7 +1841,8 @@ const EinkReader = ({ id, onBack }: { id: string; onBack: () => void }) => {
       ? sanitizeMarkdown(item.transcript)
       : item.summary
         ? sanitizeMarkdown(item.summary)
-        : DOMPurify.sanitize(item.description ?? '')
+        // RSS-beschrijvingen bevatten vaak <img>; DOMPurify's default laat die door.
+        : DOMPurify.sanitize(item.description ?? '', { FORBID_TAGS: ['img', 'picture', 'source', 'video', 'audio', 'iframe', 'svg', 'canvas', 'object', 'embed'] })
     : '';
 
   const date = item?.published_at
@@ -1950,14 +1951,17 @@ function useDarkMode(): [boolean, () => void] {
 
 function AppWithStickyPlayer({ user, onLogout }: { user: User; onLogout: () => void }) {
   const { currentTrack } = useGlobalAudio();
+  // In de e-reader geen player-balk (kleur, artwork en bewegende voortgang geven
+  // ghosting op e-ink); de audio zelf speelt gewoon door.
+  const [readerOpen, setReaderOpen] = useState(false);
   return (
     <>
       <SettingsProvider>
-        <AuthedApp user={user} onLogout={onLogout} />
+        <AuthedApp user={user} onLogout={onLogout} onReaderModeChange={setReaderOpen} />
       </SettingsProvider>
-      <StickyPlayer />
+      {!readerOpen && <StickyPlayer />}
       {/* Spacer voor sticky player hoogte */}
-      {currentTrack && <div className="h-[76px]" />}
+      {!readerOpen && currentTrack && <div className="h-[76px]" />}
     </>
   );
 }
@@ -2859,7 +2863,7 @@ function SearchPage({ query, format, onChange, onBack, onOpenItem }: {
 }
 
 
-function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogout: () => void; onReaderModeChange?: (open: boolean) => void }) {
   const [dark, toggleDark] = useDarkMode();
   const [adminMode, setAdminMode] = useState<boolean>(() => readUrl().admin);
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -3074,7 +3078,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     fetchHuygens(activeSlug).then(setData).catch(e => setError(String(e)));
   }, [activeSlug]);
 
-  if (einkMode && itemId) {
+  const readerOpen = einkMode && !!itemId;
+  useEffect(() => { onReaderModeChange?.(readerOpen); }, [readerOpen, onReaderModeChange]);
+
+  if (readerOpen) {
     return <EinkReader id={itemId} onBack={closeEink} />;
   }
 
