@@ -664,7 +664,7 @@ const LessonsSection = ({ itemId }: { itemId: string }) => {
       const prevCount = lessons?.length ?? 0;
       setLessons(updated);
       if (updated.length === prevCount) setDistillError('Geen nieuwe lessen gevonden — alles stond er al.');
-    } catch (e) { setDistillError(String(e)); }
+    } catch (e) { setDistillError(e instanceof ApiError ? e.detail : e instanceof Error ? e.message : String(e)); }
     finally { setDistilling(false); }
   };
 
@@ -1186,7 +1186,7 @@ const LessonsTab = ({ itemId, lessons, setLessons }: {
       const updated = await distillMoreLessons(itemId, getDefault('distill'));
       setLessons(() => updated);
     } catch (e) {
-      setError(e instanceof ApiError ? e.detail : String(e));
+      setError(e instanceof ApiError ? e.detail : e instanceof Error ? e.message : String(e));
     } finally {
       setDistilling(false);
     }
