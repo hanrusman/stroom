@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from typing import List, Literal, Optional
 
@@ -224,79 +225,117 @@ def _next_idx(rows: list[tuple]) -> int:
     return (max((r[0] for r in rows), default=0) + 1)
 
 
-@router.post("/huygens/items/{item_id}/lessons/distill", response_model=List[LessonRead])
+class DistillJob(BaseModel):
+    status: Literal["idle", "running", "done", "error"]
+    inserted: int = 0
+    error: Optional[str] = None
+
+
+# Distill duurt met reasoning-modellen (Kimi) vaak >60s, langer dan de reverse
+# proxy van de host wacht (504). Daarom start POST een achtergrondjob en pollt
+# de frontend GET. In-memory volstaat: de API draait in één uvicorn-proces.
+_distill_jobs: dict[str, DistillJob] = {}
+_distill_tasks: set = set()
+
+
+async def _run_distill(item_id: str, model: str, model_alias: str, llm: LLMService) -> None:
+    import json
+    job = _distill_jobs[item_id]
+    try:
+        async with async_session_maker() as session:
+            title, transcript, summary = (await session.exec(sa_text(
+                "SELECT title, transcript, summary FROM items WHERE id = CAST(:i AS uuid)"
+            ).bindparams(i=item_id))).first()
+            body_text = (transcript or "").strip() or (summary or "").strip()
+
+            existing = (await session.exec(sa_text(
+                "SELECT idx, title, body FROM lessons WHERE item_id = CAST(:i AS uuid) ORDER BY idx ASC"
+            ).bindparams(i=item_id))).all()
+
+        existing_lines = "\n".join(f"- {r[1]}: {r[2]}" for r in existing) or "(nog geen lessen)"
+
+        system = (
+            "Je destilleert kernlessen uit een bron (podcast/artikel). "
+            "Je hebt al een lijst bestaande lessen gekregen. Lever ALLEEN nieuwe, niet-redundante lessen. "
+            "Als alles al gezegd is, lever een lege lijst.\n\n"
+            "Output: strikt JSON, vorm: {\"lessons\": [{\"title\": \"…\", \"body\": \"…\"}]}\n"
+            "- title: korte kop (4-8 woorden)\n"
+            "- body: 1-3 zinnen, concreet en bruikbaar\n"
+            "Maximaal 5 nieuwe lessen. Liever 0 dan dubbel."
+        )
+        user_prompt = (
+            f"Bron: '{title}'\n\nBestaande lessen:\n{existing_lines}\n\n"
+            f"Tekst:\n{body_text[:18000]}"
+        )
+
+        raw = await llm.call_llm(
+            model_alias,
+            [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
+            temperature=0.4, response_format="json_object", timeout=420.0,
+        )
+
+        try:
+            data = parse_llm_json(raw)
+            new_lessons = data.get("lessons", []) or []
+        except (json.JSONDecodeError, AttributeError):
+            print(f"[distill] geen geldig JSON van {model_alias}: {raw[:300]!r}", flush=True)
+            job.status, job.error = "error", f"LLM ({model}) gaf geen geldig JSON terug"
+            return
+
+        async with async_session_maker() as session:
+            next_i = _next_idx(existing)
+            for entry in new_lessons:
+                t = (entry.get("title") or "").strip()
+                b = (entry.get("body") or "").strip()
+                if not t or not b:
+                    continue
+                await session.exec(sa_text(
+                    "INSERT INTO lessons (item_id, idx, title, body) "
+                    "VALUES (CAST(:i AS uuid), :idx, :t, :b)"
+                ).bindparams(i=item_id, idx=next_i, t=t, b=b))
+                next_i += 1
+                job.inserted += 1
+            if job.inserted:
+                await session.commit()
+        job.status = "done"
+    except HTTPException as exc:
+        job.status, job.error = "error", str(exc.detail)[:300]
+    except Exception as exc:
+        print(f"[distill] faalde voor {item_id}: {exc!r}", flush=True)
+        job.status, job.error = "error", repr(exc)[:300]
+
+
+@router.post("/huygens/items/{item_id}/lessons/distill", response_model=DistillJob, status_code=202)
 async def distill_more_lessons(item_id: str,
                                request: Request,
                                model: DigestModel = Query("opus"),
                                session=Depends(get_async_session),
                                user=Depends(require_user)):
-    """Genereer extra kernlessen uit transcript (of summary als geen transcript). LLM mag 0 teruggeven."""
+    """Start het genereren van extra kernlessen uit transcript (of summary).
+    Antwoordt direct; voortgang via GET op hetzelfde pad. LLM mag 0 teruggeven."""
     model_alias = resolve_model(model)
+    job = _distill_jobs.get(item_id)
+    if job and job.status == "running":
+        return job
+
     item_row = (await session.exec(sa_text(
-        "SELECT title, transcript, summary FROM items WHERE id = CAST(:i AS uuid)"
+        "SELECT transcript, summary FROM items WHERE id = CAST(:i AS uuid)"
     ).bindparams(i=item_id))).first()
     if not item_row:
         raise HTTPException(status_code=404, detail="Item not found")
-
-    title, transcript, summary = item_row
-    body_text = (transcript or "").strip() or (summary or "").strip()
-    if not body_text:
+    if not ((item_row[0] or "").strip() or (item_row[1] or "").strip()):
         raise HTTPException(status_code=400, detail="Item heeft geen transcript of samenvatting.")
 
-    existing = (await session.exec(sa_text(
-        "SELECT idx, title, body FROM lessons WHERE item_id = CAST(:i AS uuid) ORDER BY idx ASC"
-    ).bindparams(i=item_id))).all()
+    job = _distill_jobs[item_id] = DistillJob(status="running")
+    task = asyncio.create_task(_run_distill(item_id, model, model_alias, _llm(request)))
+    _distill_tasks.add(task)  # referentie houden, anders kan GC de task opruimen
+    task.add_done_callback(_distill_tasks.discard)
+    return job
 
-    existing_lines = "\n".join(f"- {r[1]}: {r[2]}" for r in existing) or "(nog geen lessen)"
 
-    system = (
-        "Je destilleert kernlessen uit een bron (podcast/artikel). "
-        "Je hebt al een lijst bestaande lessen gekregen. Lever ALLEEN nieuwe, niet-redundante lessen. "
-        "Als alles al gezegd is, lever een lege lijst.\n\n"
-        "Output: strikt JSON, vorm: {\"lessons\": [{\"title\": \"…\", \"body\": \"…\"}]}\n"
-        "- title: korte kop (4-8 woorden)\n"
-        "- body: 1-3 zinnen, concreet en bruikbaar\n"
-        "Maximaal 5 nieuwe lessen. Liever 0 dan dubbel."
-    )
-    user_prompt = (
-        f"Bron: '{title}'\n\nBestaande lessen:\n{existing_lines}\n\n"
-        f"Tekst:\n{body_text[:18000]}"
-    )
-
-    raw = await _llm(request).call_llm(
-        model_alias,
-        [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
-        temperature=0.4, response_format="json_object", timeout=240.0,
-    )
-
-    import json
-    try:
-        data = parse_llm_json(raw)
-        new_lessons = data.get("lessons", []) or []
-    except (json.JSONDecodeError, AttributeError):
-        print(f"[distill] geen geldig JSON van {model_alias}: {raw[:300]!r}", flush=True)
-        raise HTTPException(status_code=502, detail=f"LLM ({model}) gaf geen geldig JSON terug")
-
-    next_i = _next_idx(existing)
-    inserted = 0
-    for entry in new_lessons:
-        t = (entry.get("title") or "").strip()
-        b = (entry.get("body") or "").strip()
-        if not t or not b:
-            continue
-        await session.exec(sa_text(
-            "INSERT INTO lessons (item_id, idx, title, body) "
-            "VALUES (CAST(:i AS uuid), :idx, :t, :b)"
-        ).bindparams(i=item_id, idx=next_i, t=t, b=b))
-        next_i += 1
-        inserted += 1
-    if inserted:
-        await session.commit()
-
-    result = await session.exec(sa_text(
-        f"{_LESSON_SELECT} WHERE l.item_id = CAST(:i AS uuid) ORDER BY l.idx ASC"
-    ).bindparams(i=item_id))
-    return [_lesson_row(r) for r in result.all()]
+@router.get("/huygens/items/{item_id}/lessons/distill", response_model=DistillJob)
+async def distill_status(item_id: str, user=Depends(require_user)):
+    return _distill_jobs.get(item_id) or DistillJob(status="idle")
 
 
 # ---- Expand single lesson ----
