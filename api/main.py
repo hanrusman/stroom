@@ -13,6 +13,8 @@ from models.base import (
 )
 from sqlalchemy import text as sa_text
 from services.llm_service import LLMService
+from services import decision_scorer, search_index
+from services.score_guards import auto_score_guard as _auto_score_guard
 import asyncio
 import hmac
 import httpx
@@ -36,6 +38,7 @@ from routers import admin_topics as admin_topics_router
 from routers import ask as ask_router
 from routers import inbox as inbox_router
 from routers import transcripts as transcripts_router
+from routers import decision as decision_router
 
 
 # --- Queue tunables ---
@@ -258,7 +261,12 @@ async def _score_with_quality_scorer(http_client: httpx.AsyncClient, text: str, 
     default cloud-kimi), interest via lokaal embedding-model + centroid.
     `http_client` blijft in de signature voor backwards-compat van de
     call-sites; we gebruiken hem niet meer. Fail-open: returnt None bij faal.
+
+    In decision-modus scoort niemand inline: dan None, en de batch-loop van
+    services/decision_scorer.py pakt het item op (quality_score blijft NULL).
     """
+    if decision_scorer.ENABLED:
+        return None
     try:
         qs = app.state.quality_service
         llm = LLMService(app.state.llm_client)
@@ -310,15 +318,17 @@ async def _score_batch_with_quality_scorer(http_client: httpx.AsyncClient, items
     return out
 
 
-def _auto_score_guard(alias: str = "") -> str:
-    """SQL-conditie: de huidige score is van het systeem en mag overschreven
-    worden. Dat is reason 'auto' (worker/backfill), of nooit gescoord: reason
-    én updated_at NULL. De PATCH /quality-score zet altijd updated_at, óók als
-    de caller geen reason meegeeft — zo'n handmatige score (of handmatige
-    neutrale NULL) is ground truth en blijft staan."""
-    p = f"{alias}." if alias else ""
-    return (f"({p}quality_score_reason = 'auto' OR "
-            f"({p}quality_score_reason IS NULL AND {p}quality_score_updated_at IS NULL))")
+async def _decision_score_loop(async_session_maker) -> None:
+    """Batch-scoring via het decision model (SCORER_MODE=decision). Faalt een
+    ronde, dan blijven de items NULL en pakt de volgende ronde ze op."""
+    await asyncio.sleep(60)  # eerst de API en workers laten opstarten
+    while True:
+        try:
+            await decision_scorer.run_batch(async_session_maker,
+                                            LLMService(app.state.llm_client))
+        except Exception as e:
+            print(f"[decision] batch faalde onverwacht: {e!r}", flush=True)
+        await asyncio.sleep(decision_scorer.INTERVAL_SEC)
 
 
 async def _score_item_after_summary(item_id: str, summary: str, title: Optional[str]) -> None:
@@ -390,6 +400,14 @@ async def lifespan(app: FastAPI):
         worker_tasks.append(asyncio.create_task(_summarize_worker(i, async_session_maker)))
     worker_tasks.append(asyncio.create_task(_transcribe_worker(async_session_maker)))
     worker_tasks.append(asyncio.create_task(_queue_depth_logger(async_session_maker)))
+    if search_index.ENABLED:
+        worker_tasks.append(asyncio.create_task(
+            search_index.embed_loop(async_session_maker, app.state.http_client)))
+    if decision_scorer.ENABLED:
+        worker_tasks.append(asyncio.create_task(_decision_score_loop(async_session_maker)))
+        print(f"[lifespan] decision-scorer aan: {decision_scorer.DECISION_MODEL} via "
+              f"{decision_scorer.DECISION_URL}, elke {decision_scorer.INTERVAL_SEC:.0f}s",
+              flush=True)
 
     yield
 
@@ -461,6 +479,10 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/last-result",
     "/admin/sources/backfill-stale",
     "/admin/quality-backfill",
+    "/admin/decision-score/run",
+    "/admin/decision-score/status",
+    "/admin/decision-profile",
+    "/admin/decision-profile/rebuild",
 )
 # Paths that ALWAYS go through internal-token auth (no session-fallback).
 # Used by sibling services that read transcripts / lessons machine-to-machine.
@@ -544,6 +566,7 @@ app.include_router(admin_topics_router.router)
 app.include_router(ask_router.router)
 app.include_router(inbox_router.router)
 app.include_router(transcripts_router.router)
+app.include_router(decision_router.router)
 
 
 # --- Auth routes ---
@@ -670,6 +693,8 @@ class HuygensItemDetail(BaseModel):
     queue_position: Optional[int] = None
     scheduled_for: Optional[str] = None
     quality_score: Optional[int] = None
+    # Uitleg van de decision-scorer (deelscores, kansverdeling); zie migratie 023.
+    quality_score_detail: Optional[dict] = None
 
 
 class StatusUpdate(BaseModel):
@@ -684,45 +709,31 @@ class SearchHit(BaseModel):
     published_at: Optional[str]
     snippet: str
     rank: float
+    match: Literal["keyword", "semantic", "both"]
 
 
 @app.get("/search", response_model=List[SearchHit])
 async def search_items(q: str = Query(..., min_length=2),
                        format: Optional[str] = Query(None),
                        limit: int = Query(20, le=100),
+                       mode: Literal["hybrid", "keyword", "semantic"] = Query("hybrid"),
                        session=Depends(get_async_session)):
-    """Postgres FTS over title+summary+transcript+description.
-    `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'."""
-    fmt_filter = ""
-    params: dict = {"q": q, "lim": limit}
-    if format in ("article", "podcast", "video"):
-        fmt_filter = "AND i.format = :fmt::item_format"
-        params["fmt"] = format
-
-    r = await session.exec(sa_text(
-        f"""
-        SELECT i.id::text, i.title, i.format::text, s.name,
-               i.published_at,
-               ts_headline('simple',
-                           coalesce(i.summary, i.description, left(i.transcript, 4000), ''),
-                           websearch_to_tsquery('simple', :q),
-                           'MaxFragments=2,MinWords=8,MaxWords=22,StartSel=<mark>,StopSel=</mark>') as snippet,
-               ts_rank(i.search_tsv, websearch_to_tsquery('simple', :q)) as rank
-        FROM items i
-        JOIN sources s ON s.id = i.source_id
-        WHERE i.search_tsv @@ websearch_to_tsquery('simple', :q)
-          AND i.status <> 'archived'::item_status
-          {fmt_filter}
-        ORDER BY rank DESC, i.published_at DESC NULLS LAST
-        LIMIT :lim
-        """
-    ).bindparams(**params))
-    rows = r.all()
+    """Hybride zoeken: FTS met NL+EN-stemming over title+summary+transcript+description,
+    plus semantisch via de zoekvectoren, samengevoegd met RRF (zie services/search_index).
+    `q` accepteert websearch_to_tsquery syntax: 'foo bar' (AND), 'foo OR bar', '"exact phrase"'.
+    Is de embed-sidecar onbereikbaar, dan valt hybrid terug op alleen keyword.
+    `rank` is de RRF-score; `match` zegt uit welke ranglijst(en) de hit komt."""
+    fmt = format if format in ("article", "podcast", "video") else None
+    qvec = None
+    if mode != "keyword":
+        qvec = await search_index.embed_query(app.state.http_client, q)
+    rows = await search_index.search(session, q, qvec, fmt, limit, mode)
     return [SearchHit(
         id=row[0], title=row[1], format=row[2], source_name=row[3],
         published_at=str(row[4]) if row[4] else None,
         snippet=row[5] or "",
         rank=float(row[6]),
+        match=row[7],
     ) for row in rows]
 
 
@@ -738,7 +749,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
                    COALESCE(array_agg(t.name) FILTER (WHERE t.id IS NOT NULL), '{}') AS topic_names,
                    i.status::text, i.processing_status::text, i.scheduled_for,
                    i.transcript_segments,
-                   i.quality_score
+                   i.quality_score, i.quality_score_detail
             FROM items i
             JOIN sources s ON s.id = i.source_id
             LEFT JOIN item_topics it ON it.item_id = i.id
@@ -778,6 +789,7 @@ async def huygens_item(item_id: str, session=Depends(get_async_session)):
         queue_position=queue_pos,
         scheduled_for=str(row[18]) if row[18] else None,
         quality_score=row[20],
+        quality_score_detail=row[21],
     )
 
 
@@ -2107,13 +2119,20 @@ async def _summarize_single_item(item_id: str, llm_service, async_session_maker,
             if quality_score:
                 print(f"[sum-worker] scored {item_id}: {quality_score}/10")
 
+        # Summary altijd, score alleen als de huidige score van het systeem is:
+        # een handmatige PATCH tijdens summarize/scoring blijft staan. Eén
+        # transactie, dus de score hoort altijd bij de summary van deze run.
         async with async_session_maker() as bg:
             await bg.exec(sa_text(
                 "UPDATE items SET summary=:s, summary_model=:m, "
                 "summary_generated_at=now(), processing_status='ready'::processing_status, "
-                "quality_score=:q, quality_score_reason='auto', quality_score_updated_at=now(), "
                 "queued_at=NULL WHERE id = CAST(:i AS uuid)"
-            ).bindparams(s=summary, m=actual_model, i=item_id, q=quality_score))
+            ).bindparams(s=summary, m=actual_model, i=item_id))
+            await bg.exec(sa_text(
+                "UPDATE items SET quality_score=:q, quality_score_reason='auto', "
+                "quality_score_updated_at=now() "
+                f"WHERE id = CAST(:i AS uuid) AND {_auto_score_guard()}"
+            ).bindparams(q=quality_score, i=item_id))
             await bg.commit()
 
         # Lesson-distill voor tekstartikelen (en handmatige Inbox-items), mits de
@@ -3494,6 +3513,11 @@ async def admin_quality_backfill(
     scoring en DB-updates lopen als background task."""
     if not (1 <= body.limit <= 10000):
         raise HTTPException(status_code=400, detail="limit moet 1-10000 zijn")
+    if decision_scorer.ENABLED:
+        return QualityBackfillResponse(
+            processed=0, updated=0,
+            error="SCORER_MODE=decision: scoring loopt via de decision-batch "
+                  "(POST /admin/decision-score/run), niet via deze backfill")
     # only_null slaat handmatig op NULL ("neutraal") gezette items over.
     where_clause = (
         f"i.quality_score IS NULL AND {_auto_score_guard('i')}"

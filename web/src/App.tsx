@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
@@ -18,7 +19,9 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          addItemToTopic, removeItemTopic, updateItemQualityScore, sendLessonToVikunja,
          fetchSourceDetail, SourceDetail, backfillSource,
          Topic, HuygensTopic, HuygensItem, ItemDetail, ItemFormat, ItemStatus, User, Lesson, ItemFilter, ItemWindow, TopicDigest, DigestModel, DigestWindow,
-         LessonsDigest, LessonsDigestFilter, QualityScoreUpdate } from './api';
+         LessonsDigest, LessonsDigestFilter, QualityScoreUpdate, QualityScoreDetail,
+         searchItems, SearchHit } from './api';
+import { ScoreDetail, scoreDetailTooltip } from './ScoreDetail';
 import { ModelSelect } from './ModelSelect';
 
 const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
@@ -106,7 +109,7 @@ const Meta = ({ item }: { item: HuygensItem }) => {
   );
 };
 
-const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void; title?: string; summary?: string }) => {
+const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary, detail }: { itemId: string; score: number | null; onUpdate: (s: number | null) => void; title?: string; summary?: string; detail?: QualityScoreDetail | null }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [newScore, setNewScore] = useState<number | null>(score);
@@ -150,74 +153,80 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
   };
 
   if (isEditing) {
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-        <div className="bg-brand-cream rounded-lg shadow-xl max-w-md w-full p-6">
-          <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
+    // Via een portal naar <body>: de editor staat in een mono/uppercase meta-
+    // regel en zou die opmaak anders erven. De kaart is maximaal schermhoog met
+    // een eigen scrollgebied; de knoppen staan buiten dat gebied, altijd in beeld.
+    return createPortal(
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 font-sans normal-case tracking-normal text-base">
+        <div className="bg-brand-cream rounded-lg shadow-xl max-w-md w-full max-h-[calc(100dvh-2rem)] flex flex-col">
+          <div className="overflow-y-auto overscroll-contain p-6 pb-4">
+            <h3 className="text-lg font-semibold mb-4 text-brand-ink">Kwaliteitsscore aanpassen</h3>
 
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
-              <div className="grid grid-cols-10 gap-1">
-                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
-                  <button
-                    key={n}
-                    type="button"
-                    onClick={() => setNewScore(n)}
-                    className={`py-2 text-sm font-medium rounded transition-colors ${
-                      newScore === n
-                        ? 'bg-brand-accent text-white'
-                        : 'bg-brand-surface text-brand-ink hover:bg-brand-surface-low'
-                    }`}
-                  >
-                    {n}
-                  </button>
-                ))}
-              </div>
-              <button
-                type="button"
-                onClick={() => setNewScore(null)}
-                className={`mt-1 text-xs transition-colors ${newScore === null ? 'text-brand-ink/70 font-medium' : 'text-brand-ink/30 hover:text-brand-ink/50'}`}
-              >
-                Geen score
-              </button>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Reden</label>
-              <select
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream"
-              >
-                {Object.entries(reasonLabels).map(([key, label]) => (
-                  <option key={key} value={key}>{label}</option>
-                ))}
-              </select>
-              {reason === 'personal_interest' && title && (
+            <div className="space-y-4">
+              <ScoreDetail detail={detail} />
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-2">Score (1-10)</label>
+                <div className="grid grid-cols-10 gap-1">
+                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setNewScore(n)}
+                      className={`py-2 text-sm font-medium rounded transition-colors ${
+                        newScore === n
+                          ? 'bg-brand-accent text-white'
+                          : 'bg-brand-surface text-brand-ink hover:bg-brand-surface-low'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
                 <button
-                  onClick={() => setShowInterestLearner(true)}
-                  className="mt-1.5 text-xs text-brand-accent hover:underline flex items-center gap-1"
+                  type="button"
+                  onClick={() => setNewScore(null)}
+                  className={`mt-1 text-xs transition-colors ${newScore === null ? 'text-brand-ink/70 font-medium' : 'text-brand-ink/30 hover:text-brand-ink/50'}`}
                 >
-                  Ontdek je interesses voor dit item
-                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  Geen score
                 </button>
-              )}
-            </div>
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                placeholder="Aanvullende context..."
-                className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream text-sm"
-                rows={3}
-              />
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-1">Reden</label>
+                <select
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                  className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream"
+                >
+                  {Object.entries(reasonLabels).map(([key, label]) => (
+                    <option key={key} value={key}>{label}</option>
+                  ))}
+                </select>
+                {reason === 'personal_interest' && title && (
+                  <button
+                    onClick={() => setShowInterestLearner(true)}
+                    className="mt-1.5 text-xs text-brand-accent hover:underline flex items-center gap-1"
+                  >
+                    Ontdek je interesses voor dit item
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg>
+                  </button>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-brand-ink/70 mb-1">Notitie (optioneel)</label>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Aanvullende context..."
+                  className="w-full border border-brand-ink/20 rounded px-3 py-2 text-brand-ink bg-brand-cream text-sm"
+                  rows={3}
+                />
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center justify-end gap-3 mt-6">
+          <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-brand-ink/10">
             <button
               onClick={handleCancel}
               disabled={busy}
@@ -243,14 +252,15 @@ const QualityScoreEditor = ({ itemId, score, onUpdate, title, summary }: { itemI
             onClose={() => setShowInterestLearner(false)}
           />
         )}
-      </div>
+      </div>,
+      document.body,
     );
   }
 
   return (
     <button
       onClick={() => setIsEditing(true)}
-      title="Klik om kwaliteitsscore aan te passen"
+      title={[scoreDetailTooltip(detail), 'Klik voor uitleg of om de score aan te passen'].filter(Boolean).join(' — ')}
       className={`font-bold ${scoreColor} hover:opacity-70 cursor-pointer`}
     >
       {score ? `${score}/10` : '—'}
@@ -1754,6 +1764,7 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
                   onUpdate={(newScore) => setItem(prev => prev ? { ...prev, quality_score: newScore } : prev)}
                   title={item.title}
                   summary={item.summary}
+                  detail={item.quality_score_detail}
                 /></>
               </div>
             </div>
@@ -1786,13 +1797,18 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
   );
 };
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; eink: boolean } => {
+const parseSearchFormat = (v: string | null): ItemFormat | null =>
+  v === 'article' || v === 'podcast' || v === 'video' ? v : null;
+
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
     sourceId: p.get('source'),
     admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
     eink: p.get('eink') === '1',
+    // ?q= (ook leeg) = zoekpagina open
+    q: p.get('q'), fmt: parseSearchFormat(p.get('fmt')),
   };
 };
 
@@ -2711,6 +2727,138 @@ function LessonsPage({ onBack, onOpenItem }: { onBack: () => void; onOpenItem: (
 }
 
 
+// ts_headline zet <mark>…</mark> rond treffers maar escapet de rest niet;
+// daarom splitsen en als tekst renderen, nooit als HTML. Markdown-tekens uit
+// de samenvatting zijn in een snippet alleen ruis.
+function SearchSnippet({ text }: { text: string }) {
+  const parts = text.split(/<\/?mark>/).map(part => part.replace(/[*_#`]+/g, ''));
+  return (
+    <>
+      {parts.map((part, i) => i % 2 === 1
+        ? <mark key={i} className="bg-brand-accent/15 text-brand-ink rounded-sm px-0.5">{part}</mark>
+        : <React.Fragment key={i}>{part}</React.Fragment>)}
+    </>
+  );
+}
+
+const SEARCH_FORMATS: { value: ItemFormat | null; label: string }[] = [
+  { value: null, label: 'Alles' },
+  { value: 'article', label: 'Artikelen' },
+  { value: 'podcast', label: 'Podcasts' },
+  { value: 'video', label: 'Video' },
+];
+
+// Gecontroleerd door AuthedApp, dat vraag en formaat uit de URL haalt: de
+// pagina wordt ontkoppeld zodra je een resultaat opent, en browser-terug moet
+// invoer, filter en resultaten weer gelijk zetten met de URL.
+function SearchPage({ query, format, onChange, onBack, onOpenItem }: {
+  query: string; format: ItemFormat | null;
+  onChange: (next: { q?: string; format?: ItemFormat | null }) => void;
+  onBack: () => void; onOpenItem: (id: string) => void;
+}) {
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const q = query.trim();
+
+  useEffect(() => {
+    if (q.length < 2) { setHits(null); setError(null); setLoading(false); return; }
+    // Debounce + abort: alleen het antwoord op de laatste vraag telt.
+    const ctrl = new AbortController();
+    const t = window.setTimeout(() => {
+      setLoading(true); setError(null);
+      searchItems(q, { format, signal: ctrl.signal })
+        .then(r => { setHits(r); setLoading(false); })
+        .catch(e => {
+          if (ctrl.signal.aborted) return;
+          setError(e instanceof ApiError ? e.detail : String(e)); setLoading(false);
+        });
+    }, 300);
+    return () => { window.clearTimeout(t); ctrl.abort(); };
+  }, [q, format]);
+
+  return (
+    <div className="max-w-4xl mx-auto pt-2">
+      <button onClick={onBack}
+        className="mb-8 font-mono text-[11px] uppercase tracking-[0.18em] text-brand-ink/50 hover:text-brand-accent flex items-center gap-2">
+        <ArrowLeft size={14} /> Terug
+      </button>
+
+      <h1 className="font-display text-5xl md:text-6xl text-brand-ink font-medium tracking-[-0.04em] mb-6">Zoeken</h1>
+
+      <form role="search" onSubmit={e => e.preventDefault()} className="mb-4">
+        <label className="flex items-center gap-3 border-b-2 border-brand-ink/15 focus-within:border-brand-accent transition-colors pb-2">
+          <Search size={20} className="text-brand-ink/40 shrink-0" aria-hidden />
+          <span className="sr-only">Zoekterm</span>
+          <input type="search" autoFocus value={query}
+            onChange={e => onChange({ q: e.target.value })}
+            placeholder="Zoek in titels, samenvattingen en transcripts"
+            className="w-full bg-transparent font-serif text-xl md:text-2xl text-brand-ink placeholder:text-brand-ink/30 outline-none" />
+          {loading && <Loader2 size={18} className="animate-spin text-brand-ink/40 shrink-0" aria-label="Zoeken…" />}
+        </label>
+      </form>
+      <p className="font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/40 mb-6 flex flex-wrap gap-x-2">
+        <span className="whitespace-nowrap">"exacte frase"</span>·
+        <span className="whitespace-nowrap">woord OR woord</span>·
+        <span className="whitespace-nowrap">-uitsluiten</span>
+      </p>
+
+      <div className="flex gap-2 mb-10 flex-wrap">
+        {SEARCH_FORMATS.map(f => (
+          <button key={f.label} onClick={() => onChange({ format: f.value })} aria-pressed={format === f.value}
+            className={`px-4 py-1.5 rounded-full text-[12px] font-medium transition-all ${
+              format === f.value ? 'bg-brand-accent text-brand-cream shadow-sm'
+              : 'bg-brand-surface hover:bg-brand-surface-low text-brand-ink/70'
+            }`}>{f.label}</button>
+        ))}
+      </div>
+
+      {error && <div className="text-red-600 text-sm mb-6">Zoeken mislukt: {error}</div>}
+      {q.length < 2 ? (
+        <div className="text-brand-ink/40 italic">Typ minstens twee tekens.</div>
+      ) : hits === null ? (
+        loading ? <div className="text-brand-ink/40 italic">Zoeken…</div> : null
+      ) : hits.length === 0 ? (
+        <div className="text-brand-ink/40 italic">Niets gevonden voor “{q}”.</div>
+      ) : (
+        <ul className={`space-y-6 transition-opacity ${loading ? 'opacity-50' : ''}`}>
+          {hits.map(h => (
+            <li key={h.id} className="border-t border-brand-ink/10 pt-5">
+              <button onClick={() => onOpenItem(h.id)} className="text-left w-full group">
+                <div className="mb-1 font-mono text-[10px] uppercase tracking-[0.15em] text-brand-ink/50 flex items-center gap-3 flex-wrap">
+                  <span className={`px-2 py-0.5 rounded-full ${FORMAT_BADGE[h.format]?.className ?? ''}`}>
+                    {FORMAT_BADGE[h.format]?.label ?? h.format}
+                  </span>
+                  <span>{h.source_name}</span>
+                  {h.published_at && (
+                    <span className="text-brand-ink/30">
+                      {new Date(h.published_at).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' })}
+                    </span>
+                  )}
+                  {h.match === 'semantic' && (
+                    <span className="text-brand-accent/80" title="Gevonden op betekenis, niet op de exacte woorden">
+                      <Sparkles size={10} className="inline -mt-0.5 mr-1" />verwant
+                    </span>
+                  )}
+                </div>
+                <div className="font-serif font-semibold text-[19px] text-brand-ink group-hover:text-brand-accent transition-colors mb-1">
+                  {h.title}
+                </div>
+                {h.snippet && (
+                  <div className="font-serif text-[15px] leading-[1.55] text-brand-ink/70 line-clamp-3">
+                    <SearchSnippet text={h.snippet} />
+                  </div>
+                )}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [dark, toggleDark] = useDarkMode();
   const [adminMode, setAdminMode] = useState<boolean>(() => readUrl().admin);
@@ -2723,17 +2871,21 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
   const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
+  const [searchQuery, setSearchQuery] = useState<string | null>(() => readUrl().q);
+  const [searchFormat, setSearchFormat] = useState<ItemFormat | null>(() => readUrl().fmt);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
   const [einkMode, setEinkMode] = useState<boolean>(() => readUrl().eink);
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, sourceId, admin, lessons, eink } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, eink, q, fmt } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
       setEinkMode(eink);
+      setSearchQuery(q);
+      setSearchFormat(fmt);
       if (topic) setActiveSlug(topic);
     };
     window.addEventListener('popstate', onPop);
@@ -2746,14 +2898,67 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
+    url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setItemId(null);
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
+    setSearchQuery(null);
+    setSearchFormat(null);
     setActiveFilter('all');
     setActiveWindow('all');
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const openSearch = () => {
+    // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
+    // naar een oudere vraag springen dan het invoerveld toonde).
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView) {
+      window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+      return;
+    }
+    const url = new URL(window.location.href);
+    const q = url.searchParams.get('q') ?? '';
+    url.searchParams.set('q', q);
+    url.searchParams.delete('item');
+    url.searchParams.delete('source');
+    url.searchParams.delete('admin');
+    url.searchParams.delete('lessons');
+    window.history.pushState({}, '', url.toString());
+    setSearchQuery(q);
+    setSearchFormat(parseSearchFormat(url.searchParams.get('fmt')));
+    setItemId(null);
+    setSourceId(null);
+    setAdminMode(false);
+    setLessonsView(false);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  // Typen en filteren vervangen de URL (geen history-entry per toetsaanslag),
+  // zodat terug vanuit een geopend resultaat bij dezelfde vraag uitkomt.
+  const updateSearch = (next: { q?: string; format?: ItemFormat | null }) => {
+    const url = new URL(window.location.href);
+    if (next.q !== undefined) {
+      url.searchParams.set('q', next.q);
+      setSearchQuery(next.q);
+    }
+    if (next.format !== undefined) {
+      if (next.format) url.searchParams.set('fmt', next.format);
+      else url.searchParams.delete('fmt');
+      setSearchFormat(next.format);
+    }
+    window.history.replaceState({}, '', url.toString());
+  };
+
+  const closeSearch = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
+    window.history.pushState({}, '', url.toString());
+    setSearchQuery(null);
+    setSearchFormat(null);
   };
 
   const openLessons = () => {
@@ -2761,10 +2966,13 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     url.searchParams.set('lessons', '1');
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
+    url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setLessonsView(true);
     setItemId(null);
     setAdminMode(false);
+    setSearchQuery(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
@@ -2779,9 +2987,12 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     const url = new URL(window.location.href);
     url.searchParams.set('admin', '1');
     url.searchParams.delete('item');
+    url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setAdminMode(true);
     setItemId(null);
+    setSearchQuery(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
@@ -2883,7 +3094,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom</span>
           </button>
           <div className="flex gap-3 md:gap-6 items-center text-brand-ink/40">
-            <button className="hover:text-brand-accent transition-colors p-1 md:p-0"><Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" /></button>
+            <button onClick={openSearch} title="Zoeken" aria-label="Zoeken"
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
+            </button>
             <button onClick={openLessons} title="Alle lessen"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <BookOpen size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
@@ -2919,6 +3133,9 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
             onArchive={() => setData(d => d ? { ...d, rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== itemId) })) } : d)} />
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
+        ) : searchQuery !== null ? (
+          <SearchPage query={searchQuery} format={searchFormat} onChange={updateSearch}
+            onBack={closeSearch} onOpenItem={openItem} />
         ) : (
           <>
             <section className="mb-8 space-y-3">

@@ -19,6 +19,7 @@ import {
 } from './admin_model_constants';
 import { ModelSelect } from './ModelSelect';
 import { useSettings } from './settings';
+import { DecisionProfilePanel } from './DecisionProfilePanel';
 
 const ModelDefaultsPanel = () => {
   const { settings, models, save } = useSettings();
@@ -1240,6 +1241,8 @@ export const AdminPage = ({ onBack }: { onBack: () => void }) => {
       <CronPanel />
 
       <TopicsPanel />
+
+      <DecisionProfilePanel />
 
       <QualityScorerAdmin />
 

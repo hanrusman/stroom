@@ -114,6 +114,28 @@ export async function fetchHuygens(slug: string): Promise<HuygensTopic> {
   return r.json();
 }
 
+export type SearchMode = 'hybrid' | 'keyword' | 'semantic';
+
+export interface SearchHit {
+  id: string;
+  title: string;
+  format: ItemFormat;
+  source_name: string;
+  published_at: string | null;
+  // Tekst met <mark>…</mark> rond de treffers (ts_headline); verder ongeëscaped.
+  snippet: string;
+  rank: number;
+  match: 'keyword' | 'semantic' | 'both';
+}
+
+export async function searchItems(q: string, opts: { format?: ItemFormat | null; mode?: SearchMode; limit?: number; signal?: AbortSignal } = {}): Promise<SearchHit[]> {
+  const p = new URLSearchParams({ q, limit: String(opts.limit ?? 30) });
+  if (opts.format) p.set('format', opts.format);
+  if (opts.mode) p.set('mode', opts.mode);
+  const r = await apiFetch(`/api/search?${p.toString()}`, { signal: opts.signal });
+  return r.json();
+}
+
 export type ItemStatus = 'new' | 'pinned' | 'later' | 'archived';
 export type ProcessingStatus = 'pending' | 'queued' | 'transcribe_queued' | 'summarize_queued' | 'transcribing' | 'summarizing' | 'ready' | 'failed';
 
@@ -147,6 +169,37 @@ export interface ItemDetail {
   queue_position: number | null;
   scheduled_for: string | null;
   quality_score: number | null;
+  quality_score_detail?: QualityScoreDetail | null;
+}
+
+/** Uitleg van de decision-scorer (nimble). Geen tekstuele reden — wel deelscores
+ *  en de kansverdeling per niveau. `error` = item kon niet gescoord worden. */
+export interface ScoreRubric {
+  score10: number;
+  fraction: number;
+  probabilities: Record<string, number>;
+  confidence: number | null;
+}
+
+export interface ScoreCalibration {
+  method: 'percentile' | 'linear';
+  score: number;
+  percentile: number;   // 0-1: aandeel van de referentie met een lagere of gelijke waarde
+  n: number;
+  days: number;
+}
+
+export interface QualityScoreDetail {
+  calibration?: ScoreCalibration;
+  raw?: number;
+  quality?: ScoreRubric;
+  interest?: ScoreRubric | null;
+  clickbait?: number | null;
+  interest_weight?: number;
+  model?: string;
+  profile_version?: string | null;
+  scored_at?: string;
+  error?: string;
 }
 
 export async function fetchItem(id: string): Promise<ItemDetail> {
@@ -807,5 +860,63 @@ export async function fetchInboxMetadata(body: InboxFetchRequest): Promise<Inbox
 
 export async function fetchInboxTopics(): Promise<{ slug: string; name: string }[]> {
   const r = await apiFetch('/api/inbox/topics');
+  return r.json();
+}
+
+// --- Decision-scorer (nimble): interesseprofiel + status ---
+
+export interface DecisionProfile {
+  text: string;
+  source: 'auto' | 'manual';
+  n_lessons: number | null;
+  version: string;
+  updated_at: string;
+}
+
+export interface DecisionBatchResult {
+  selected?: number;
+  scored?: number;
+  skipped?: number | string;
+  item_errors?: number;
+  error?: string | null;
+  calibration?: { method?: 'percentile' | 'linear'; n?: number; updated?: number; error?: string };
+}
+
+export interface DecisionScoreStatus {
+  enabled: boolean;
+  mode: string;
+  model: string;
+  interval_sec: number;
+  interest_weight: number;
+  max_age_days: number;
+  calibration_min?: number;
+  calibration_days?: number;
+  last_run_at: string | null;
+  last_result: DecisionBatchResult | null;
+  outage_since: string | null;
+  outage_notified: boolean;
+}
+
+export async function fetchDecisionProfile(): Promise<{ profile: DecisionProfile | null; enabled: boolean; model: string }> {
+  const r = await apiFetch('/api/admin/decision-profile');
+  return r.json();
+}
+
+export async function saveDecisionProfile(text: string): Promise<{ profile: DecisionProfile }> {
+  const r = await apiFetch('/api/admin/decision-profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  return r.json();
+}
+
+export async function rebuildDecisionProfile(): Promise<{ profile: DecisionProfile }> {
+  const r = await apiFetch('/api/admin/decision-profile/rebuild', { method: 'POST' });
+  return r.json();
+}
+
+export async function fetchDecisionScoreStatus(): Promise<DecisionScoreStatus> {
+  const r = await apiFetch('/api/admin/decision-score/status');
   return r.json();
 }

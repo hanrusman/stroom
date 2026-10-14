@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from sqlalchemy import text as sa_text
 
 from core.db import get_async_session
+from services import search_query
 
 
 router = APIRouter()
@@ -206,6 +207,9 @@ async def search_transcripts(
     Auth via internal-token middleware (prefix `/internal/`). Intended for
     machine-to-machine consumers that need to grep the transcript corpus.
     """
+    tsq, _ = await search_query.build(session, q)
+    if tsq is None:
+        return []
     sql = sa_text("""
         SELECT i.id::text,
                i.title,
@@ -215,15 +219,15 @@ async def search_transcripts(
                i.summary,
                i.transcript,
                i.transcript_segments,
-               ts_rank(i.search_tsv, plainto_tsquery('simple', :q)) AS rank
+               ts_rank(i.search_tsv, CAST(:tsq AS tsquery)) AS rank
         FROM items i
         JOIN sources s ON s.id = i.source_id
         WHERE i.transcript IS NOT NULL
           AND i.transcript <> ''
-          AND i.search_tsv @@ plainto_tsquery('simple', :q)
+          AND i.search_tsv @@ CAST(:tsq AS tsquery)
         ORDER BY rank DESC, i.published_at DESC NULLS LAST
         LIMIT :lim
-    """).bindparams(q=q, lim=limit)
+    """).bindparams(tsq=tsq, lim=limit)
     rows = (await session.exec(sql)).all()
 
     hits: List[TranscriptSearchHit] = []
