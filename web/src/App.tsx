@@ -1593,7 +1593,7 @@ function TopicManager({ itemId, currentTopics, onUpdate }: { itemId: string; cur
   );
 }
 
-const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; onBack: () => void; onArchive?: () => void; onOpenSource?: (sourceId: string) => void }) => {
+const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: string; onBack: () => void; onArchive?: () => void; onOpenSource?: (sourceId: string) => void; onEink?: () => void }) => {
   const [item, setItem] = useState<ItemDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -1665,6 +1665,7 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; o
           <TopicManager itemId={id} currentTopics={item.topics} onUpdate={setItem} />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
+          {onEink && <QuietAction icon={BookOpen} label="E-reader" onClick={onEink} />}
           <QuietAction icon={Bookmark} label="Save" active={item.status === 'pinned'} busy={busy === 'pinned'} onClick={() => toggle('pinned')} />
           <div className="relative">
             <QuietAction
@@ -1785,13 +1786,97 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource }: { id: string; o
   );
 };
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean } => {
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; eink: boolean } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
     sourceId: p.get('source'),
     admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
+    eink: p.get('eink') === '1',
   };
+};
+
+// Plain-text e-reader weergave voor e-ink schermen (bv. Boox): pure zwart-op-wit,
+// geen animaties/schaduwen/gradients (geven ghosting bij partial refresh),
+// geen afbeeldingen, grote letters en ruime regelafstand.
+const EINK_FONT_SIZES = [18, 20, 22, 25, 28] as const;
+
+const EinkReader = ({ id, onBack }: { id: string; onBack: () => void }) => {
+  const [item, setItem] = useState<ItemDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [sizeIdx, setSizeIdx] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('eink-font-size-idx'));
+    return Number.isInteger(saved) && saved >= 0 && saved < EINK_FONT_SIZES.length ? saved : 2;
+  });
+
+  useEffect(() => {
+    setItem(null); setError(null);
+    fetchItem(id).then(setItem).catch(e => setError(String(e)));
+  }, [id]);
+
+  useEffect(() => {
+    localStorage.setItem('eink-font-size-idx', String(sizeIdx));
+  }, [sizeIdx]);
+
+  const fontSize = EINK_FONT_SIZES[sizeIdx];
+
+  const bodyHtml = item
+    ? (item.format === 'article' && item.transcript)
+      ? sanitizeMarkdown(item.transcript)
+      : item.summary
+        ? sanitizeMarkdown(item.summary)
+        : DOMPurify.sanitize(item.description ?? '')
+    : '';
+
+  const date = item?.published_at
+    ? new Date(item.published_at).toLocaleDateString('nl-NL', { day: '2-digit', month: 'long', year: 'numeric' })
+    : null;
+
+  return (
+    <div style={{ background: '#fff', color: '#000', minHeight: '100vh' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        borderBottom: '1px solid #000', padding: '14px 20px', position: 'sticky', top: 0, background: '#fff',
+      }}>
+        <button onClick={onBack} style={{ fontSize: 16, padding: '10px 16px', border: '1px solid #000', background: '#fff', color: '#000' }}>
+          ← Terug
+        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={() => setSizeIdx(i => Math.max(0, i - 1))} disabled={sizeIdx === 0}
+            style={{ fontSize: 16, padding: '10px 16px', border: '1px solid #000', background: '#fff', color: '#000', opacity: sizeIdx === 0 ? 0.4 : 1 }}>
+            A−
+          </button>
+          <button onClick={() => setSizeIdx(i => Math.min(EINK_FONT_SIZES.length - 1, i + 1))} disabled={sizeIdx === EINK_FONT_SIZES.length - 1}
+            style={{ fontSize: 16, padding: '10px 16px', border: '1px solid #000', background: '#fff', color: '#000', opacity: sizeIdx === EINK_FONT_SIZES.length - 1 ? 0.4 : 1 }}>
+            A+
+          </button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: '32px 20px 80px' }}>
+        {error && <div style={{ color: '#000', fontWeight: 700 }}>Fout: {error}</div>}
+        {!item && !error && <div>Laden…</div>}
+        {item && (
+          <>
+            <h1 style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize: fontSize + 12, lineHeight: 1.25, fontWeight: 700, marginBottom: 12 }}>
+              {item.title}
+            </h1>
+            <div style={{ fontFamily: 'Georgia, serif', fontSize: fontSize - 4, marginBottom: 28, borderBottom: '1px solid #000', paddingBottom: 16 }}>
+              {(item.author ?? item.source_name)}{date ? ` · ${date}` : ''}
+            </div>
+            {bodyHtml ? (
+              <div
+                style={{ fontFamily: 'Georgia, "Times New Roman", serif', fontSize, lineHeight: 1.65 }}
+                dangerouslySetInnerHTML={{ __html: bodyHtml }}
+              />
+            ) : (
+              <div>Geen tekst beschikbaar.</div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const LoginScreen = ({ onLoggedIn }: { onLoggedIn: (u: User) => void }) => {
@@ -2639,14 +2724,16 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
+  const [einkMode, setEinkMode] = useState<boolean>(() => readUrl().eink);
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, sourceId, admin, lessons } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, eink } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
+      setEinkMode(eink);
       if (topic) setActiveSlug(topic);
     };
     window.addEventListener('popstate', onPop);
@@ -2716,8 +2803,24 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const closeItem = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('item');
+    url.searchParams.delete('eink');
     window.history.pushState({}, '', url.toString());
     setItemId(null);
+    setEinkMode(false);
+  };
+
+  const openEink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('eink', '1');
+    window.history.pushState({}, '', url.toString());
+    setEinkMode(true);
+  };
+
+  const closeEink = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('eink');
+    window.history.pushState({}, '', url.toString());
+    setEinkMode(false);
   };
 
   const openSource = (id: string) => {
@@ -2759,6 +2862,10 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     setData(null);
     fetchHuygens(activeSlug).then(setData).catch(e => setError(String(e)));
   }, [activeSlug]);
+
+  if (einkMode && itemId) {
+    return <EinkReader id={itemId} onBack={closeEink} />;
+  }
 
   return (
     <OpenSourceContext.Provider value={openSource}>
@@ -2808,7 +2915,7 @@ function AuthedApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         ) : lessonsView ? (
           <LessonsPage onBack={closeLessons} onOpenItem={openItem} />
         ) : itemId ? (
-          <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource}
+          <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource} onEink={openEink}
             onArchive={() => setData(d => d ? { ...d, rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== itemId) })) } : d)} />
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
