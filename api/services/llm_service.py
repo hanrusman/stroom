@@ -1,10 +1,36 @@
 import json
+import re
 import httpx
 from fastapi import HTTPException
 from typing import List, Dict
 from sqlmodel import select, delete
 from sqlmodel.ext.asyncio.session import AsyncSession
 from core.config import settings
+
+
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL)
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL)
+
+
+def parse_llm_json(raw: str):
+    """json.loads die tegen modelruis kan. Kimi K2.x verpakt JSON in een
+    ```json-fence ondanks response_format=json_object; reasoning-modellen
+    zetten er soms een <think>-trace of inleidende zin voor.
+
+    Raises json.JSONDecodeError als er geen JSON-object in zit.
+    """
+    s = _THINK_RE.sub("", raw or "").strip()
+    fence = _FENCE_RE.search(s)
+    if fence:
+        s = fence.group(1).strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        start = s.find("{")
+        if start == -1:
+            raise
+        obj, _ = json.JSONDecoder().raw_decode(s[start:])
+        return obj
 
 
 class LLMService:
@@ -145,7 +171,7 @@ class LLMService:
         )
 
         try:
-            data = json.loads(raw_content)
+            data = parse_llm_json(raw_content)
 
             # 1. Update summary
             item.summary = data.get("summary", item.summary)

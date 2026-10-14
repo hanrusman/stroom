@@ -8,7 +8,7 @@ from sqlalchemy import text as sa_text
 
 from core.auth import require_user
 from core.db import async_session_maker, get_async_session
-from services.llm_service import LLMService
+from services.llm_service import LLMService, parse_llm_json
 from services.vikunja_service import VikunjaService
 
 router = APIRouter()
@@ -271,10 +271,11 @@ async def distill_more_lessons(item_id: str,
 
     import json
     try:
-        data = json.loads(raw)
+        data = parse_llm_json(raw)
         new_lessons = data.get("lessons", []) or []
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=502, detail="LLM gaf geen geldig JSON terug")
+    except (json.JSONDecodeError, AttributeError):
+        print(f"[distill] geen geldig JSON van {model_alias}: {raw[:300]!r}", flush=True)
+        raise HTTPException(status_code=502, detail=f"LLM ({model}) gaf geen geldig JSON terug")
 
     next_i = _next_idx(existing)
     inserted = 0

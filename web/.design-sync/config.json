@@ -1,0 +1,25 @@
+{
+  "projectId": "190d7672-f890-499f-8aef-7cdf2d4afab9",
+  "pkg": "stroom-ds",
+  "globalName": "StroomDS",
+  "shape": "package",
+  "buildCmd": "npm run build:ds",
+  "srcDir": "src/ds",
+  "cssEntry": "dist-ds/ds.css",
+  "readmeHeader": ".design-sync/conventions.md",
+  "componentSrcMap": {
+    "ButtonVariant": null,
+    "ButtonSize": null,
+    "IconButtonSize": null,
+    "BadgeTone": null,
+    "CardVariant": null,
+    "ContentFormat": null,
+    "ProseSize": null,
+    "AudioTrack": null,
+    "SelectOption": null
+  },
+  "overrides": {
+    "AudioPlayer": { "cardMode": "column" },
+    "Prose": { "cardMode": "column" }
+  }
+}

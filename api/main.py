@@ -2193,10 +2193,11 @@ async def _distill_lessons_for_item(item_id: str, summary: str, article_body: st
         temperature=0.4, response_format="json_object",
     )
     import json as _json
+    from services.llm_service import parse_llm_json
     try:
-        data = _json.loads(raw)
+        data = parse_llm_json(raw)
         new_lessons = data.get("lessons", []) or []
-    except _json.JSONDecodeError:
+    except (_json.JSONDecodeError, AttributeError):
         return 0
 
     inserted = 0
