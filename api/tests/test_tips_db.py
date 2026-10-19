@@ -235,3 +235,66 @@ async def test_same_title_different_category_are_separate_works(db):
         agg = ts.aggregate(await ts.load_mentions(s), await ts.load_works(s))
     assert sorted((w["category"], w["creator"], w["episodes"]) for w in agg) == [
         ("book", "Frank Herbert", 1), ("film", "Denis Villeneuve", 1)]
+
+
+def _import_script():
+    """api/scripts/import_tips.py als module (scripts/ is geen package)."""
+    import importlib.util
+    path = Path(__file__).resolve().parents[1] / "scripts" / "import_tips.py"
+    spec = importlib.util.spec_from_file_location("import_tips", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_DUNE_BOTH = [{"title": "Dune", "category": "book", "creator": "Frank Herbert", "strength": "strong"},
+              {"title": "Dune", "category": "film", "creator": "Denis Villeneuve", "strength": "strong"}]
+_DUNE_VERDICT = {"tk": "dune", "keep": True, "title": "Dune", "creator": "Frank Herbert",
+                 "canon": "book", "conf": "high", "model": "import-2026-10"}
+
+
+async def test_import_keeps_book_and_film_from_one_window(db):
+    """Review #79 ronde 2, punt 1: boek én film Dune in één venster blijven twee vermeldingen."""
+    engine, _ = db
+    item = await _item(engine)
+    imp = _import_script()
+    rows = imp.mention_rows(item, [{"offset": 0, "model": "gemma", "tips": _DUNE_BOTH}])
+    assert sorted(r["cat"] for r in rows) == ["book", "film"]
+    async with engine.connect() as conn:
+        n = await imp.run_import(conn, {item: [{"offset": 0, "model": "gemma", "tips": _DUNE_BOTH}]},
+                                 [_DUNE_VERDICT])
+    assert n["mentions"] == 2
+    cats = await _fetch(engine, "SELECT category FROM tip_mentions ORDER BY 1")
+    assert [r[0] for r in cats] == ["book", "film"]
+    # Het batch-oordeel (over het boek) geldt alleen voor het boek; de film verifieert de job.
+    works = await _fetch(engine, "SELECT category, title_key, canon_category FROM tip_works")
+    assert [tuple(r) for r in works] == [("book", "dune", "book")]
+
+
+async def test_import_restart_restores_missing_verifications(db):
+    """Review #79 ronde 2, punt 2: een import die stopte vóór de verificaties, maakt een
+    herstart af, ook al zijn de items dan al gescand."""
+    engine, _ = db
+    item = await _item(engine)
+    windows = {item: [{"offset": 0, "model": "gemma", "tips": _DUNE_BOTH}]}
+    imp = _import_script()
+    async with engine.connect() as conn:  # onderbroken: mentions/scans vastgelegd, geen verificaties
+        first = await imp.run_import(conn, windows, [])
+    assert first["items"] == 1 and first["works"] == 0
+    async with engine.connect() as conn:
+        again = await imp.run_import(conn, windows, [_DUNE_VERDICT])
+    assert again["items"] == 0 and again["scanned"] == 1 and again["works"] == 1
+    assert (await _fetch(engine, "SELECT count(*) FROM tip_works"))[0][0] == 1
+    assert (await _fetch(engine, "SELECT count(*) FROM tip_mentions"))[0][0] == 2  # niet dubbel
+
+
+async def test_import_dry_run_counts_without_writing(db):
+    engine, _ = db
+    item = await _item(engine)
+    imp = _import_script()
+    async with engine.connect() as conn:
+        n = await imp.run_import(conn, {item: [{"offset": 0, "model": "gemma", "tips": _DUNE_BOTH}]},
+                                 [_DUNE_VERDICT], dry_run=True)
+    assert n == {"items": 1, "missing": 0, "scanned": 0, "mentions": 2, "works": 1}
+    for table in ("tip_mentions", "tip_scans", "tip_works"):
+        assert (await _fetch(engine, f"SELECT count(*) FROM {table}"))[0][0] == 0

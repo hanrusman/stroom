@@ -130,9 +130,13 @@ def _is_self_promo(tip: dict) -> bool:
 
 
 def mention_rows(item_id: str, wins: list[dict]) -> list[dict]:
-    """Mention-rijen voor één item, geduped op (offset, title_key, model)."""
+    """Mention-rijen voor één item, geduped op (offset, category, title_key, model).
+
+    Categorie hoort in de sleutel: het boek en de film Dune in één venster zijn
+    twee vermeldingen (twee werken), niet één.
+    """
     rows: list[dict] = []
-    seen: set[tuple[int, str, str]] = set()
+    seen: set[tuple[int, str, str, str]] = set()
     for win in wins:
         for tip in tips_service.parse_tips(json.dumps({"tips": win["tips"]})):
             if _is_self_promo(tip):
@@ -140,7 +144,7 @@ def mention_rows(item_id: str, wins: list[dict]) -> list[dict]:
             tk = tips_service.title_key(tip.get("title"))
             if not tk:
                 continue
-            key = (win["offset"], tk, win["model"])
+            key = (win["offset"], tip.get("category"), tk, win["model"])
             if key in seen:
                 continue
             seen.add(key)
@@ -176,66 +180,93 @@ async def flush_batch(session, mentions: list[dict], scans: list[dict], dry_run:
     scans.clear()
 
 
+CATS_SQL = sa_text(
+    "SELECT title_key, category, count(*) FROM tip_mentions GROUP BY title_key, category"
+)
+
+
+async def _categories(conn, pending: list[dict]) -> dict[str, Counter]:
+    """Categorieën per title_key: uit de database (ook items van een eerdere,
+    onderbroken import) plus nog niet weggeschreven rijen (dry-run)."""
+    cats: dict[str, Counter] = {}
+    for tk, cat, n in await conn.execute(CATS_SQL):
+        cats.setdefault(tk, Counter())[cat] += n
+    for r in pending:
+        cats.setdefault(r["tk"], Counter())[r["cat"]] += 1
+    return cats
+
+
+async def run_import(conn, windows_by_item: dict[str, list[dict]], verified: list[dict],
+                     dry_run: bool = False) -> dict[str, int]:
+    """Importeer venster-uitvoer en verificaties via een (Async)Connection.
+
+    Herstartbaar: al gescande items worden overgeslagen, maar de verificaties
+    worden berekend op alle vermeldingen in de database. Een import die stopte
+    na de mentions en vóór de verificaties wordt zo bij een herstart afgemaakt.
+    """
+    res = await conn.execute(sa_text("SELECT id::text FROM items"))
+    item_ids = {row[0] for row in res}
+    res = await conn.execute(sa_text("SELECT item_id::text FROM tip_scans"))
+    scanned_ids = {row[0] for row in res}
+
+    n = {"items": 0, "missing": 0, "scanned": 0, "mentions": 0, "works": 0}
+    pending_mentions: list[dict] = []
+    pending_scans: list[dict] = []
+    dry_rows: list[dict] = []  # bij dry-run staan nieuwe rijen niet in de database
+    for item_id in sorted(windows_by_item):
+        if item_id not in item_ids:
+            n["missing"] += 1
+            continue
+        if item_id in scanned_ids:
+            n["scanned"] += 1
+            continue
+        wins = windows_by_item[item_id]
+        rows = mention_rows(item_id, wins)
+        n["items"] += 1
+        n["mentions"] += len(rows)
+        pending_mentions.extend(rows)
+        if dry_run:
+            dry_rows.extend(rows)
+        pending_scans.append(
+            {
+                "item_id": item_id,
+                "windows": len({w["offset"] for w in wins}),
+                "model": ",".join(sorted({w["model"] for w in wins})),
+            }
+        )
+        if len(pending_mentions) >= BATCH or len(pending_scans) >= BATCH:
+            await flush_batch(conn, pending_mentions, pending_scans, dry_run)
+            print(f"Voortgang: {n['items']} items, {n['mentions']} mentions", flush=True)
+    await flush_batch(conn, pending_mentions, pending_scans, dry_run)
+
+    works = work_rows(verified, await _categories(conn, dry_rows))
+    for i in range(0, len(works), BATCH):
+        chunk = works[i : i + BATCH]
+        n["works"] += len(chunk)
+        if not dry_run:
+            await conn.execute(WORK_STMT, chunk)
+            await conn.commit()
+        print(f"Voortgang works: {n['works']}/{len(works)}", flush=True)
+    return n
+
+
 async def main() -> None:
     """Batch-uitvoer lezen en tip_mentions, tip_scans en tip_works vullen."""
     args = parse_args()
     windows_by_item = read_windows(args.mentions)
     verified = read_verified(args.verified)
-
-    n_items = n_missing = n_scanned = n_mentions = n_works = 0
     # Kale SQLAlchemy-connectie: executemany met een lijst parameters, zonder sqlmodel-waarschuwingen.
-    async with async_engine.connect() as session:
-        res = await session.execute(sa_text("SELECT id::text FROM items"))
-        item_ids = {row[0] for row in res}
-        res = await session.execute(sa_text("SELECT item_id::text FROM tip_scans"))
-        scanned_ids = {row[0] for row in res}
+    async with async_engine.connect() as conn:
+        n = await run_import(conn, windows_by_item, verified, args.dry_run)
 
-        pending_mentions: list[dict] = []
-        pending_scans: list[dict] = []
-        cats_by_tk: dict[str, Counter] = {}
-        for item_id in sorted(windows_by_item):
-            if item_id not in item_ids:
-                n_missing += 1
-                continue
-            if item_id in scanned_ids:
-                n_scanned += 1
-                continue
-            wins = windows_by_item[item_id]
-            rows = mention_rows(item_id, wins)
-            n_items += 1
-            n_mentions += len(rows)
-            pending_mentions.extend(rows)
-            for r in rows:
-                cats_by_tk.setdefault(r["tk"], Counter())[r["cat"]] += 1
-            pending_scans.append(
-                {
-                    "item_id": item_id,
-                    "windows": len({w["offset"] for w in wins}),
-                    "model": ",".join(sorted({w["model"] for w in wins})),
-                }
-            )
-            if len(pending_mentions) >= BATCH or len(pending_scans) >= BATCH:
-                await flush_batch(session, pending_mentions, pending_scans, args.dry_run)
-                print(f"Voortgang: {n_items} items, {n_mentions} mentions", flush=True)
-        await flush_batch(session, pending_mentions, pending_scans, args.dry_run)
-
-        works = work_rows(verified, cats_by_tk)
-        for i in range(0, len(works), BATCH):
-            chunk = works[i : i + BATCH]
-            n_works += len(chunk)
-            if not args.dry_run:
-                await session.execute(WORK_STMT, chunk)
-                await session.commit()
-            print(f"Voortgang works: {n_works}/{len(works)}", flush=True)
-
-    print(f"Items geïmporteerd: {n_items}", flush=True)
+    print(f"Items geïmporteerd: {n['items']}", flush=True)
     print(
-        f"Items overgeslagen: {n_missing + n_scanned} "
-        f"(onbekend: {n_missing}, al gescand: {n_scanned})",
+        f"Items overgeslagen: {n['missing'] + n['scanned']} "
+        f"(onbekend: {n['missing']}, al gescand: {n['scanned']})",
         flush=True,
     )
-    print(f"Mentions: {n_mentions}", flush=True)
-    print(f"Works: {n_works}", flush=True)
+    print(f"Mentions: {n['mentions']}", flush=True)
+    print(f"Works: {n['works']} (verificaties; ON CONFLICT DO NOTHING bij bestaande)", flush=True)
     if args.dry_run:
         print("Dry run: niets geschreven.", flush=True)
 
