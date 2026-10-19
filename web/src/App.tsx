@@ -3,8 +3,9 @@ import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon, Lightbulb } from 'lucide-react';
 import { AdminPage } from './AdminPage';
+import { TipsPage } from './TipsPage';
 import { SettingsProvider, useSettings } from './settings';
 import { GlobalAudioProvider, useGlobalAudio } from './GlobalAudioContext';
 import StickyPlayer from './StickyPlayer';
@@ -1800,12 +1801,12 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
 const parseSearchFormat = (v: string | null): ItemFormat | null =>
   v === 'article' || v === 'podcast' || v === 'video' ? v : null;
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; tips: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
     sourceId: p.get('source'),
-    admin: p.get('admin') === '1', lessons: p.get('lessons') === '1',
+    admin: p.get('admin') === '1', lessons: p.get('lessons') === '1', tips: p.get('tips') === '1',
     eink: p.get('eink') === '1',
     // ?q= (ook leeg) = zoekpagina open
     q: p.get('q'), fmt: parseSearchFormat(p.get('fmt')),
@@ -2875,6 +2876,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
   const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
+  const [tipsView, setTipsView] = useState<boolean>(() => readUrl().tips);
   const [searchQuery, setSearchQuery] = useState<string | null>(() => readUrl().q);
   const [searchFormat, setSearchFormat] = useState<ItemFormat | null>(() => readUrl().fmt);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
@@ -2882,11 +2884,12 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, sourceId, admin, lessons, eink, q, fmt } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, tips, eink, q, fmt } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
+      setTipsView(tips);
       setEinkMode(eink);
       setSearchQuery(q);
       setSearchFormat(fmt);
@@ -2902,6 +2905,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
+    url.searchParams.delete('tips');
     url.searchParams.delete('q');
     url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
@@ -2909,6 +2913,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
+    setTipsView(false);
     setSearchQuery(null);
     setSearchFormat(null);
     setActiveFilter('all');
@@ -2919,7 +2924,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const openSearch = () => {
     // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
     // naar een oudere vraag springen dan het invoerveld toonde).
-    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView) {
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView) {
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       return;
     }
@@ -2930,6 +2935,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
+    url.searchParams.delete('tips');
     window.history.pushState({}, '', url.toString());
     setSearchQuery(q);
     setSearchFormat(parseSearchFormat(url.searchParams.get('fmt')));
@@ -2937,6 +2943,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
+    setTipsView(false);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
@@ -2968,23 +2975,51 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const openLessons = () => {
     const url = new URL(window.location.href);
     url.searchParams.set('lessons', '1');
+    url.searchParams.delete('tips');
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
     url.searchParams.delete('q');
     url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setLessonsView(true);
+    setTipsView(false);
     setItemId(null);
     setAdminMode(false);
     setSearchQuery(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
+  const openTips = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tips', '1');
+    url.searchParams.delete('lessons');
+    url.searchParams.delete('item');
+    url.searchParams.delete('admin');
+    url.searchParams.delete('q');
+    url.searchParams.delete('fmt');
+    window.history.pushState({}, '', url.toString());
+    setTipsView(true);
+    setLessonsView(false);
+    setItemId(null);
+    setAdminMode(false);
+    setSearchQuery(null);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const closeTips = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('tips');
+    window.history.pushState({}, '', url.toString());
+    setTipsView(false);
+  };
+
   const closeLessons = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('lessons');
+    url.searchParams.delete('tips');
     window.history.pushState({}, '', url.toString());
     setLessonsView(false);
+    setTipsView(false);
   };
 
   const openAdmin = () => {
@@ -3105,6 +3140,10 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
+            <button onClick={openTips} title="Tips uit je podcasts en video's" aria-label="Tips"
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <Lightbulb size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
+            </button>
             <button onClick={openLessons} title="Alle lessen"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <BookOpen size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
@@ -3138,6 +3177,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
         ) : itemId ? (
           <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource} onEink={openEink}
             onArchive={() => setData(d => d ? { ...d, rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== itemId) })) } : d)} />
+        ) : tipsView ? (
+          // Na itemId: een aflevering openen vanuit Tips toont het item, terug brengt je weer hier.
+          <TipsPage onBack={closeTips} onOpenItem={openItem} />
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
         ) : searchQuery !== null ? (

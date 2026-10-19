@@ -920,3 +920,95 @@ export async function fetchDecisionScoreStatus(): Promise<DecisionScoreStatus> {
   const r = await apiFetch('/api/admin/decision-score/status');
   return r.json();
 }
+
+// ---- Tips (aanbevelingen uit transcripten) ----
+
+export type TipCategory = 'book' | 'software' | 'film' | 'series' | 'documentary' | 'game' | 'podcast' | 'music' | 'youtube' | 'newsletter' | 'comic' | 'theatre' | 'other';
+
+export type TipSort = 'score' | 'episodes' | 'recent' | 'title';
+
+export type TipStrength = 'strong' | 'medium' | 'weak';
+
+export interface TipWork {
+  title: string;
+  creator: string | null;
+  category: TipCategory;
+  title_key: string;
+  score: number;
+  episodes: number;
+  strong: number;
+  who: string[];
+  blurb: string | null;
+  sources: string[];
+  last_mentioned: string | null;
+  aka: string[];
+}
+
+export interface TipMention {
+  item_id: string;
+  source: string;
+  episode: string;
+  published: string | null;
+  by: string | null;
+  strength: TipStrength;
+  why: string | null;
+  quote: string | null;
+}
+
+export interface TipsResponse {
+  total: number;
+  categories: Record<string, number>;
+  sources: { name: string; n: number }[];
+  works: TipWork[];
+}
+
+export interface TipMentionsResponse {
+  title: string;
+  creator: string | null;
+  category: TipCategory;
+  title_key: string;
+  episodes: number;
+  mentions: TipMention[];
+}
+
+export interface TipsQuery {
+  category?: TipCategory | null;
+  since?: string | null;
+  q?: string | null;
+  source?: string | null;
+  strongOnly?: boolean;
+  minEpisodes?: number;
+  sort?: TipSort;
+  limit?: number;
+  offset?: number;
+  signal?: AbortSignal;
+}
+
+export async function fetchTips(query: TipsQuery = {}): Promise<TipsResponse> {
+  const params = new URLSearchParams();
+  if (query.category) params.set('category', query.category);
+  if (query.since) params.set('since', query.since);
+  if (query.q) params.set('q', query.q);
+  if (query.source) params.set('source', query.source);
+  if (query.strongOnly) params.set('strong_only', 'true');
+  if (query.minEpisodes && query.minEpisodes > 1) params.set('min_episodes', String(query.minEpisodes));
+  if (query.sort) params.set('sort', query.sort);
+  if (query.limit) params.set('limit', String(query.limit));
+  if (query.offset) params.set('offset', String(query.offset));
+  const qs = params.toString();
+  const res = await apiFetch(qs ? `/api/tips?${qs}` : '/api/tips', { signal: query.signal });
+  return (await res.json()) as TipsResponse;
+}
+
+export async function fetchTipMentions(
+  titleKey: string,
+  category: TipCategory,
+  since?: string | null,
+): Promise<TipMentionsResponse> {
+  const params = new URLSearchParams();
+  params.set('title_key', titleKey);
+  params.set('category', category);
+  if (since) params.set('since', since);
+  const res = await apiFetch(`/api/tips/mentions?${params.toString()}`);
+  return (await res.json()) as TipMentionsResponse;
+}

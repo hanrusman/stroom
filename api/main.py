@@ -5,7 +5,7 @@ from sqlmodel import select
 from pathlib import Path
 from typing import Dict, List, Optional, Literal
 from pydantic import BaseModel
-from core.db import get_async_session
+from core.db import async_session_maker, get_async_session
 from core.url_guard import UnsafeURLError, assert_public_url, safe_get as _safe_get
 from models.base import (
     ItemStatus, ProcessingStatus,
@@ -39,6 +39,8 @@ from routers import ask as ask_router
 from routers import inbox as inbox_router
 from routers import transcripts as transcripts_router
 from routers import decision as decision_router
+from routers import tips as tips_router
+from services import tips_service
 
 
 # --- Queue tunables ---
@@ -477,6 +479,7 @@ _INTERNAL_TOKEN_PATH_SUFFIXES = (
     "/admin/cron/summarize-articles",
     "/admin/cron/digest-topics",
     "/admin/cron/last-result",
+    "/admin/cron/tips",
     "/admin/sources/backfill-stale",
     "/admin/quality-backfill",
     "/admin/decision-score/run",
@@ -567,6 +570,7 @@ app.include_router(ask_router.router)
 app.include_router(inbox_router.router)
 app.include_router(transcripts_router.router)
 app.include_router(decision_router.router)
+app.include_router(tips_router.router)
 
 
 # --- Auth routes ---
@@ -3070,6 +3074,10 @@ async def admin_cron_nightly(light: bool = Query(False),
 
         article_ids = await _cron_pick_articles_for_summary(session, hours=CRON_NIGHTLY_HOURS)
 
+        # Tips-mining op nieuw getranscribeerde items: cloud-werk, dus ook in de
+        # light-pas. Achtergrondtaak met eigen lock; telt niet mee in de 1800s-watchdog.
+        tips_started = tips_service.spawn_tips_job(async_session_maker, LLMService(app.state.llm_client))
+
         if light:
             # Daytime-pas: GEEN transcriptie (GPU/lokaal) en GEEN digests — nachtwerk.
             podcasts_queued = videos_queued = digests_started = weekly_started = 0
@@ -3104,6 +3112,7 @@ async def admin_cron_nightly(light: bool = Query(False),
             "articles_summarize_kicked": len(article_ids),
             "digests_started": digests_started,
             "weekly_started": weekly_started,
+            "tips_started": tips_started,
         }
 
     try:
@@ -3181,6 +3190,24 @@ async def admin_cron_digest_topics(window: DigestWindow = Query("daily"),
                                    session=Depends(get_async_session)):
     started = await _cron_kick_topic_digests(session, model=model, window=window)
     return {"ok": True, "digests_started": started, "window": window, "model": model}
+
+
+@app.post("/admin/cron/tips")
+async def admin_cron_tips(max_items: int = Query(40, ge=1, le=500)):
+    """Start tips-mining (aanbevelingen uit transcripten) als achtergrondjob.
+
+    Zie docs/tips-mining.md. Draait ook mee met elke nightly-aanroep.
+    Auth: internal token or admin session cookie.
+    """
+    started = tips_service.spawn_tips_job(async_session_maker, LLMService(app.state.llm_client),
+                                          max_items=max_items)
+    return {"started": started, "last_result": tips_service.last_result}
+
+
+@app.get("/admin/cron/tips")
+async def admin_cron_tips_status():
+    """Status van de laatste tips-run."""
+    return {"running": tips_service._job_lock.locked(), "last_result": tips_service.last_result}
 
 
 @app.get("/admin/cron/last-result")
