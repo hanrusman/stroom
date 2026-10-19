@@ -18,6 +18,7 @@ from services.tips_helpers import (
     parse_tips,
     parse_verify,
     title_key,
+    valid_tips_response,
     windows,
 )
 from services.tips_aggregate import aggregate, query_works
@@ -166,19 +167,21 @@ async def load_mentions(session) -> list[dict]:
     ]
 
 
-async def load_works(session) -> dict[str, dict]:
-    """Alle geverifieerde werken als dict per title_key."""
+async def load_works(session) -> dict[tuple[str, str], dict]:
+    """Alle geverifieerde werken, gekeyd op (category, title_key); "category" in de
+    waarde is de canonieke categorie volgens het verificatiemodel."""
     stmt = sa_text(
-        "SELECT title_key, keep, title, creator, category, confidence FROM tip_works"
+        "SELECT category, title_key, keep, title, creator, canon_category, confidence "
+        "FROM tip_works"
     )
     rows = (await session.exec(stmt)).all()
     return {
-        row[0]: {
-            "keep": row[1],
-            "title": row[2],
-            "creator": row[3],
-            "category": row[4],
-            "confidence": row[5],
+        (row[0], row[1]): {
+            "keep": row[2],
+            "title": row[3],
+            "creator": row[4],
+            "category": row[5],
+            "confidence": row[6],
         }
         for row in rows
     }
@@ -225,10 +228,14 @@ async def scan_item(session_maker, llm, item_id: str, model: str) -> dict:
 
     async def extract(offset: int, chunk: str) -> list[dict]:
         user = f'Bron: {source} — "{title}"\n\nFragment:\n{chunk}'
-        data = await _llm_json(
-            llm, model, EXTRACT_SYSTEM, user, max_tokens=1500, timeout=EXTRACT_TIMEOUT
-        )
-        return clean_tips(data)
+        for _ in range(2):  # verkeerd schema: één nieuwe poging
+            data = await _llm_json(
+                llm, model, EXTRACT_SYSTEM, user, max_tokens=1500, timeout=EXTRACT_TIMEOUT
+            )
+            if valid_tips_response(data):
+                return clean_tips(data)
+        # Geen lege uitkomst van maken: dan zou het item als 'done' nooit opnieuw gescand worden.
+        raise ValueError(f"antwoord zonder tips-lijst (venster {offset}): {str(data)[:120]}")
 
     results = await asyncio.gather(
         *(extract(offset, chunk) for offset, chunk in wins),
@@ -293,29 +300,34 @@ def _most_common(values: list[str]) -> str:
 async def verify_new_works(
     session_maker, llm, model: str, batch_size: int = VERIFY_BATCH
 ) -> int:
-    """Verifieer nieuwe werken in batches en sla de oordelen op in tip_works."""
+    """Verifieer nieuwe werken in batches en sla de oordelen op in tip_works.
+
+    Een werk is (category, title_key). Batches waarvan het antwoord niet aan het
+    schema voldoet worden overgeslagen en bij de volgende run opnieuw geprobeerd.
+    """
     async with session_maker() as s:
         rows = (
             await s.exec(
                 sa_text(
                     """
                     WITH per_item AS (
-                      SELECT m.title_key, m.item_id,
+                      SELECT m.category, m.title_key, m.item_id,
                              max(CASE m.strength WHEN 'strong' THEN 3
                                  WHEN 'medium' THEN 2 ELSE 1 END) AS w
                       FROM tip_mentions m
-                      LEFT JOIN tip_works tw ON tw.title_key = m.title_key
+                      LEFT JOIN tip_works tw
+                        ON tw.category = m.category AND tw.title_key = m.title_key
                       WHERE tw.title_key IS NULL
-                      GROUP BY m.title_key, m.item_id)
-                    SELECT title_key FROM per_item
-                    GROUP BY title_key
+                      GROUP BY m.category, m.title_key, m.item_id)
+                    SELECT category, title_key FROM per_item
+                    GROUP BY category, title_key
                     HAVING sum(w) >= :min_score
                     ORDER BY sum(w) DESC
                     """
                 ).bindparams(min_score=MIN_VERIFY_SCORE)
             )
         ).all()
-        keys = [row[0] for row in rows]
+        keys = [(row[0], row[1]) for row in rows]
         if not keys:
             return 0
         mention_rows = (
@@ -326,21 +338,22 @@ async def verify_new_works(
                     FROM tip_mentions m
                     JOIN items i ON i.id = m.item_id
                     JOIN sources s ON s.id = i.source_id
-                    WHERE m.title_key = ANY(:keys)
+                    WHERE m.title_key = ANY(:tks)
                     """
-                ).bindparams(keys=keys)
+                ).bindparams(tks=sorted({tk for _, tk in keys}))
             )
         ).all()
 
-    info: dict[str, dict[str, list[str]]] = {
-        key: {"titles": [], "creators": [], "categories": [], "quotes": [], "shows": []}
+    info: dict[tuple[str, str], dict[str, list[str]]] = {
+        key: {"titles": [], "creators": [], "quotes": [], "shows": []}
         for key in keys
     }
-    for key, title, creator, category, quote, show in mention_rows:
-        entry = info[key]
+    for tk, title, creator, category, quote, show in mention_rows:
+        entry = info.get((category, tk))
+        if entry is None:  # zelfde titel, andere categorie: een ander werk
+            continue
         entry["titles"].append(title)
         entry["creators"].append(creator)
-        entry["categories"].append(category)
         if quote and quote.strip():
             entry["quotes"].append(quote.strip()[:140])
         entry["shows"].append(show)
@@ -354,10 +367,10 @@ async def verify_new_works(
             entry = info[key]
             item = {
                 "vid": vid,
-                "title_key": key,
+                "key": key,
                 "title": _most_common(entry["titles"]),
                 "creator": _most_common(entry["creators"]),
-                "category": _most_common(entry["categories"]),
+                "category": key[0],
             }
             batch.append(item)
             lines.append(
@@ -398,25 +411,27 @@ async def verify_new_works(
                     sa_text(
                         """
                         INSERT INTO tip_works
-                            (title_key, keep, title, creator, category, confidence, model)
+                            (category, title_key, keep, title, creator, canon_category,
+                             confidence, model)
                         VALUES
-                            (:title_key, :keep, :title, :creator, :category,
+                            (:category, :title_key, :keep, :title, :creator, :canon_category,
                              :confidence, :model)
-                        ON CONFLICT (title_key) DO UPDATE SET
+                        ON CONFLICT (category, title_key) DO UPDATE SET
                             keep = EXCLUDED.keep,
                             title = EXCLUDED.title,
                             creator = EXCLUDED.creator,
-                            category = EXCLUDED.category,
+                            canon_category = EXCLUDED.canon_category,
                             confidence = EXCLUDED.confidence,
                             model = EXCLUDED.model,
                             verified_at = now()
                         """
                     ).bindparams(
-                        title_key=key,
+                        category=key[0],
+                        title_key=key[1],
                         keep=verdict["keep"],
                         title=verdict["title"],
                         creator=verdict["creator"],
-                        category=verdict["category"],
+                        canon_category=verdict["category"],
                         confidence=verdict["confidence"],
                         model=model,
                     )

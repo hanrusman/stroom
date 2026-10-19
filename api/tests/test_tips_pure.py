@@ -6,6 +6,7 @@ import pytest
 
 sys.path.insert(0, "/app")
 
+from services import tips_helpers  # noqa: E402
 from services.tips_aggregate import aggregate, query_works  # noqa: E402
 from services.tips_helpers import (  # noqa: E402
     STEP, WIN, clean_tips, norm, parse_tips, parse_verify, title_key, who_label, windows,
@@ -28,8 +29,9 @@ def _w(keep=True, **kw) -> dict:
     return w
 
 
-def _works(*titles, **kw) -> dict:
-    return {title_key(t): _w(**kw) for t in titles}
+def _works(*titles, category="book", **kw) -> dict:
+    """Verificatierijen, gekeyd op de werkidentiteit (categorie, title_key)."""
+    return {(category, title_key(t)): _w(**kw) for t in titles}
 
 
 # ---- windows / norm / title_key ----
@@ -85,19 +87,40 @@ def test_parse_tips_handles_fences_and_noise():
 # ---- parse_verify / who_label ----
 
 def test_parse_verify_drop_and_fix():
-    batch = [{"vid": 0, "title_key": "dune", "title": "Dune", "creator": None, "category": "book"},
-             {"vid": 1, "title_key": "muse", "title": "Muse", "creator": None, "category": "software"},
-             {"vid": 2, "title_key": "playing in reality", "title": "Playing in Reality",
+    batch = [{"vid": 0, "key": ("book", "dune"), "title": "Dune", "creator": None, "category": "book"},
+             {"vid": 1, "key": ("software", "muse"), "title": "Muse", "creator": None,
+              "category": "software"},
+             {"vid": 2, "key": ("book", "playing in reality"), "title": "Playing in Reality",
               "creator": None, "category": "book"}]
     raw = ('{"drop": [1, "x"], "fix": [{"id": 2, "title": "Playing and Reality", '
            '"creator": "D.W. Winnicott", "confidence": "medium"}, {"id": 99, "title": "Nope"}]}')
     out = parse_verify(raw, batch)
-    assert out["dune"] == {"keep": True, "title": "Dune", "creator": None, "category": "book",
+    assert out[("book", "dune")] == {"keep": True, "title": "Dune", "creator": None, "category": "book",
                            "confidence": "high"}
-    assert out["muse"]["keep"] is False
-    assert out["playing in reality"]["title"] == "Playing and Reality"
-    assert out["playing in reality"]["confidence"] == "medium"
+    assert out[("software", "muse")]["keep"] is False
+    assert out[("book", "playing in reality")]["title"] == "Playing and Reality"
+    assert out[("book", "playing in reality")]["confidence"] == "medium"
     assert parse_verify("onzin", batch) == {}
+    assert parse_verify('{"drop": [], "fix": []}', batch)[("book", "dune")]["keep"] is True
+
+
+def test_parse_verify_rejects_wrong_schema():
+    """Review #79 punt 2: een antwoord zonder drop/fix mag niet als 'alles behouden' tellen."""
+    # title_key erbij: dan zou ook de oude, schemaloze parse_verify hier alles behouden.
+    batch = [{"vid": 0, "key": ("book", "dune"), "title_key": "dune", "title": "Dune",
+              "creator": None, "category": "book"}]
+    assert parse_verify('{"error": "cannot verify"}', batch) == {}
+    assert parse_verify('{"drop": "0"}', batch) == {}
+    assert parse_verify('{"drop": [0], "fix": {"id": 0}}', batch) == {}
+    assert parse_verify('[0]', batch) == {}
+
+
+def test_valid_tips_response():
+    """Review #79 punt 2: alleen een object met een tips-lijst is een geldig extractie-antwoord."""
+    assert tips_helpers.valid_tips_response({"tips": []}) is True
+    assert tips_helpers.valid_tips_response({"tips": [{"title": "Dune"}]}) is True
+    for bad in ({"foo": 1}, {"tips": "Dune"}, {"tips": None}, [], "tips", None):
+        assert tips_helpers.valid_tips_response(bad) is False
 
 
 def test_who_label():
@@ -111,7 +134,7 @@ def test_who_label():
 
 def test_aggregate_requires_kept_verification():
     ms = [_m(title="Dune"), _m(title="Muse", category="software"), _m(title="Onverifieerd")]
-    works = {**_works("Dune"), **_works("Muse", keep=False)}
+    works = {**_works("Dune"), **_works("Muse", category="software", keep=False)}
     assert [w["title"] for w in aggregate(ms, works)] == ["Dune"]
 
 
@@ -127,12 +150,12 @@ def test_aggregate_sponsor_read_needs_distinct_episodes():
     ad = "Work OS turns enterprise authentication into drop-in APIs for every team"
     # Hetzelfde citaat 3× in dezelfde aflevering (overlappende vensters/modellen): geen ad.
     same_item = [_m(title="WorkOS", category="software", quote=ad) for _ in range(3)]
-    (w,) = aggregate(same_item, _works("WorkOS"))
+    (w,) = aggregate(same_item, _works("WorkOS", category="software"))
     assert w["episodes"] == 1
     # In 3 verschillende afleveringen: sponsor-read, en daarmee ook sponsor van die show.
     ms = [_m(item=f"i{n}", title="WorkOS", category="software", quote=ad) for n in range(3)]
     ms.append(_m(item="i9", title="WorkOS", category="software", quote="We gebruiken het zelf graag"))
-    assert aggregate(ms, _works("WorkOS")) == []
+    assert aggregate(ms, _works("WorkOS", category="software")) == []
 
 
 def test_aggregate_ad_text_network_promo_and_self_work():
@@ -140,17 +163,19 @@ def test_aggregate_ad_text_network_promo_and_self_work():
           _m(title="Wordle", category="game", creator="The New York Times", source="The Daily (NYT)"),
           _m(title="Deep Work", creator="Cal Newport", source="Deep Questions with Cal Newport"),
           _m(title="Show A", category="podcast")]
-    assert aggregate(ms, _works("Atomic Habits", "Wordle", "Deep Work", "Show A")) == []
+    works = {**_works("Atomic Habits", "Deep Work"), **_works("Wordle", category="game"),
+             **_works("Show A", category="podcast")}
+    assert aggregate(ms, works) == []
 
 
 def test_aggregate_recurring_single_show_ad_only_for_ad_categories():
     pod = [_m(item=f"i{n}", title="America Actually", category="podcast", why=f"r{n}") for n in range(4)]
     book = [_m(item=f"i{n}", title="Dune", why=f"r{n}") for n in range(4)]
-    out = aggregate(pod + book, _works("America Actually", "Dune"))
+    out = aggregate(pod + book, {**_works("America Actually", category="podcast"), **_works("Dune")})
     assert [w["title"] for w in out] == ["Dune"]
     # Twee shows: geen vaste ad.
     pod[0]["source"] = "Show B"
-    assert {w["title"] for w in aggregate(pod, _works("America Actually"))} == {"America Actually"}
+    assert {w["title"] for w in aggregate(pod, _works("America Actually", category="podcast"))} == {"America Actually"}
 
 
 def test_aggregate_since_filters_mentions():
@@ -164,13 +189,28 @@ def test_aggregate_since_filters_mentions():
 
 def test_aggregate_title_correction_rules():
     ms = [_m(title="Playing in Reality")]
-    sure = {title_key("Playing in Reality"): _w(title="Playing and Reality", confidence="medium")}
+    sure = {("book", title_key("Playing in Reality")): _w(title="Playing and Reality", confidence="medium")}
     assert aggregate(ms, sure)[0]["title"] == "Playing and Reality"
-    other_work = {title_key("Playing in Reality"): _w(title="The Kindly Ones", confidence="high")}
+    other_work = {("book", title_key("Playing in Reality")): _w(title="The Kindly Ones", confidence="high")}
     assert aggregate(ms, other_work)[0]["title"] == "Playing in Reality"
-    unsure = {title_key("Playing in Reality"): _w(title="Playing and Reality", confidence="low")}
+    unsure = {("book", title_key("Playing in Reality")): _w(title="Playing and Reality", confidence="low")}
     (w,) = aggregate(ms, unsure)
     assert w["title"] == "Playing in Reality" and w["aka"] == []
+
+
+def test_aggregate_same_title_different_category_stays_separate():
+    """Review #79 punt 1: het boek Dune en de film Dune zijn twee werken, ook in één aflevering."""
+    ms = [_m(item="i1", title="Dune", creator="Frank Herbert"),
+          _m(item="i1", title="Dune", category="film", creator="Denis Villeneuve"),
+          _m(item="i2", title="Dune", category="film", creator="Denis Villeneuve")]
+    works = {**_works("Dune"), **_works("Dune", category="film")}
+    out = {w["category"]: w for w in aggregate(ms, works)}
+    assert set(out) == {"book", "film"}
+    assert out["book"]["episodes"] == 1 and out["book"]["creator"] == "Frank Herbert"
+    assert out["film"]["episodes"] == 2 and out["film"]["creator"] == "Denis Villeneuve"
+    # Verificatie geldt per categorie: de film afkeuren laat het boek staan.
+    works[("film", "dune")] = _w(keep=False)
+    assert [w["category"] for w in aggregate(ms, works)] == ["book"]
 
 
 def test_aggregate_merges_number_spellings():

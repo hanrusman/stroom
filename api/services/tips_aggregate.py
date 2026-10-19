@@ -56,15 +56,20 @@ def _most_common(values: list[str | None]) -> str | None:
     return Counter(values).most_common(1)[0][0]
 
 
-def aggregate(mentions: list[dict], works: dict[str, dict],
+def aggregate(mentions: list[dict], works: dict[tuple[str, str], dict],
               since: str | None = None) -> list[dict]:
-    """Filtert ruis weg en aggregeert mentions per werk tot aanbevelingen."""
+    """Filtert ruis weg en aggregeert mentions per werk tot aanbevelingen.
+
+    Een werk is (category, title_key): het boek Dune en de film Dune zijn twee
+    werken, ook als ze in dezelfde aflevering vallen. `works` is de verificatie,
+    gekeyd op diezelfde identiteit.
+    """
     # Eerst één mention per (item, werk): overlappende vensters en meerdere modellen
     # leveren hetzelfde citaat vaak 2-3× uit dezelfde aflevering, en dat zou de
     # sponsor-read-telling hieronder ten onrechte laten afgaan.
     best: dict[tuple[str, str], dict] = {}
     for m in mentions:
-        k = (m["item_id"], m["title_key"])
+        k = (m["item_id"], m["category"], m["title_key"])
         cur = best.get(k)
         if cur is None or WEIGHT[m["strength"]] > WEIGHT[cur["strength"]]:
             best[k] = m
@@ -73,9 +78,9 @@ def aggregate(mentions: list[dict], works: dict[str, dict],
     qcount: Counter[str] = Counter(
         quote_key(m["quote"]) for m in mentions if len(quote_key(m["quote"])) >= 25)
 
-    groups: dict[str, list[dict]] = {}
+    groups: dict[tuple[str, str], list[dict]] = {}
     for m in mentions:
-        groups.setdefault(m["title_key"], []).append(m)
+        groups.setdefault((m["category"], m["title_key"]), []).append(m)
 
     final: dict[tuple[str | None, str], dict] = {}
     for k, ms in groups.items():
@@ -84,7 +89,7 @@ def aggregate(mentions: list[dict], works: dict[str, dict],
             continue
         creator0 = _most_common([m["creator"] for m in ms if m["creator"]])
         title0 = _most_common([m["title"] for m in ms])
-        cat0 = _most_common([m["category"] for m in ms])
+        cat0 = k[0]
 
         flags = [is_promo(m, creator0, qcount) for m in ms]
         flagged = Counter(m["source"] for m, f in zip(ms, flags) if f)

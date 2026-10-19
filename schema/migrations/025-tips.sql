@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS tip_mentions (
     window_offset   INT  NOT NULL,
     category        TEXT NOT NULL,
     title           TEXT NOT NULL,
-    title_key       TEXT NOT NULL,          -- genormaliseerde titel, groepeersleutel
+    title_key       TEXT NOT NULL,          -- genormaliseerde titel; werk = (category, title_key)
     creator         TEXT,
     recommended_by  TEXT,
     strength        TEXT NOT NULL CHECK (strength IN ('strong', 'medium', 'weak')),
@@ -20,19 +20,22 @@ CREATE TABLE IF NOT EXISTS tip_mentions (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_tip_mentions_item ON tip_mentions (item_id);
-CREATE INDEX IF NOT EXISTS idx_tip_mentions_title_key ON tip_mentions (title_key);
+CREATE INDEX IF NOT EXISTS idx_tip_mentions_work ON tip_mentions (category, title_key);
 
 -- Oordeel van het verificatiemodel per werk: echt werk of ruis, plus canonieke
--- titel/maker/categorie.
+-- titel/maker/categorie. Een werk is (category, title_key): het boek Dune en de
+-- film Dune zijn twee werken.
 CREATE TABLE IF NOT EXISTS tip_works (
-    title_key    TEXT PRIMARY KEY,
-    keep         BOOLEAN NOT NULL,
-    title        TEXT,
-    creator      TEXT,
-    category     TEXT,
-    confidence   TEXT,
-    model        TEXT,
-    verified_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    category        TEXT NOT NULL,       -- categorie zoals in tip_mentions
+    title_key       TEXT NOT NULL,
+    keep            BOOLEAN NOT NULL,
+    title           TEXT,
+    creator         TEXT,
+    canon_category  TEXT,                -- categorie volgens het verificatiemodel
+    confidence      TEXT,
+    model           TEXT,
+    verified_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (category, title_key)
 );
 
 -- Welke items gescand zijn. `failed` wordt na 24 uur opnieuw geprobeerd, max 3×.

@@ -17,7 +17,7 @@ een doorlopend proces van voor nieuwe items, plus een import van die run.
    `tip_scans` (`done` of `failed`). Tips met categorie of sterkte
    `self_promo` worden niet opgeslagen.
 2. **Verificatie per werk** (`tips_service.verify_new_works`): werken
-   (`title_key`) zonder rij in `tip_works` en met score ≥ 2 gaan in batches van
+   (`category`, `title_key`) zonder rij in `tip_works` en met score ≥ 2 gaan in batches van
    40 naar een tweede model met `VERIFY_SYSTEM` (compact `drop`/`fix`-formaat).
    Uitkomst → `tip_works` (`keep`, canonieke titel/maker/categorie, `confidence`).
    Een titelcorrectie telt alleen als hij sterk lijkt op het origineel
@@ -25,6 +25,17 @@ een doorlopend proces van voor nieuwe items, plus een import van die run.
    ongewijzigd: het model "corrigeerde" in tests naar andere werken.
 3. **Weergave** (`GET /tips`): vermeldingen van werken met `keep = true`,
    na ruisfilters, gegroepeerd per (categorie, `title_key`).
+
+**Werkidentiteit** is overal (categorie, `title_key`): het boek *Dune* en de
+film *Dune* zijn twee werken, met elk een eigen verificatie, ook als ze in
+dezelfde aflevering vallen. Pas na verificatie kan de canonieke categorie twee
+groepen samenvoegen (bv. een serie die ook als documentaire gelabeld werd).
+
+**Antwoordschema's** worden gevalideerd voordat er iets wordt opgeslagen. Een
+extractie-antwoord zonder `tips`-lijst is een mislukte call (één nieuwe poging,
+daarna `failed` en later opnieuw), geen venster zonder tips. Een
+verificatie-antwoord zonder `drop`/`fix`-lijsten (bv. `{"error": …}`) wordt
+genegeerd; de volgende run probeert die werken opnieuw.
 
 De job (`run_tips_job`) draait als achtergrondtaak, gestart door de volledige
 nightly (niet de light-pas) en handmatig via `POST /admin/cron/tips`. Eén job
@@ -48,8 +59,8 @@ nieuwste eerst; `failed` items opnieuw na 24 uur, maximaal 3 pogingen.
 - `tip_mentions`: één rij per gevonden tip per venster: `item_id`,
   `window_offset`, `category`, `title`, `title_key`, `creator`,
   `recommended_by`, `strength` (`strong|medium|weak`), `why`, `quote`, `model`.
-- `tip_works`: verificatie per `title_key`: `keep`, `title`, `creator`,
-  `category`, `confidence`, `model`.
+- `tip_works`: verificatie per werk (`category`, `title_key`): `keep`, `title`,
+  `creator`, `canon_category`, `confidence`, `model`.
 - `tip_scans`: welke items gescand zijn: `status` (`done|failed`), `windows`,
   `attempts`, `model`, `error`, `scanned_at`.
 
@@ -96,7 +107,10 @@ sterkste vermelding.
 `{item_id, offset, model, tips: [...]}`) en de verificaties (JSONL met
 `key, v_keep, v_title, v_creator, v_category, v_confidence`), en vult de drie
 tabellen. Idempotent: bestaande `tip_scans` worden overgeslagen. Alle items die
-in de uitvoer voorkomen worden `done`.
+in de uitvoer voorkomen worden `done`. De batch-run verifieerde per titel; dat
+oordeel geldt bij de import alleen voor de categorie waar het over ging (die van
+de verifier als die voorkomt, anders de meest voorkomende). Andere categorieën
+met dezelfde titel verifieert de eerste job daarna zelf (~1.400 werken).
 
 ## Code
 

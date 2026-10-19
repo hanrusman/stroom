@@ -47,12 +47,15 @@ def _asyncpg_dsn(url: str) -> str:
 class FakeLLM:
     """Geeft per prompt-soort een vast antwoord en telt de aanroepen."""
 
-    def __init__(self, tips=None, drop_titles=(), fail_status=None):
+    def __init__(self, tips=None, drop_titles=(), fail_status=None, extract_raw=None,
+                 verify_raw=None):
         self.tips = tips if tips is not None else [
             {"title": "Dune", "category": "book", "creator": "Frank Herbert",
              "recommended_by": "Jan", "strength": "strong", "why": "Prachtig", "quote": "Lees Dune"}]
         self.drop_titles = set(drop_titles)
         self.fail_status = fail_status
+        self.extract_raw = extract_raw  # vast ruw antwoord, bv. een verkeerd schema
+        self.verify_raw = verify_raw
         self.extract_calls = 0
         self.verify_batches: list[list[dict]] = []
 
@@ -62,9 +65,11 @@ class FakeLLM:
             raise HTTPException(status_code=self.fail_status, detail="nep-fout")
         if messages[0]["content"] == EXTRACT_SYSTEM:
             self.extract_calls += 1
-            return json.dumps({"tips": self.tips})
+            return self.extract_raw if self.extract_raw is not None else json.dumps({"tips": self.tips})
         batch = [json.loads(line) for line in messages[1]["content"].splitlines()]
         self.verify_batches.append(batch)
+        if self.verify_raw is not None:
+            return self.verify_raw
         return json.dumps({"drop": [b["id"] for b in batch if b["title"] in self.drop_titles],
                            "fix": []})
 
@@ -164,8 +169,9 @@ async def test_verify_new_works_only_scored_candidates_and_once(db):
     await ts.scan_item(maker, llm, item, "nep-model")
     assert await ts.verify_new_works(maker, llm, "verify-model") == 2
     assert {b["title"] for b in llm.verify_batches[0]} == {"Dune", "Muse"}  # Terloops: score 1
-    works = await _fetch(engine, "SELECT title_key, keep, model FROM tip_works ORDER BY 1")
-    assert [tuple(r) for r in works] == [("dune", True, "verify-model"), ("muse", False, "verify-model")]
+    works = await _fetch(engine, "SELECT category, title_key, keep, model FROM tip_works ORDER BY 1")
+    assert [tuple(r) for r in works] == [("book", "dune", True, "verify-model"),
+                                         ("software", "muse", False, "verify-model")]
     assert await ts.verify_new_works(maker, llm, "verify-model") == 0
 
 
@@ -186,3 +192,46 @@ async def test_run_tips_job_end_to_end(db, monkeypatch):
     assert w["who"] == ["Jan (Show A)"]
     again = await ts.run_tips_job(maker, FakeLLM(), max_items=10)
     assert again["items"] == 0
+
+
+async def test_scan_item_invalid_schema_is_failed_not_done(db):
+    """Review #79 punt 2: een JSON-object zonder tips-lijst is een mislukte scan, geen lege."""
+    engine, maker = db
+    item = await _item(engine, transcript="q" * 300)
+    llm = FakeLLM(extract_raw='{"foo": 1}')
+    res = await ts.scan_item(maker, llm, item, "nep-model")
+    assert res["status"] == "failed"
+    assert llm.extract_calls == 2  # één nieuwe poging, daarna opgeven
+    scan = (await _fetch(engine, "SELECT status, attempts, error FROM tip_scans"))[0]
+    assert scan[0] == "failed" and scan[1] == 1 and "tips" in scan[2]
+    assert (await _fetch(engine, "SELECT count(*) FROM tip_mentions"))[0][0] == 0
+
+
+async def test_verify_invalid_schema_saves_nothing(db):
+    """Review #79 punt 2: {"error": ...} mag niet leiden tot keep=True voor de hele batch."""
+    engine, maker = db
+    item = await _item(engine, transcript="v" * 300)
+    llm = FakeLLM(verify_raw='{"error": "cannot verify"}')
+    await ts.scan_item(maker, llm, item, "nep-model")
+    assert await ts.verify_new_works(maker, llm, "verify-model") == 0
+    assert (await _fetch(engine, "SELECT count(*) FROM tip_works"))[0][0] == 0
+    # De volgende run probeert het opnieuw.
+    llm.verify_raw = None
+    assert await ts.verify_new_works(maker, llm, "verify-model") == 1
+
+
+async def test_same_title_different_category_are_separate_works(db):
+    """Review #79 punt 1: boek Dune en film Dune, ook binnen één aflevering, blijven twee werken."""
+    engine, maker = db
+    tips = [{"title": "Dune", "category": "book", "creator": "Frank Herbert", "strength": "strong"},
+            {"title": "Dune", "category": "film", "creator": "Denis Villeneuve", "strength": "strong"}]
+    item = await _item(engine, transcript="d" * 300)
+    llm = FakeLLM(tips=tips)
+    await ts.scan_item(maker, llm, item, "nep-model")
+    assert await ts.verify_new_works(maker, llm, "verify-model") == 2
+    works = await _fetch(engine, "SELECT category, title_key FROM tip_works ORDER BY 1")
+    assert [tuple(r) for r in works] == [("book", "dune"), ("film", "dune")]
+    async with maker() as s:
+        agg = ts.aggregate(await ts.load_mentions(s), await ts.load_works(s))
+    assert sorted((w["category"], w["creator"], w["episodes"]) for w in agg) == [
+        ("book", "Frank Herbert", 1), ("film", "Denis Villeneuve", 1)]

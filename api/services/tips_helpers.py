@@ -120,18 +120,40 @@ def parse_tips(raw: str) -> list[dict]:
         return []
 
 
-def parse_verify(raw: str, batch: list[dict]) -> dict[str, dict]:
-    """Verwerk een verificatie-antwoord tot keep/fix-beslissingen per title_key."""
+def valid_tips_response(data: object) -> bool:
+    """Is dit een geldig extractie-antwoord: een object met een `tips`-lijst?
+
+    Een ander JSON-object (bv. `{"error": ...}`) is een mislukte call, geen
+    venster zonder tips; anders wordt het item nooit opnieuw gescand.
+    """
+    return isinstance(data, dict) and isinstance(data.get("tips"), list)
+
+
+def valid_verify_response(data: object) -> bool:
+    """Is dit een geldig verificatie-antwoord: `drop` en/of `fix`, elk een lijst?"""
+    if not isinstance(data, dict) or not ({"drop", "fix"} & data.keys()):
+        return False
+    return all(isinstance(data[k], list) for k in ("drop", "fix") if k in data)
+
+
+def parse_verify(raw: str, batch: list[dict]) -> dict:
+    """Verwerk een verificatie-antwoord tot keep/fix-beslissingen per werk.
+
+    Batch-items dragen hun werkidentiteit in `key` (de verificatietabel gebruikt
+    (category, title_key)); de uitkomst is daarop gekeyd. Een antwoord dat niet
+    aan het schema voldoet geeft `{}`: dan wordt niets opgeslagen en probeert de
+    volgende run het opnieuw, in plaats van alles stil als 'behouden' te tellen.
+    """
     try:
         data = parse_llm_json(raw)
     except json.JSONDecodeError:
         return {}
-    if not isinstance(data, dict):
+    if not valid_verify_response(data):
         return {}
-    result: dict[str, dict] = {}
-    vid_to_key: dict[int, str] = {}
+    result: dict = {}
+    vid_to_key: dict[int, object] = {}
     for item in batch:
-        key = item.get("title_key")
+        key = item.get("key")
         if not key:
             continue
         result[key] = {

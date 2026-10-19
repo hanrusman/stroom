@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, "/app")
@@ -12,6 +13,7 @@ from sqlalchemy import text as sa_text
 
 from core.db import async_engine
 from services import tips_service
+from services.tips_helpers import ALIAS
 
 BATCH = 500
 IMPORT_MODEL = "import-2026-10"
@@ -28,9 +30,10 @@ SCAN_STMT = sa_text(
     "ON CONFLICT (item_id) DO NOTHING"
 )
 WORK_STMT = sa_text(
-    "INSERT INTO tip_works (title_key, keep, title, creator, category, confidence, model) "
-    "VALUES (:tk, :keep, :title, :creator, :cat, :conf, :model) "
-    "ON CONFLICT (title_key) DO NOTHING"
+    "INSERT INTO tip_works (category, title_key, keep, title, creator, canon_category, "
+    "confidence, model) "
+    "VALUES (:cat, :tk, :keep, :title, :creator, :canon, :conf, :model) "
+    "ON CONFLICT (category, title_key) DO NOTHING"
 )
 
 
@@ -90,11 +93,31 @@ def read_verified(path: str) -> list[dict]:
                     "keep": bool(rec.get("v_keep")),
                     "title": rec.get("v_title"),
                     "creator": rec.get("v_creator"),
-                    "cat": rec.get("v_category"),
+                    "canon": rec.get("v_category"),
                     "conf": rec.get("v_confidence"),
                     "model": IMPORT_MODEL,
                 }
             )
+    return rows
+
+
+def work_rows(verified: list[dict], cats_by_tk: dict[str, Counter]) -> list[dict]:
+    """Batch-verificaties (per titel) omzetten naar werken (categorie, titel).
+
+    De batch-run verifieerde per titel, over categorieën heen. Het oordeel geldt
+    hier alleen voor de categorie waar het over ging: de categorie die de
+    verifier noemde als die voorkomt, anders de meest voorkomende. Andere
+    categorieën met dezelfde titel (het boek Dune naast de film) blijven
+    ongeverifieerd; de job verifieert ze daarna zelf.
+    """
+    rows: list[dict] = []
+    for v in verified:
+        cats = cats_by_tk.get(v["tk"])
+        if not cats:
+            continue
+        canon = ALIAS.get(v["canon"], v["canon"])
+        cat = canon if canon in cats else cats.most_common(1)[0][0]
+        rows.append({**v, "cat": cat, "canon": canon or cat})
     return rows
 
 
@@ -169,6 +192,7 @@ async def main() -> None:
 
         pending_mentions: list[dict] = []
         pending_scans: list[dict] = []
+        cats_by_tk: dict[str, Counter] = {}
         for item_id in sorted(windows_by_item):
             if item_id not in item_ids:
                 n_missing += 1
@@ -181,6 +205,8 @@ async def main() -> None:
             n_items += 1
             n_mentions += len(rows)
             pending_mentions.extend(rows)
+            for r in rows:
+                cats_by_tk.setdefault(r["tk"], Counter())[r["cat"]] += 1
             pending_scans.append(
                 {
                     "item_id": item_id,
@@ -193,13 +219,14 @@ async def main() -> None:
                 print(f"Voortgang: {n_items} items, {n_mentions} mentions", flush=True)
         await flush_batch(session, pending_mentions, pending_scans, args.dry_run)
 
-        for i in range(0, len(verified), BATCH):
-            chunk = verified[i : i + BATCH]
+        works = work_rows(verified, cats_by_tk)
+        for i in range(0, len(works), BATCH):
+            chunk = works[i : i + BATCH]
             n_works += len(chunk)
             if not args.dry_run:
                 await session.execute(WORK_STMT, chunk)
                 await session.commit()
-            print(f"Voortgang works: {n_works}/{len(verified)}", flush=True)
+            print(f"Voortgang works: {n_works}/{len(works)}", flush=True)
 
     print(f"Items geïmporteerd: {n_items}", flush=True)
     print(

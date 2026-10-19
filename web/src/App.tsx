@@ -3077,9 +3077,12 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     const url = new URL(window.location.href);
     url.searchParams.set('source', id);
     url.searchParams.delete('item');
+    // Expliciete bronnavigatie verlaat Tips: anders wint tipsView (vóór sourceId in de render).
+    url.searchParams.delete('tips');
     window.history.pushState({}, '', url.toString());
     setSourceId(id);
     setItemId(null);
+    setTipsView(false);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
