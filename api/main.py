@@ -41,6 +41,8 @@ from routers import transcripts as transcripts_router
 from routers import decision as decision_router
 from routers import tips as tips_router
 from services import tips_service
+from services import podcast_converter
+from routers import podcast_tests as podcast_tests_router
 
 
 # --- Queue tunables ---
@@ -411,6 +413,9 @@ async def lifespan(app: FastAPI):
               f"{decision_scorer.DECISION_URL}, elke {decision_scorer.INTERVAL_SEC:.0f}s",
               flush=True)
 
+    if podcast_converter.enabled():
+        worker_tasks.append(asyncio.create_task(podcast_converter.worker(async_session_maker)))
+
     yield
 
     for t in worker_tasks:
@@ -571,6 +576,7 @@ app.include_router(inbox_router.router)
 app.include_router(transcripts_router.router)
 app.include_router(decision_router.router)
 app.include_router(tips_router.router)
+app.include_router(podcast_tests_router.router)
 
 
 # --- Auth routes ---
@@ -1295,6 +1301,9 @@ async def _claim_next_transcribe(session) -> Optional[tuple[str, str, str]]:
     buffer) ook al draait inference op GPU.
     """
     if _mem_gate_blocks('trans-worker', TRANSCRIBE_MIN_FREE_MB):
+        return None
+    # Shared admission with the podcast converter; held until claim is committed.
+    if podcast_converter.enabled() and not await podcast_converter.try_gpu_lock(session):
         return None
     # Eerst checken of de GPU al bezet is (slechts 1 transcribing tegelijk).
     r = await session.exec(sa_text(

@@ -1,0 +1,50 @@
+# Overlay on /opt/stacks/vps-stacks/docker-compose.yml (same project name).
+# Start with KittenTTS only; validate installed image and memory before enabling GPU models.
+services:
+  stroom-api:
+    environment:
+      PODCAST_VOICESTUDIO_URL: http://stroom-voice:3900
+      PODCAST_VOICESTUDIO_KEY: ${STROOM_VOICESTUDIO_KEY:?Set a private VoiceStudio API key}
+      PODCAST_HOST_STATS_URL: https://strongbad.nl/stats.json
+      PODCAST_MEDIA_DIR: /data/podcast-tests
+      PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts}
+
+  stroom-voice:
+    image: ${STROOM_VOICESTUDIO_IMAGE:-ghcr.io/debpalash/voicestudio:0.5.6}
+    container_name: stroom-voice
+    # Bound startup failures rather than repeatedly exhausting guest memory.
+    restart: "on-failure:3"
+    mem_limit: 3g
+    memswap_limit: 3g
+    cpus: 1.0
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OMNIVOICE_API_KEY: ${STROOM_VOICESTUDIO_KEY:?Set a private VoiceStudio API key}
+      OMNIVOICE_SERVER_MODE: "1"
+      OMNIVOICE_TTS_BACKEND: kittentts
+      OMNIVOICE_SINGLE_ENGINE_RESIDENT: "1"
+      OMNIVOICE_ENGINE_IDLE_UNLOAD_SECONDS: "30"
+      OMNIVOICE_PRELOAD_CAPTURE_ASR: "0"
+      OMNIVOICE_PRELOAD_WATERMARK: "0"
+      OMNIVOICE_ANALYTICS_DISABLED: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
+      HF_HUB_DISABLE_TELEMETRY: "1"
+    ports:
+      - "127.0.0.1:3900:3900"
+    volumes:
+      - stroom-voice-data:/app/omnivoice_data
+    networks:
+      - stroom-backend
+      - personal_net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "2"
+
+volumes:
+  stroom-voice-data:

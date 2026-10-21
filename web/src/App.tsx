@@ -6,6 +6,7 @@ import DOMPurify from 'dompurify';
 import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon, Lightbulb } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { TipsPage } from './TipsPage';
+import { PodcastConverter } from './PodcastConverter';
 import { SettingsProvider, useSettings } from './settings';
 import { GlobalAudioProvider, useGlobalAudio } from './GlobalAudioContext';
 import StickyPlayer from './StickyPlayer';
@@ -1801,12 +1802,13 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
 const parseSearchFormat = (v: string | null): ItemFormat | null =>
   v === 'article' || v === 'podcast' || v === 'video' ? v : null;
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; tips: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; tips: boolean; podcast: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
     sourceId: p.get('source'),
     admin: p.get('admin') === '1', lessons: p.get('lessons') === '1', tips: p.get('tips') === '1',
+    podcast: p.get('podcast') === '1',
     eink: p.get('eink') === '1',
     // ?q= (ook leeg) = zoekpagina open
     q: p.get('q'), fmt: parseSearchFormat(p.get('fmt')),
@@ -2876,6 +2878,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const [itemId, setItemId] = useState<string | null>(() => readUrl().itemId);
   const [sourceId, setSourceId] = useState<string | null>(() => readUrl().sourceId);
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
+  const [podcastView, setPodcastView] = useState(() => readUrl().podcast);
   const [tipsView, setTipsView] = useState<boolean>(() => readUrl().tips);
   const [searchQuery, setSearchQuery] = useState<string | null>(() => readUrl().q);
   const [searchFormat, setSearchFormat] = useState<ItemFormat | null>(() => readUrl().fmt);
@@ -2884,12 +2887,13 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   useEffect(() => {
     const onPop = () => {
-      const { itemId, topic, sourceId, admin, lessons, tips, eink, q, fmt } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, tips, podcast, eink, q, fmt } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
       setTipsView(tips);
+      setPodcastView(podcast);
       setEinkMode(eink);
       setSearchQuery(q);
       setSearchFormat(fmt);
@@ -2901,6 +2905,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   const goHome = () => {
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     url.searchParams.delete('item');
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
@@ -2924,11 +2930,13 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const openSearch = () => {
     // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
     // naar een oudere vraag springen dan het invoerveld toonde).
-    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView) {
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView && !podcastView) {
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       return;
     }
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     const q = url.searchParams.get('q') ?? '';
     url.searchParams.set('q', q);
     url.searchParams.delete('item');
@@ -2974,6 +2982,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   const openLessons = () => {
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     url.searchParams.set('lessons', '1');
     url.searchParams.delete('tips');
     url.searchParams.delete('item');
@@ -2989,8 +2999,20 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
+  const openPodcast = () => {
+    const url = new URL(window.location.href);
+    for (const key of ['item', 'source', 'admin', 'lessons', 'tips', 'q', 'fmt']) url.searchParams.delete(key);
+    url.searchParams.set('podcast', '1');
+    window.history.pushState({}, '', url.toString());
+    setPodcastView(true); setAdminMode(false); setLessonsView(false); setTipsView(false);
+    setItemId(null); setSourceId(null); setSearchQuery(null);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
   const openTips = () => {
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     url.searchParams.set('tips', '1');
     url.searchParams.delete('lessons');
     url.searchParams.delete('item');
@@ -3024,6 +3046,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   const openAdmin = () => {
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     url.searchParams.set('admin', '1');
     url.searchParams.delete('item');
     url.searchParams.delete('q');
@@ -3075,6 +3099,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   const openSource = (id: string) => {
     const url = new URL(window.location.href);
+    url.searchParams.delete('podcast');
+    setPodcastView(false);
     url.searchParams.set('source', id);
     url.searchParams.delete('item');
     // Expliciete bronnavigatie verlaat Tips: anders wint tipsView (vóór sourceId in de render).
@@ -3132,16 +3158,20 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
       </div>
 
       <nav className="sticky top-0 z-40 bg-brand-cream/95 backdrop-blur-md w-full border-b border-brand-ink/10">
-        <div className="flex justify-between items-center px-4 md:px-12 py-3 md:py-6 w-full max-w-screen-2xl mx-auto">
+        <div className="flex flex-wrap gap-y-2 justify-between items-center px-4 md:px-12 py-3 md:py-6 w-full max-w-screen-2xl mx-auto">
           <button onClick={goHome} title="Naar home"
             className="text-2xl md:text-3xl text-brand-ink flex items-center gap-2 md:gap-3 hover:opacity-80 transition-opacity">
             <img src="/logo.png" alt="Stroom" className="w-8 h-8 md:w-10 md:h-10 rounded-lg object-cover" />
             <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom</span>
           </button>
-          <div className="flex gap-3 md:gap-6 items-center text-brand-ink/40">
+          <div className="flex gap-2 md:gap-6 items-center text-brand-ink/40">
             <button onClick={openSearch} title="Zoeken" aria-label="Zoeken"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
+            </button>
+            <button onClick={openPodcast} title="Podcast uit tekst" aria-label="Podcast uit tekst"
+                    className="hover:text-brand-accent transition-colors min-w-11 min-h-11 inline-flex items-center justify-center">
+              <Mic size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
             <button onClick={openTips} title="Tips uit je podcasts en video's" aria-label="Tips"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
@@ -3173,7 +3203,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
       </nav>
 
       <main className="relative z-10 w-full max-w-screen-2xl mx-auto px-6 md:px-12 pb-32 pt-10">
-        {adminMode ? (
+        {podcastView ? (
+          <PodcastConverter onBack={goHome} />
+        ) : adminMode ? (
           <AdminPage onBack={closeAdmin} />
         ) : lessonsView ? (
           <LessonsPage onBack={closeLessons} onOpenItem={openItem} />

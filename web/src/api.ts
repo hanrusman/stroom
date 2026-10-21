@@ -1012,3 +1012,40 @@ export async function fetchTipMentions(
   const res = await apiFetch(`/api/tips/mentions?${params.toString()}`);
   return (await res.json()) as TipMentionsResponse;
 }
+
+
+// Text-to-podcast experiments. Audio stays behind the existing session auth.
+export type PodcastModel = 'omnivoice' | 'kittentts' | 'cosyvoice';
+export interface PodcastCatalog {
+  configured: boolean;
+  max_characters: number;
+  models: { id: PodcastModel; name: string; available: boolean; reason: string | null }[];
+}
+export interface PodcastTest {
+  id: string;
+  text: string;
+  text_hash: string;
+  model: PodcastModel;
+  model_name: string;
+  voice: string;
+  status: 'queued' | 'rendering' | 'ready' | 'failed';
+  message: string | null;
+  created_at: string;
+  elapsed_seconds: number | null;
+  audio_bytes: number | null;
+  audio_url: string | null;
+}
+export async function fetchPodcastModels(): Promise<PodcastCatalog> {
+  return (await apiFetch('/api/podcast-tests/models')).json();
+}
+export async function fetchPodcastTests(): Promise<PodcastTest[]> {
+  return (await apiFetch('/api/podcast-tests')).json();
+}
+export async function generatePodcast(text: string, model: PodcastModel): Promise<PodcastTest> {
+  return (await apiFetch('/api/podcast-tests', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, model }),
+  })).json();
+}
+export async function deletePodcastTest(id: string): Promise<void> {
+  await apiFetch(`/api/podcast-tests/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}

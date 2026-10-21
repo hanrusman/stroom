@@ -1,0 +1,7 @@
+# Optional SECOND overlay, only for a monitored GPU feasibility test.
+# Verify nvidia.com/gpu=0 resolves to the A2 before use. Never expose all GPUs.
+# This does not enable any additional model in Stroom or increase memory limits.
+services:
+  stroom-voice:
+    devices:
+      - "nvidia.com/gpu=0"

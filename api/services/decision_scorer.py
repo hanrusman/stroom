@@ -355,7 +355,14 @@ async def run_batch(session_maker, llm, client: Optional[httpx.AsyncClient] = No
     if _lock.locked():
         return {"skipped": "already_running"}
     async with _lock:
-        result = await _run_batch(session_maker, llm, client or _get_client())
+        from services import podcast_converter
+        if podcast_converter.enabled():
+            async with session_maker() as gpu_lease:
+                if not await podcast_converter.try_gpu_lock(gpu_lease):
+                    return {"skipped": "podcast_gpu_busy"}
+                result = await _run_batch(session_maker, llm, client or _get_client())
+        else:
+            result = await _run_batch(session_maker, llm, client or _get_client())
         state["last_run_at"] = datetime.now(timezone.utc).isoformat()
         state["last_result"] = result
         return result
