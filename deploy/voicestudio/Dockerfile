@@ -46,6 +46,12 @@ prefix, body = source[:start], source[start:]
 old = '    global model, _last_used\n'
 assert old in body, 'Revalidate OmniVoice lazy startup patch'
 body = body.replace(old, old + '    if os.environ.get("STROOM_TTS_LAZY_START") == "1":\n        return\n', 1)
-path.write_text(prefix + body)
+source = prefix + body
+# The native singleton reaper does not honor the engine's generation lease.
+# With a short idle timeout it can otherwise unload during a long first load.
+old = '        await asyncio.sleep(30)\n        idle_timeout = _resolve_idle_timeout()'
+assert source.count(old) == 1, 'Revalidate native idle-worker job guard'
+new = '        await asyncio.sleep(30)\n        pool = gpu_pool_stats()\n        if pool["running"] or pool["queued"]:\n            continue\n        idle_timeout = _resolve_idle_timeout()'
+path.write_text(source.replace(old, new))
 compile(path.read_text(), str(path), 'exec')
 PY
