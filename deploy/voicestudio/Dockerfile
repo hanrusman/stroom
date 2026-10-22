@@ -28,6 +28,15 @@ RUN python3 - <<'PY'
 from pathlib import Path
 path = Path('/app/backend/api/routers/openai_compat.py')
 source = path.read_text()
+old = '''    if cls is OmniVoiceBackend:
+        # OmniVoice only ever runs as the shared active engine — the
+        # explicit-omnivoice request is the active-engine request.
+        return get_active_tts_backend()'''
+assert source.count(old) == 1, 'Revalidate explicit OmniVoice engine cache'
+source = source.replace(old, '''    if cls is OmniVoiceBackend:
+        # Use the same cache and idle leases as all explicit engine requests.
+        # The separate active-instance cache otherwise retains the model.
+        return get_engine_instance_for(model_id)''')
 old = '    _headers = {\n        "Content-Disposition": content_disposition(f"speech.{ext}", disposition="inline"),\n'
 assert source.count(old) == 1, 'Revalidate speech response identity headers'
 new = old + '        "X-Stroom-TTS-Engine": backend.id,\n        "X-OmniVoice-Routing": _routing["routing_status"],\n'
