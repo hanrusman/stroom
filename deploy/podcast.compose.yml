@@ -1,4 +1,4 @@
-# Overlay on /opt/stacks/vps-stacks/docker-compose.yml (same project name).
+# Included as an override of stroom/docker-compose.yml by the root stack.
 # Start with KittenTTS only; validate installed image and memory before enabling GPU models.
 services:
   stroom-api:
@@ -10,7 +10,9 @@ services:
       PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts}
 
   stroom-voice:
-    image: ${STROOM_VOICESTUDIO_IMAGE:-ghcr.io/debpalash/voicestudio:0.5.6}
+    image: stroom-voice:0.5.6-cpu1
+    build:
+      context: ../stroom-src/deploy/voicestudio
     container_name: stroom-voice
     # Bound startup failures rather than repeatedly exhausting guest memory.
     restart: "on-failure:3"
