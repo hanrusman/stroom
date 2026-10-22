@@ -21,3 +21,18 @@ new = '''        options = ort.SessionOptions()
 path.write_text(source.replace(old, new))
 compile(path.read_text(), str(path), 'exec')
 PY
+
+# On the shared A2, cached OmniVoice weights must not preload at every restart.
+# Keep normal lazy request loading and the upstream idle-unload worker intact.
+RUN python3 - <<'PY'
+from pathlib import Path
+path = Path('/app/backend/services/model_manager.py')
+source = path.read_text()
+start = source.index('async def preload_model():')
+prefix, body = source[:start], source[start:]
+old = '    global model, _last_used\n'
+assert old in body, 'Revalidate OmniVoice lazy startup patch'
+body = body.replace(old, old + '    if os.environ.get("STROOM_TTS_LAZY_START") == "1":\n        return\n', 1)
+path.write_text(prefix + body)
+compile(path.read_text(), str(path), 'exec')
+PY

@@ -1,5 +1,5 @@
 # Included as an override of stroom/docker-compose.yml by the root stack.
-# Start with KittenTTS only; validate installed image and memory before enabling GPU models.
+# GPU engines remain opt-in until their installation and synthesis are validated.
 services:
   stroom-api:
     environment:
@@ -10,7 +10,7 @@ services:
       PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts}
 
   stroom-voice:
-    image: stroom-voice:0.5.6-cpu1
+    image: stroom-voice:0.5.6-gpu1
     build:
       context: ../stroom-src/deploy/voicestudio
     container_name: stroom-voice
@@ -20,6 +20,8 @@ services:
     memswap_limit: 3g
     cpus: 1.0
     pids_limit: 512
+    devices:
+      - nvidia.com/gpu=0
     security_opt:
       - no-new-privileges:true
     environment:
@@ -29,6 +31,10 @@ services:
       OMNIVOICE_TTS_BACKEND: kittentts
       OMNIVOICE_SINGLE_ENGINE_RESIDENT: "1"
       OMNIVOICE_ENGINE_IDLE_UNLOAD_SECONDS: "30"
+      OMNIVOICE_IDLE_TIMEOUT_S: "30"
+      STROOM_TTS_LAZY_START: "1"
+      OMNIVOICE_PRELOAD_TTS_ASR: "0"
+      OMNIVOICE_DOWNLOAD_MAX_WORKERS: "1"
       OMNIVOICE_PRELOAD_CAPTURE_ASR: "0"
       OMNIVOICE_PRELOAD_WATERMARK: "0"
       OMNIVOICE_ANALYTICS_DISABLED: "1"
