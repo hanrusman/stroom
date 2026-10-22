@@ -10,7 +10,7 @@ services:
       PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts,omnivoice,cosyvoice}
 
   stroom-voice:
-    image: stroom-voice:0.5.6-gpu1
+    image: stroom-voice:0.5.6-gpu2
     build:
       context: ../stroom-src/deploy/voicestudio
     container_name: stroom-voice

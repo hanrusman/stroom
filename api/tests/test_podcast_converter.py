@@ -70,7 +70,7 @@ async def test_render_routes_exact_text_and_model_and_commits_audio(monkeypatch,
         assert body["model"] == job["model"] and body["voice"] == job["voice"]
         assert body["input"] == job["text"] and body["language"] == "en"
         assert request.headers["authorization"] == "Bearer private-test-key"
-        return httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg"})
+        return httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": job["model"], "X-OmniVoice-Routing": "accelerated"})
     async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
         assert await pc.render(client, job) == 203
     assert pc.audio_path(job["id"]).read_bytes().startswith(b"ID3")
@@ -79,8 +79,10 @@ async def test_render_routes_exact_text_and_model_and_commits_audio(monkeypatch,
 
 @pytest.mark.parametrize("body,headers", [
     (b'{"error":"broken"}', {"Content-Type": "application/json"}),
-    (b"not an mp3" * 30, {"Content-Type": "audio/mpeg"}),
-    (b"ID3" + b"x" * 200, {"Content-Type": "audio/mpeg", "X-OmniVoice-Routing": "cpu_fallback"}),
+    (b"not an mp3" * 30, {"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": "omnivoice", "X-OmniVoice-Routing": "accelerated"}),
+    (b"ID3" + b"x" * 200, {"Content-Type": "audio/mpeg"}),
+    (b"ID3" + b"x" * 200, {"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": "kittentts", "X-OmniVoice-Routing": "accelerated"}),
+    (b"ID3" + b"x" * 200, {"Content-Type": "audio/mpeg", "X-OmniVoice-Routing": "cpu_fallback", "X-Stroom-TTS-Engine": "omnivoice"}),
 ])
 async def test_bad_audio_is_never_published(monkeypatch, tmp_path, body, headers):
     monkeypatch.setenv("PODCAST_MEDIA_DIR", str(tmp_path))
@@ -97,7 +99,7 @@ async def test_size_limit_and_cancel_cleanup(monkeypatch, tmp_path):
     monkeypatch.setenv("PODCAST_VOICESTUDIO_URL", "http://voice")
     monkeypatch.setattr(pc, "MAX_AUDIO_BYTES", 128)
     job = {"id": str(uuid4()), "model": "omnivoice", "voice": "default", "text": "Test"}
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg"}))) as client:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": job["model"], "X-OmniVoice-Routing": "accelerated"}))) as client:
         with pytest.raises(ValueError, match="32 MB"):
             await pc.render(client, job)
     assert not list(tmp_path.iterdir())
@@ -106,7 +108,7 @@ async def test_size_limit_and_cancel_cleanup(monkeypatch, tmp_path):
         async def __aiter__(self):
             yield b"ID3"
             raise asyncio.CancelledError()
-    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=Interrupted(), headers={"Content-Type": "audio/mpeg"}))) as client:
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, stream=Interrupted(), headers={"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": job["model"], "X-OmniVoice-Routing": "accelerated"}))) as client:
         with pytest.raises(asyncio.CancelledError):
             await pc.render(client, job)
     assert not list(tmp_path.iterdir())

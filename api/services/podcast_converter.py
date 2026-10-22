@@ -171,7 +171,7 @@ async def render(client, job):
             if response.headers.get("content-type", "").split(";")[0] not in ("audio/mpeg", "audio/mp3"):
                 raise ValueError("VoiceStudio gaf geen MP3 terug.")
             # A routing fallback would make model comparisons misleading.
-            if response.headers.get("x-omnivoice-routing") not in (None, "accelerated", "cpu_only" if job["model"] == "kittentts" else "accelerated"):
+            if response.headers.get("x-stroom-tts-engine") != job["model"] or response.headers.get("x-omnivoice-routing") not in ("accelerated", "cpu_only" if job["model"] == "kittentts" else "accelerated"):
                 raise ValueError("VoiceStudio week af van het gekozen model of apparaat. Controleer de configuratie.")
             with partial.open("wb") as output:
                 async for chunk in response.aiter_bytes():

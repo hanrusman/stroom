@@ -22,6 +22,19 @@ path.write_text(source.replace(old, new))
 compile(path.read_text(), str(path), 'exec')
 PY
 
+# Make model comparisons verifiable. Upstream only sends routing warnings and
+# treats an explicit OmniVoice request as the active-engine request.
+RUN python3 - <<'PY'
+from pathlib import Path
+path = Path('/app/backend/api/routers/openai_compat.py')
+source = path.read_text()
+old = '    _headers = {\n        "Content-Disposition": content_disposition(f"speech.{ext}", disposition="inline"),\n'
+assert source.count(old) == 1, 'Revalidate speech response identity headers'
+new = old + '        "X-Stroom-TTS-Engine": backend.id,\n        "X-OmniVoice-Routing": _routing["routing_status"],\n'
+path.write_text(source.replace(old, new))
+compile(path.read_text(), str(path), 'exec')
+PY
+
 # On the shared A2, cached OmniVoice weights must not preload at every restart.
 # Keep normal lazy request loading and the upstream idle-unload worker intact.
 RUN python3 - <<'PY'

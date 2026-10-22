@@ -1,3 +1,4 @@
+import json
 import asyncio
 import os
 from pathlib import Path
@@ -45,7 +46,7 @@ async def add(db, text="Hello, this is a test.", model="omnivoice"):
 def upstream(request):
     if request.url.path == "/engines/tts":
         return httpx.Response(200, json={"backends": [{"id": m, "available": True, "routing_status": "accelerated"} for m in pc.MODELS]})
-    return httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg"})
+    return httpx.Response(200, content=b"ID3" + b"x" * 200, headers={"Content-Type": "audio/mpeg", "X-Stroom-TTS-Engine": json.loads(request.content)["model"], "X-OmniVoice-Routing": "accelerated"})
 
 
 async def test_atomic_duplicate_admission_and_bounded_queue(db):
