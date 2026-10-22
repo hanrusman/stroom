@@ -1,4 +1,5 @@
-# Optional SECOND overlay, only for a monitored GPU feasibility test.
+# Compatibility overlay: A2 is now already included in podcast.compose.yml.
+# New installations do not need to include this file separately.
 # Verify nvidia.com/gpu=0 resolves to the A2 before use. Never expose all GPUs.
 # This does not enable any additional model in Stroom or increase memory limits.
 services:

@@ -1,5 +1,5 @@
 # Included as an override of stroom/docker-compose.yml by the root stack.
-# GPU engines remain opt-in until their installation and synthesis are validated.
+# GPU models require provisioning with deploy/voicestudio/install-model.py.
 services:
   stroom-api:
     environment:
@@ -7,7 +7,7 @@ services:
       PODCAST_VOICESTUDIO_KEY: ${STROOM_VOICESTUDIO_KEY:?Set a private VoiceStudio API key}
       PODCAST_HOST_STATS_URL: https://strongbad.nl/stats.json
       PODCAST_MEDIA_DIR: /data/podcast-tests
-      PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts}
+      PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts,omnivoice,cosyvoice}
 
   stroom-voice:
     image: stroom-voice:0.5.6-gpu1
