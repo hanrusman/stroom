@@ -23,6 +23,7 @@ services:
     environment:
       OMNIVOICE_API_KEY: ${STROOM_VOICESTUDIO_KEY:?Set a private VoiceStudio API key}
       OMNIVOICE_SERVER_MODE: "1"
+      OMNIVOICE_DATA_DIR: /app/omnivoice_data
       OMNIVOICE_TTS_BACKEND: kittentts
       OMNIVOICE_SINGLE_ENGINE_RESIDENT: "1"
       OMNIVOICE_ENGINE_IDLE_UNLOAD_SECONDS: "30"
