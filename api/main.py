@@ -1302,8 +1302,8 @@ async def _claim_next_transcribe(session) -> Optional[tuple[str, str, str]]:
     """
     if _mem_gate_blocks('trans-worker', TRANSCRIBE_MIN_FREE_MB):
         return None
-    # Shared admission with the podcast converter; held until claim is committed.
-    if podcast_converter.enabled() and not await podcast_converter.try_gpu_lock(session):
+    # Shared GPU lease (excludes only a podcast GPU render); held until claim is committed.
+    if podcast_converter.enabled() and not await podcast_converter.try_gpu_share(session):
         return None
     # Eerst checken of de GPU al bezet is (slechts 1 transcribing tegelijk).
     r = await session.exec(sa_text(

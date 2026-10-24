@@ -10,6 +10,7 @@ A good narrator knows when to pause. When to move a little faster. And when to l
 Here's the question: can a small, locally hosted speech model make this sound natural? We'll compare the same text across three models. Listen for clear pronunciation, a steady voice, and the rhythm of an ordinary conversation.`;
 const LABELS = { queued: 'In de wachtrij', rendering: 'Audio wordt gemaakt', ready: 'Klaar', failed: 'Niet gelukt' };
 const DRAFT_KEY = 'stroom-podcast-draft';
+const POLL_ERROR = 'De status kon niet worden opgehaald. De generatie kan nog doorlopen.';
 const active = (job: PodcastTest) => job.status === 'queued' || job.status === 'rendering';
 
 export function PodcastConverter({ onBack }: { onBack: () => void }) {
@@ -46,9 +47,10 @@ export function PodcastConverter({ onBack }: { onBack: () => void }) {
     const poll = async () => {
       try {
         const history = await fetchPodcastTests();
-        if (alive) setJobs(history);
+        // A later successful poll clears only its own earlier failure.
+        if (alive) { setJobs(history); setError(e => e === POLL_ERROR ? null : e); }
       } catch {
-        if (alive) setError('De status kon niet worden opgehaald. De generatie kan nog doorlopen.');
+        if (alive) setError(POLL_ERROR);
       } finally {
         if (alive) timer = setTimeout(poll, 5000);
       }

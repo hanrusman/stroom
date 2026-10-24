@@ -43,6 +43,10 @@ def test_host_admission():
     snapshot["mem"]["total_mib"] = float("nan")
     assert "onvolledig" in pc.host_gate(snapshot, "kittentts", now=1000)
     assert "onvolledig" in pc.host_gate({}, "omnivoice", now=1000)
+    snapshot = stats()
+    snapshot["gpus"] = []
+    assert pc.host_gate(snapshot, "kittentts", now=1000) is None  # CPU model ignores GPU telemetry
+    assert "onvolledig" in pc.host_gate(snapshot, "omnivoice", now=1000)
 
 
 async def test_catalog_only_allows_explicit_accelerated_models(monkeypatch):

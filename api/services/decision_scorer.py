@@ -358,7 +358,8 @@ async def run_batch(session_maker, llm, client: Optional[httpx.AsyncClient] = No
         from services import podcast_converter
         if podcast_converter.enabled():
             async with session_maker() as gpu_lease:
-                if not await podcast_converter.try_gpu_lock(gpu_lease):
+                # Shared: blocks a podcast GPU render, not the transcriber.
+                if not await podcast_converter.try_gpu_share(gpu_lease):
                     return {"skipped": "podcast_gpu_busy"}
                 result = await _run_batch(session_maker, llm, client or _get_client())
         else:
