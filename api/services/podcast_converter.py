@@ -1,8 +1,11 @@
 """Bounded VoiceStudio client and persistent, single-worker test queue.
 
 No local ML imports, model downloads or LLM rewriting. Input is spoken as supplied.
-The transaction-scoped GPU lock is shared with Stroom's transcriber and scorer;
-external tenants (e.g. Immich) are only observed through the optional host gate.
+The transaction-scoped GPU lock is shared with Stroom's transcriber and scorer:
+they take it in shared mode (so they never block each other), a GPU render takes
+it exclusively. CPU-only Kitten never touches it. A separate converter lock keeps
+one render at a time. External tenants (e.g. Immich) are only observed through
+the optional host gate.
 """
 import asyncio
 import hashlib
@@ -20,6 +23,7 @@ from sqlalchemy import text as sql
 log = logging.getLogger(__name__)
 GPU_LOCK = 73102401
 QUEUE_LOCK = 73102402
+CONVERTER_LOCK = 73102403
 MAX_TEXT = 4000
 MAX_AUDIO_BYTES = 32 * 1024 * 1024
 MODELS = {
@@ -108,10 +112,14 @@ def host_gate(stats, model, now=None):
         mem = stats["mem"]
         free_mem = float(mem["total_mib"]) - float(mem["used_mib"])
         root_free = float(stats["disk"]["root"]["avail_gb"])
-        gpu = next(g for g in stats["gpus"] if "A2" in g["name"])
-        free_vram = float(gpu["vram_total_mib"]) - float(gpu["vram_used_mib"])
-        util = float(gpu["util_now"])
-        if not all(math.isfinite(v) for v in (age, load, free_mem, root_free, free_vram, util)):
+        metrics = [age, load, free_mem, root_free]
+        # CPU-only models must not wait on missing GPU telemetry.
+        if uses_gpu(model):
+            gpu = next(g for g in stats["gpus"] if "A2" in g["name"])
+            free_vram = float(gpu["vram_total_mib"]) - float(gpu["vram_used_mib"])
+            util = float(gpu["util_now"])
+            metrics += [free_vram, util]
+        if not all(math.isfinite(v) for v in metrics):
             raise ValueError("invalid metric")
     except (KeyError, TypeError, ValueError, StopIteration, ZeroDivisionError):
         return "Wachten: capaciteitsgegevens van Strongbad zijn onvolledig."
@@ -121,7 +129,7 @@ def host_gate(stats, model, now=None):
         return "Wachten: Strongbad heeft een hoge CPU-load."
     if free_mem < 12288 or root_free < 15:
         return "Wachten: onvoldoende vrij werkgeheugen of schijfruimte."
-    if model != "kittentts" and (free_vram < MODELS[model][1] or util > 20):
+    if uses_gpu(model) and (free_vram < MODELS[model][1] or util > 20):
         return "Wachten: de gedeelde A2 heeft nog onvoldoende vrije capaciteit."
     return None
 
@@ -138,9 +146,27 @@ async def capacity_reason(client, model):
         return "Wachten: de capaciteitscontrole is niet bereikbaar."
 
 
+def uses_gpu(model):
+    return MODELS[model][1] > 0
+
+
+async def _try_xact_lock(session, key, shared=False):
+    fn = "pg_try_advisory_xact_lock_shared" if shared else "pg_try_advisory_xact_lock"
+    return bool((await session.execute(sql(f"SELECT {fn}(:key)"), {"key": key})).scalar())
+
+
 async def try_gpu_lock(session):
-    return bool((await session.execute(sql("SELECT pg_try_advisory_xact_lock(:key)"),
-                                      {"key": GPU_LOCK})).scalar())
+    """Exclusive GPU lease for a podcast render on the A2."""
+    return await _try_xact_lock(session, GPU_LOCK)
+
+
+async def try_gpu_share(session):
+    """Shared GPU lease for the transcriber and scorer; excludes only a podcast render."""
+    return await _try_xact_lock(session, GPU_LOCK, shared=True)
+
+
+async def try_converter_lock(session):
+    return await _try_xact_lock(session, CONVERTER_LOCK)
 
 
 async def update_job(session_maker, job_id, **fields):
@@ -209,13 +235,13 @@ def render_error(exc):
 
 
 async def run_next(session_maker, client):
-    """A DB transaction owns the GPU lease across HTTP rendering, also across replicas."""
+    """A DB transaction owns the converter (and GPU) lease across HTTP rendering, also across replicas."""
     from datetime import datetime, timezone
 
     async with session_maker() as lease:
-        if not await try_gpu_lock(lease):
+        if not await try_converter_lock(lease):
             return False
-        # Holding this lock proves no previous converter/scorer is still active.
+        # Holding this lock proves no previous converter is still rendering.
         async with session_maker() as session:
             interrupted = (await session.execute(sql("SELECT id FROM podcast_tests WHERE status='rendering'"))).scalars().all()
             for job_id in interrupted:
@@ -236,15 +262,31 @@ async def run_next(session_maker, client):
             if not job:
                 return False
             job = dict(job)
-            transcribing = (await session.execute(sql(
-                "SELECT EXISTS(SELECT 1 FROM items WHERE processing_status::text='transcribing')"
-            ))).scalar()
-        reason = "Wachten: Stroom transcribeert nog audio." if transcribing else await capacity_reason(client, job["model"])
+        reason = None
+        if uses_gpu(job["model"]):
+            # Lock first, then check: a transcribe claim that commits later must see our lock.
+            if not await try_gpu_lock(lease):
+                reason = "Wachten: de A2 is bezet door transcriptie of de decision-scorer."
+            else:
+                async with session_maker() as session:
+                    if (await session.execute(sql(
+                        "SELECT EXISTS(SELECT 1 FROM items WHERE processing_status::text='transcribing')"
+                    ))).scalar():
+                        reason = "Wachten: Stroom transcribeert nog audio."
+        if not reason:
+            reason = await capacity_reason(client, job["model"])
         if reason:
             await update_job(session_maker, job["id"], message=reason)
             return False
-        await update_job(session_maker, job["id"], status="rendering", message=None,
-                         started_at=datetime.now(timezone.utc))
+        # Conditional: the job may have been deleted while it was still queued.
+        async with session_maker() as session:
+            claimed = (await session.execute(sql("""
+                UPDATE podcast_tests SET status='rendering', message=NULL, started_at=:now
+                WHERE id=CAST(:id AS uuid) AND status='queued'
+            """), {"id": str(job["id"]), "now": datetime.now(timezone.utc)})).rowcount
+            await session.commit()
+        if not claimed:
+            return True
         started = time.monotonic()
         try:
             # Availability may have changed since the user queued the request.

@@ -3,6 +3,7 @@ import asyncio
 import os
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+from uuid import UUID
 
 import asyncpg
 import httpx
@@ -81,8 +82,79 @@ async def test_gpu_lock_excludes_second_worker(db):
             assert not await pc.run_next(db, client)
         async with db() as second:
             assert not await pc.try_gpu_lock(second)
+            assert not await pc.try_gpu_share(second)
+    async with db() as session:
+        row = (await session.execute(sql("SELECT status,message FROM podcast_tests"))).one()
+    assert row[0] == "queued" and "bezet" in row[1]
     async with db() as released:
         assert await pc.try_gpu_lock(released)
+
+
+async def test_converter_lock_allows_one_render(db):
+    await add(db, model="kittentts")
+    async with db() as owner:
+        assert await pc.try_converter_lock(owner)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            assert not await pc.run_next(db, client)
+
+
+async def test_transcriber_and_scorer_share_the_gpu(db):
+    async with db() as transcriber, db() as scorer, db() as podcast:
+        assert await pc.try_gpu_share(transcriber)
+        assert await pc.try_gpu_share(scorer)
+        assert not await pc.try_gpu_lock(podcast)
+
+
+async def test_kitten_ignores_gpu_lease_and_transcription(db):
+    await add(db, model="kittentts")
+    async with db() as session:
+        await session.execute(sql("INSERT INTO items VALUES ('transcribing')")); await session.commit()
+    async with db() as scorer:
+        assert await pc.try_gpu_share(scorer)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+            assert await pc.run_next(db, client)
+    async with db() as session:
+        assert (await session.execute(sql("SELECT status FROM podcast_tests"))).scalar() == "ready"
+
+
+async def test_delete_does_not_wait_for_a_running_render(db):
+    from routers.podcast_tests import remove
+    done = await add(db, model="kittentts")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as client:
+        assert await pc.run_next(db, client)
+    busy = await add(db, text="Still rendering.")
+    async with db() as session:
+        await session.execute(sql("UPDATE podcast_tests SET status='rendering' WHERE id=CAST(:id AS uuid)"),
+                              {"id": busy["id"]}); await session.commit()
+    async with db() as owner:
+        assert await pc.try_converter_lock(owner) and await pc.try_gpu_lock(owner)
+        async with db() as session:
+            with pytest.raises(HTTPException) as exc:
+                await remove(UUID(busy["id"]), session)
+            assert exc.value.status_code == 409
+        async with db() as session:
+            await remove(UUID(done["id"]), session)
+        assert not pc.audio_path(done["id"]).exists()
+        async with db() as session:
+            with pytest.raises(HTTPException) as exc:
+                await remove(UUID(done["id"]), session)
+            assert exc.value.status_code == 404
+
+
+async def test_deleted_queued_job_is_not_rendered(db, monkeypatch):
+    job = await add(db, model="kittentts")
+    async def delete_meanwhile(*args):
+        async with db() as session:
+            await session.execute(sql("DELETE FROM podcast_tests")); await session.commit()
+        return None
+    monkeypatch.setattr(pc, "capacity_reason", delete_meanwhile)
+    calls = []
+    def handle(r):
+        calls.append(r.url.path)
+        return upstream(r)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handle)) as client:
+        assert await pc.run_next(db, client)
+    assert not calls and not pc.audio_path(job["id"]).exists()
 
 
 async def test_transcription_and_capacity_wait_do_not_start_tts(db, monkeypatch):
@@ -144,6 +216,8 @@ async def test_decision_scorer_uses_same_lease(db, monkeypatch):
         called.append(True)
         async with db() as other:
             assert not await pc.try_gpu_lock(other)
+        async with db() as transcriber:
+            assert await pc.try_gpu_share(transcriber)  # scoring no longer blocks transcription
         return {"scored": 0}
 
     monkeypatch.setattr(ds, "_run_batch", batch)

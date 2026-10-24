@@ -59,13 +59,15 @@ async def audio(job_id: UUID, session=Depends(get_async_session)):
 
 @router.delete("/{job_id}", status_code=204)
 async def remove(job_id: UUID, session=Depends(get_async_session)):
-    if not await pc.try_gpu_lock(session):
-        raise HTTPException(409, "Er loopt nog een audiotaak. Verwijder de test zodra die klaar is.")
-    row = (await session.execute(sql("SELECT status FROM podcast_tests WHERE id=:id"), {"id": job_id})).first()
-    if not row:
+    # No lock needed: the worker only moves 'queued' to 'rendering' conditionally,
+    # and a row being rendered is never deleted here.
+    deleted = (await session.execute(sql(
+        "DELETE FROM podcast_tests WHERE id=:id AND status<>'rendering' RETURNING id"
+    ), {"id": job_id})).first()
+    if not deleted:
+        exists = (await session.execute(sql("SELECT 1 FROM podcast_tests WHERE id=:id"), {"id": job_id})).first()
+        if exists:
+            raise HTTPException(409, "Deze podcast wordt nog gemaakt.")
         raise HTTPException(404, "Test niet gevonden.")
-    if row[0] == "rendering":
-        raise HTTPException(409, "Deze podcast wordt nog gemaakt.")
-    pc.audio_path(job_id).unlink(missing_ok=True)
-    await session.execute(sql("DELETE FROM podcast_tests WHERE id=:id"), {"id": job_id})
     await session.commit()
+    pc.audio_path(job_id).unlink(missing_ok=True)

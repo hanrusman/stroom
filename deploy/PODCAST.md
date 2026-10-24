@@ -11,11 +11,16 @@ bewaart tekst, model, generatietijd en MP3. Audio blijft achter Stroom-login.
 De Incus-guest waarin Stroom draait heeft ongeveer 6 GB RAM. De veel grotere
 RAM-teller op strongbad.nl geldt voor de fysieke host. De A2 wordt gedeeld.
 
-| Model-ID | Beschikbaar | Voorwaarde |
+| Model-ID | Standaard vrijgegeven | Kiesbaar zodra |
 |---|---|---|
-| `kittentts` | Ja | Engelse CPU-TTS, KittenML/kitten-tts-mini-0.8 |
-| `omnivoice` | Nee | Eerst werkende GPU-route en gemeten laadpiek binnen guestbudget |
-| `cosyvoice` | Nee | Eerst werkende GPU-route en gemeten laadpiek binnen guestbudget |
+| `kittentts` | Ja | VoiceStudio het model meldt (CPU, KittenML/kitten-tts-mini-0.8) |
+| `omnivoice` | Ja | VoiceStudio het model geïnstalleerd en `accelerated` meldt |
+| `cosyvoice` | Ja | VoiceStudio het model geïnstalleerd en `accelerated` meldt |
+
+Sinds de GPU-route werkt staan alle drie standaard in `PODCAST_ENABLED_MODELS`.
+Een model zonder bevestigde GPU-versnelling blijft in de keuzelijst uitgeschakeld.
+Beperk tot `PODCAST_ENABLED_MODELS=kittentts` als een GPU-model het guestbudget
+overschrijdt.
 
 VoiceStudio draait apart van de API: 3 GiB hard geheugenmaximum, geen extra swap,
 1 CPU en maximaal drie herstartpogingen. Meet ook het totale guestgebruik: andere
@@ -23,9 +28,15 @@ containers hebben eigen limieten waarvan de som groter is dan het guestgeheugen.
 
 Stroom verwerkt één conversie tegelijk; maximaal drie aanvragen wachten/verwerken
 en maximaal dertig tests blijven bewaard (maximaal 32 MiB audio per test). Een test
-wacht maximaal één uur en genereert maximaal vijftien minuten. Er is een gedeeld
-Postgres-slot met de decision-scorer en de transcriptieclaimer. Lopende transcriptie
-wordt afgewacht. Andere aanroepers van de GPU vallen buiten dit slot.
+wacht maximaal één uur en genereert maximaal vijftien minuten.
+
+Postgres-sloten: een eigen converterslot zorgt voor één conversie tegelijk. Het
+GPU-slot nemen de decision-scorer en de transcriptieclaimer *gedeeld* (ze blokkeren
+elkaar dus niet), een OmniVoice/CosyVoice-conversie neemt het *exclusief* en wacht
+daarnaast op lopende transcriptie. KittenTTS draait op de CPU en raakt het GPU-slot
+niet aan, en wacht ook niet op transcriptie of A2-cijfers. Een test verwijderen
+kan altijd, behalve de test die op dat moment wordt gemaakt. Andere aanroepers van
+de GPU vallen buiten deze sloten.
 
 De hostcontrole wacht bij load1/cores > 0,85, <12 GiB vrij host-RAM, <15 GB vrije
 host-rootdisk, ontbrekende cijfers of cijfers ouder dan vijf minuten. Voor de twee
@@ -76,10 +87,9 @@ staan uit; het normale audiowatermerk tijdens generatie blijft behouden.
 ## Zwaardere modellen
 
 Het optionele `podcast.gpu.compose.yml` geeft alleen CDI-device 0 door. Controleer
-vooraf dat dit de A2 is. Test de modellen afzonderlijk, inclusief koude laadpiek en
-lange tekst. Geef pas daarna hun IDs vrij met
-`PODCAST_ENABLED_MODELS=kittentts,omnivoice,cosyvoice`; verhoog niet automatisch
-het geheugenmaximum. `PODCAST_VOICE_<MODELID>` kan een bestaand stemprofiel kiezen.
+vooraf dat dit de A2 is: de hostcontrole meet de A2, dus een ander device maakt die
+controle zinloos. Test nieuwe modellen afzonderlijk, inclusief koude laadpiek en
+lange tekst; verhoog niet automatisch het geheugenmaximum. `PODCAST_VOICE_<MODELID>` kan een bestaand stemprofiel kiezen.
 
 VoiceStudio kan geïnstalleerde OmniVoice-gewichten bij opstarten voorladen. Kitten
 als actieve backend kiezen schakelt dit niet aantoonbaar uit. Meet herstarts opnieuw
