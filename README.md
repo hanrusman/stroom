@@ -104,6 +104,15 @@ the variables the API expects.
     └── package.json
 ```
 
+## Native iPhone app
+
+The `ios/` directory contains a native SwiftUI companion to the website, with
+podcast playback, offline downloads, lock-screen controls and configurable local
+notifications. It uses the existing API without a backend deployment. Open
+`ios/Stroom.xcodeproj` in Xcode and select your signing team; a free Personal Team
+is supported. See [the iPhone installation guide](ios/README.md) for setup,
+notification limitations and device checks.
+
 ## Configuration
 
 All configuration is via environment variables. See [`.env.example`](./.env.example)
