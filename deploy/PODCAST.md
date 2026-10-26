@@ -67,9 +67,8 @@ niet nogmaals toe met `-f` (dat verdubbelt onder andere security_opt).
    sh -c 'mkdir -p /data/podcast-tests && chown 1000:1000 /data/podcast-tests && chmod 750 /data/podcast-tests'`.
    De bestaande /data-parent is van UID 1001; wijzig alleen deze nieuwe submap.
    Bouw `web` naar een stagingmap. Kopieer eerst nieuwe assets naar `web/dist/assets`
-   en vervang daarna `web/dist/index.html`. De bestaande stroom-web bindmount
-   leest die map. Deze container is een compose-orphan: geen `down` of
-   `--remove-orphans` gebruiken.
+   en vervang daarna `web/dist/index.html`. De stroom-web-bindmount leest die
+   map; stroom-web staat sinds vps-stacks#53 weer in `vps-stacks/stroom/docker-compose.yml`.
 7. Test ingelogd generatie, historie, afspelen en downloaden. Zonder login moeten
    de historie, catalogus en MP3 401 teruggeven.
 
