@@ -14,8 +14,10 @@ services:
     build:
       context: ../stroom-src/deploy/voicestudio
     container_name: stroom-voice
-    # Bound startup failures rather than repeatedly exhausting guest memory.
-    restart: "on-failure:3"
+    # unless-stopped: on-failure left it down after a clean shutdown on
+    # 2026-10-25 (exit 0 is never restarted). mem_limit/memswap_limit keep a
+    # crash loop from exhausting guest memory.
+    restart: unless-stopped
     mem_limit: 3g
     memswap_limit: 3g
     cpus: 1.0
