@@ -2,6 +2,20 @@ import XCTest
 @testable import Stroom
 
 final class StroomTests: XCTestCase {
+    func testHTMLAndMarkdownExcerpts() {
+        XCTAssertEqual(ContentText.excerpt("<p>Han&#x27;s idee &mdash; café &amp; thee&nbsp; &#128512;</p>"), "Han's idee — café & thee 😀")
+        XCTAssertEqual(ContentText.excerpt("## Kop\n\nEen **goed** [idee](https://example.com)."), "Kop Een goed idee.")
+        XCTAssertEqual(ContentText.excerpt("<p>Eerste</p><p>Tweede<br>Derde</p>"), "Eerste Tweede Derde")
+        XCTAssertEqual(ContentText.excerpt("2 < 3 en 5 > 4"), "2 < 3 en 5 > 4")
+        XCTAssertEqual(ContentText.excerpt("👩🏾‍💻 **café**"), "👩🏾‍💻 café")
+        XCTAssertEqual(ContentText.excerpt(nil), "")
+    }
+    func testFeedMarkupNeverLeaksScriptsOrEncodedTags() {
+        XCTAssertEqual(ContentText.excerpt("<script>alert(1)</script><style>body{}</style><p>Lees dit<img src='x'></p>"), "Lees dit")
+        XCTAssertEqual(ContentText.excerpt("&lt;p&gt;Hallo &amp;amp; dag&lt;/p&gt;"), "Hallo & dag")
+        XCTAssertEqual(ContentText.excerpt("<a href='javascript:alert(1)'>Lees</a>"), "Lees")
+        XCTAssertTrue(ContentText.markdown("<a href='https://example.com'>Lees</a>").contains("[Lees](https://example.com)"))
+    }
     let fixture = #"{"id":"abc","title":"Een podcast","description":null,"source_name":"De bron","source_id":"src","media_url":"https://cdn.example/episode.mp3","thumbnail_url":null,"source_image_url":null,"published_at":"2026-10-25 08:30:00.123456+00:00","format":"podcast","status":"new","processing_status":"ready","quality_score":8.4,"has_summary":true}"#
     @MainActor func item() throws -> FeedItem { try APIClient.decoder.decode(FeedItem.self, from: Data(fixture.utf8)) }
 

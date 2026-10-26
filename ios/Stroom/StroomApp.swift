@@ -40,13 +40,11 @@ struct RootView: View {
             else if store.user == nil { LoginView() }
             else {
                 TabView(selection: $store.tab) {
-                    NavigationStack { FeedScreen(podcastsOnly: false) }.tabItem { Label("Stroom", systemImage: "water.waves") }.tag(0)
-                    NavigationStack { FeedScreen(podcastsOnly: true) }.tabItem { Label("Luisteren", systemImage: "headphones") }.tag(1)
-                    NavigationStack { LibraryView() }.tabItem { Label("Bibliotheek", systemImage: "books.vertical") }.tag(2)
-                    NavigationStack { SettingsView() }.tabItem { Label("Instellingen", systemImage: "slider.horizontal.3") }.tag(3)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if player.current != nil { MiniPlayer(showingPlayer: $showingPlayer).padding(.horizontal, 12).padding(.bottom, 8).background(.ultraThinMaterial) }
+                    tabRoot { FeedScreen(podcastsOnly: false) }.tabItem { Label("Stroom", systemImage: "water.waves") }.tag(0)
+                    tabRoot { FeedScreen(podcastsOnly: true) }.tabItem { Label("Luisteren", systemImage: "headphones") }.tag(1)
+                    tabRoot { LibraryView() }.tabItem { Label("Bibliotheek", systemImage: "books.vertical") }.tag(2)
+                    tabRoot { ReadingQueueView() }.tabItem { Label("Wachtrij", systemImage: "text.line.first.and.arrowtriangle.forward") }.tag(3)
+                    tabRoot { MoreView() }.tabItem { Label("Meer", systemImage: "ellipsis.circle") }.tag(4)
                 }
                 .sheet(isPresented: $showingPlayer) { NowPlayingView() }
                 .sheet(item: Binding(get: { store.openItemID.map(ItemLink.init) }, set: { store.openItemID = $0?.id })) { link in
@@ -55,6 +53,18 @@ struct RootView: View {
             }
         }
     }
+    func tabRoot<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        NavigationStack { content() }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    ActionFeedback()
+                    if player.current != nil {
+                        MiniPlayer(showingPlayer: $showingPlayer).padding(.horizontal, 12).padding(.bottom, 8)
+                    }
+                }.background(.ultraThinMaterial)
+            }
+    }
+
 }
 struct ItemLink: Identifiable { let id: String }
 
@@ -102,50 +112,77 @@ struct FeedScreen: View {
     @State private var offset = 0
     @State private var more = true
     @State private var showDigest = false
-    var visible: [FeedItem] { (filtered ?? store.items).filter { !podcastsOnly || $0.isPodcast } }
+    @State private var filter = "all"
+    @State private var window = "30d"
+    @State private var format = "all"
+    var visible: [FeedItem] {
+        (filtered ?? store.items).map(store.current).filter {
+            (filter == "archived" ? $0.status == "archived" : $0.status != "archived") &&
+            (filter != "saved" || $0.status == "pinned") &&
+            (filter != "scheduled" || $0.scheduledFor != nil) &&
+            (!podcastsOnly || $0.isPodcast) && (format == "all" || $0.format == format)
+        }
+    }
     var body: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(podcastsOnly ? "ZET DE WERELD EVEN AAN" : Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Locale(identifier: "nl_NL"))).uppercased())
-                        .font(.caption.weight(.semibold)).tracking(2).foregroundStyle(Brand.blue)
-                    Text(podcastsOnly ? "Goed gezelschap\nvoor onderweg." : "Volg je nieuwsgierigheid.")
-                        .font(.system(.largeTitle, design: .serif).weight(.medium))
-                    Text(podcastsOnly ? "Luister verder. Neem een nieuw idee mee." : "Een selectie uit jouw wereld van ideeën.").foregroundStyle(.secondary)
-                }.padding(.top, 12)
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(podcastsOnly ? "Goed gezelschap voor onderweg." : "Volg je nieuwsgierigheid.")
+                        .font(.system(.title2, design: .serif).weight(.medium))
+                    Text("Veeg naar rechts om te archiveren, naar links voor je wachtrij.").font(.caption).foregroundStyle(.secondary)
+                }.listRowBackground(Color.clear)
                 if store.demo { Text("Voorbeeldweergave · geen live gegevens").font(.caption).foregroundStyle(.secondary) }
-                if store.offline { Label("Offline · laatst opgehaalde inhoud", systemImage: "wifi.slash").font(.callout).foregroundStyle(.orange) }
+                if store.offline { Label("Offline · laatst opgehaalde inhoud", systemImage: "wifi.slash").font(.callout) }
                 if let error = error ?? store.error { ErrorNotice(message: error) { await reload() } }
-                if podcastsOnly && query.isEmpty { generatedSection }
                 HStack {
                     Menu {
                         Button("Alle onderwerpen") { topic = "" }
-                        ForEach(store.topics) { t in Button(t.name) { topic = t.slug } }
+                        ForEach(store.topics) { t in Button("\(t.name) · \(t.itemCount)") { topic = t.slug } }
                     } label: { Label(store.topics.first(where: { $0.slug == topic })?.name ?? "Alle onderwerpen", systemImage: "line.3.horizontal.decrease") }
                     Spacer()
-                    if !topic.isEmpty { Button("Dagoverzicht", systemImage: "text.book.closed") { showDigest = true }.labelStyle(.iconOnly).accessibilityLabel("Dagoverzicht van onderwerp") }
-                }.font(.subheadline.weight(.medium))
-                if loading { ProgressView().frame(maxWidth: .infinity) }
-                if !query.trimmingCharacters(in: .whitespaces).isEmpty {
-                    ForEach(searchResults) { hit in
-                        Button { store.openItemID = hit.id } label: {
-                            VStack(alignment: .leading, spacing: 8) { Text(hit.sourceName.uppercased()).font(.caption).foregroundStyle(Brand.blue); Text(hit.title).font(.headline).foregroundStyle(.primary) }
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(20).background(Brand.card, in: RoundedRectangle(cornerRadius: 18))
-                        }.buttonStyle(.plain)
-                    }
-                    if !loading && searchResults.isEmpty { ContentUnavailableView.search(text: query) }
-                } else {
-                    ForEach(visible) { item in FeedCard(item: item) }
-                    if visible.isEmpty && !loading { ContentUnavailableView("Nog niets hier", systemImage: podcastsOnly ? "headphones" : "water.waves", description: Text("Kies een ander onderwerp of haal meer inhoud op.")) }
-                    if more && !store.demo { Button("Meer ophalen") { Task { await loadMore() } }.frame(maxWidth: .infinity).disabled(loading) }
+                    if !topic.isEmpty { Button("Overzichten", systemImage: "text.book.closed") { showDigest = true }.labelStyle(.iconOnly).accessibilityLabel("Dag- en weekoverzicht") }
                 }
-                Text("STROOM · RUIMTE VOOR NIEUWE IDEEËN").font(.caption2).tracking(1.6).foregroundStyle(.tertiary).frame(maxWidth: .infinity).padding(.vertical, 20)
-            }.padding(.horizontal, 20).frame(maxWidth: 760)
-        }.frame(maxWidth: .infinity).background(Brand.paper)
+                HStack {
+                    Picker("Status", selection: $filter) {
+                        Text("Alles").tag("all"); Text("Bewaard").tag("saved"); Text("Samengevat").tag("summarized")
+                        Text("Gepland").tag("scheduled"); Text("Archief").tag("archived"); Text("Inbox").tag("inbox")
+                    }.labelsHidden().accessibilityLabel("Statusfilter")
+                    Spacer()
+                    Picker("Periode", selection: $window) {
+                        Text("Alle tijd").tag("all"); Text("24 uur").tag("24h"); Text("7 dagen").tag("7d"); Text("30 dagen").tag("30d")
+                    }.labelsHidden().accessibilityLabel("Periode")
+                }
+                if !podcastsOnly {
+                    Picker("Soort", selection: $format) {
+                        Text("Alles").tag("all"); Text("Artikelen").tag("article"); Text("Podcasts").tag("podcast"); Text("Video’s").tag("video")
+                    }.pickerStyle(.segmented)
+                }
+            }
+            if podcastsOnly && query.isEmpty { Section { generatedSection } }
+            if loading { ProgressView().frame(maxWidth: .infinity) }
+            if !query.trimmingCharacters(in: .whitespaces).isEmpty {
+                ForEach(searchResults) { hit in
+                    Button { store.openItemID = hit.id } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(hit.sourceName.uppercased()).font(.caption).foregroundStyle(Brand.blue)
+                            Text(hit.title).font(.headline).foregroundStyle(.primary)
+                        }.padding(.vertical, 8)
+                    }
+                }
+                if !loading && searchResults.isEmpty { ContentUnavailableView.search(text: query) }
+            } else {
+                ForEach(visible) { item in
+                    FeedCard(item: item).listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                        .stroomActions(item)
+                }
+                if visible.isEmpty && !loading { ContentUnavailableView("Nog niets hier", systemImage: "water.waves", description: Text("Kies een ander onderwerp of filter.")) }
+                if more && !store.demo { Button("Meer ophalen") { Task { await loadMore() } }.frame(maxWidth: .infinity).disabled(loading) }
+            }
+        }.listStyle(.insetGrouped).scrollContentBackground(.hidden).background(Brand.paper)
         .navigationTitle(podcastsOnly ? "Luisteren" : "Stroom").navigationBarTitleDisplayMode(.inline)
         .searchable(text: $query, prompt: "Zoek in Stroom")
         .refreshable { await reload() }
-        .task(id: topic) { await loadTopic() }
+        .task(id: "\(topic)|\(filter)|\(window)|\(format)") { await loadTopic() }
         .task(id: query) { await search() }
         .sheet(isPresented: $showDigest) { NavigationStack { DigestView(topic: topic) } }
     }
@@ -170,22 +207,22 @@ struct FeedScreen: View {
         loading = true; error = nil
         defer { loading = false }
         do {
-            let batch = try await api.items(topic: topic.isEmpty ? nil : topic, limit: podcastsOnly ? 500 : 100)
+            let batch = try await api.items(topic: topic.isEmpty ? nil : topic, limit: 100, filter: filter, window: window, format: podcastsOnly ? "podcast" : (format == "all" ? nil : format))
             try Task.checkCancellation()
-            filtered = batch; offset = batch.count; more = batch.count == (podcastsOnly ? 500 : 100)
+            filtered = batch; offset = batch.count; more = batch.count == 100
         } catch is CancellationError { }
         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     func loadMore() async {
         guard let api = store.api else { return }; loading = true
         defer { loading = false }
-        let selected = topic
+        let selected = "\(topic)|\(filter)|\(window)|\(format)"
         do {
-            let batch = try await api.items(topic: selected.isEmpty ? nil : selected, offset: offset, limit: podcastsOnly ? 500 : 100)
-            guard selected == topic else { return }
+            let batch = try await api.items(topic: topic.isEmpty ? nil : topic, offset: offset, limit: 100, filter: filter, window: window, format: podcastsOnly ? "podcast" : (format == "all" ? nil : format))
+            guard selected == "\(topic)|\(filter)|\(window)|\(format)" else { return }
             var all = filtered ?? store.items
             let existing = Set(all.map(\.id)); all += batch.filter { !existing.contains($0.id) }
-            filtered = all; offset += batch.count; more = batch.count == (podcastsOnly ? 500 : 100)
+            filtered = all; offset += batch.count; more = batch.count == 100
         } catch { self.error = error.localizedDescription }
     }
     func search() async {
@@ -211,12 +248,12 @@ struct FeedCard: View {
                 VStack(alignment: .leading, spacing: 10) {
                     HStack { Text(item.sourceName.uppercased()).font(.caption2.weight(.semibold)).tracking(1); Spacer(); if let score = item.qualityScore { Text(score, format: .number.precision(.fractionLength(1))).font(.caption.monospacedDigit()).padding(6).background(Brand.blue.opacity(0.09), in: Capsule()) } }.foregroundStyle(Brand.blue)
                     Button { store.openItemID = item.id } label: { Text(item.title).font(.system(.title3, design: .serif).weight(.semibold)).foregroundStyle(.primary).multilineTextAlignment(.leading) }.buttonStyle(.plain)
-                    if let text = item.description { Text(text).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
+                    if let text = item.description { Text(ContentText.excerpt(text)).font(.subheadline).foregroundStyle(.secondary).lineLimit(2) }
                 }
                 Artwork(raw: item.artwork, symbol: item.isPodcast ? "waveform" : "text.alignleft").frame(width: 64, height: 74).clipShape(RoundedRectangle(cornerRadius: 12))
             }
             if let track = item.track { TrackActions(track: track) }
-            else { Button("Lees samenvatting", systemImage: "arrow.up.right") { store.openItemID = item.id }.font(.caption.weight(.semibold)) }
+            else { Button(item.hasSummary == true ? "Lees met samenvatting" : "Lees artikel", systemImage: "arrow.up.right") { store.openItemID = item.id }.font(.caption.weight(.semibold)) }
         }.padding(20).background(Brand.card, in: RoundedRectangle(cornerRadius: 22))
     }
 }
@@ -246,7 +283,7 @@ struct TrackActions: View {
             HStack(spacing: 18) {
                 Button { player.play(track) } label: { Label("Luister", systemImage: "play.fill").font(.subheadline.weight(.semibold)) }
                 Spacer()
-                Button { player.enqueue(track) } label: { Image(systemName: player.queue.contains(where: { $0.id == track.id }) ? "checkmark" : "text.badge.plus") }.accessibilityLabel("Voeg toe aan wachtrij")
+                Button { player.enqueue(track) } label: { Image(systemName: player.queue.contains(where: { $0.id == track.id }) ? "checkmark" : "text.badge.plus") }.accessibilityLabel("Speel hierna af")
                 if library.downloading.contains(track.id) { ProgressView().accessibilityLabel("Downloaden") }
                 else if library.localURL(for: track) != nil { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityLabel("Offline beschikbaar") }
                 else {

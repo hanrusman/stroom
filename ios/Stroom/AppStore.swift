@@ -9,6 +9,17 @@ final class AppStore: ObservableObject {
     @Published var topics: [Topic] = []
     @Published var items: [FeedItem] = []
     @Published var jobs: [PodcastJob] = []
+    @Published var queuedIDs: Set<String> = []
+    @Published var queueItems: [FeedItem] = []
+    @Published var queueError: String?
+    @Published var mutations: [String: FeedItem] = [:]
+    @Published var actionError: String?
+    @Published var actionMessage: String?
+    @Published var changing: Set<String> = []
+    private(set) var contentVersion = 0
+    private var queueVersion = 0
+    private var undoItem: FeedItem?
+    private var undoWasQueued = false
     @Published var busy = false
     @Published var starting = true
     @Published var error: String?
@@ -72,16 +83,20 @@ final class AppStore: ObservableObject {
     func refresh() async {
         guard !demo, let api, user != nil, !refreshing else { return }
         refreshing = true
+        let version = contentVersion
         defer { refreshing = false }
         do {
             async let fetchedTopics: [Topic] = api.request("topics")
             async let fetchedItems = api.items(limit: 100)
             let result = try await (fetchedTopics, fetchedItems)
-            topics = result.0; items = result.1; offline = false; lastSync = Date(); error = nil
+            topics = result.0
+            if version == contentVersion { items = result.1; for row in result.1 { mutations.removeValue(forKey: row.id) } }
+            offline = false; lastSync = Date(); error = nil
             if let user {
                 let cache = FeedCache(server: server, user: user, topics: topics, items: items, date: Date())
                 try JSONEncoder().encode(cache).write(to: cacheURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             }
+            await refreshQueue()
             do { jobs = try await api.request("podcast-tests"); jobsError = nil }
             catch { jobsError = error.localizedDescription }
             do { try await notifications.check(api: api) }
@@ -98,9 +113,62 @@ final class AppStore: ObservableObject {
             player.stop(); try library.clear(); notifications.reset()
             try? FileManager.default.removeItem(at: cacheURL)
             user = nil; items = []; jobs = []; topics = []; error = nil
+            queuedIDs = []; queueItems = []; mutations = [:]; actionError = nil; actionMessage = nil; undoItem = nil
         } catch { self.error = "Uitloggen is niet afgerond: \(error.localizedDescription)" }
     }
-    func apply(_ item: FeedItem) { if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item } }
+    func apply(_ item: FeedItem) {
+        contentVersion += 1
+        mutations[item.id] = item
+        if let index = items.firstIndex(where: { $0.id == item.id }) { items[index] = item }
+        if item.status == "archived" { queueVersion += 1; queuedIDs.remove(item.id); queueItems.removeAll { $0.id == item.id } }
+    }
+    func current(_ item: FeedItem) -> FeedItem { mutations[item.id] ?? item }
+    func refreshQueue() async {
+        guard !demo, let api else { return }
+        queueVersion += 1; let version = queueVersion
+        do {
+            let ids: [String] = try await api.request("reading-queue/ids")
+            let rows: [FeedItem] = try await api.request("reading-queue", query: [.init(name: "limit", value: "100")])
+            guard version == queueVersion, changing.isEmpty else { return }
+            queuedIDs = Set(ids); queueItems = rows; queueError = nil
+        } catch { queueError = "Wachtrij niet beschikbaar. Controleer je verbinding en of de Stroom-server is bijgewerkt. \(error.localizedDescription)" }
+    }
+    func setQueued(_ item: FeedItem, queued: Bool) async {
+        guard !changing.contains(item.id) else { return }
+        changing.insert(item.id); queueVersion += 1; contentVersion += 1
+        defer { changing.remove(item.id); queueVersion += 1; contentVersion += 1 }
+        do {
+            if !demo, let api {
+                let _: ActionOK = try await api.request("reading-queue/\(item.id)", method: queued ? "PUT" : "DELETE")
+            }
+            if queued { queuedIDs.insert(item.id); if !queueItems.contains(where: { $0.id == item.id }) { queueItems.append(item) } }
+            else { queuedIDs.remove(item.id); queueItems.removeAll { $0.id == item.id } }
+            actionError = nil; queueError = nil
+            actionMessage = queued ? "Toegevoegd aan je wachtrij" : "Uit je wachtrij gehaald"
+        } catch { actionError = error.localizedDescription }
+    }
+    func archive(_ item: FeedItem) async {
+        guard !changing.contains(item.id) else { return }
+        changing.insert(item.id); queueVersion += 1; contentVersion += 1
+        defer { changing.remove(item.id); queueVersion += 1; contentVersion += 1 }
+        do {
+            var updated = item
+            if !demo, let api { updated = try await api.update(item.id, status: "archived") }
+            else { updated.status = "archived" }
+            undoItem = item; undoWasQueued = queuedIDs.contains(item.id)
+            apply(updated); actionError = nil; actionMessage = "Gearchiveerd"
+        } catch { actionError = error.localizedDescription }
+    }
+    var canUndo: Bool { undoItem != nil }
+    func undoArchive() async {
+        guard let item = undoItem else { return }
+        do {
+            if !demo, let api { apply(try await api.update(item.id, status: item.status ?? "new")) }
+            else { apply(item) }
+            if undoWasQueued { await setQueued(item, queued: true) }
+            undoItem = nil; actionMessage = "Teruggezet"
+        } catch { actionError = error.localizedDescription }
+    }
     func loadDemo() {
         user = StroomUser(id: "demo", email: "demo@stroom.local")
         topics = [Topic(slug: "ai", name: "AI & technologie", itemCount: 24), Topic(slug: "science", name: "Wetenschap", itemCount: 18)]

@@ -8,103 +8,189 @@ struct ItemDetailView: View {
     @State private var item: FeedItem?
     @State private var error: String?
     @State private var updating = false
+    @State private var section = "Samenvatting"
+    @State private var scheduled = Date.now.addingTimeInterval(86400)
+    @State private var scheduling = false
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 22) {
                 if let item {
-                    Text(item.sourceName.uppercased()).font(.caption.weight(.semibold)).tracking(2).foregroundStyle(Brand.blue)
+                    if let source = item.sourceId {
+                        NavigationLink { SourceScreen(id: source, name: item.sourceName) } label: {
+                            Label(item.sourceName.uppercased(), systemImage: "antenna.radiowaves.left.and.right").font(.caption.weight(.semibold))
+                        }
+                    } else { Text(item.sourceName.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(Brand.blue) }
                     Text(item.title).font(.system(.largeTitle, design: .serif).weight(.medium))
-                    if let date = item.date { Text(date.formatted(date: .long, time: .omitted)).font(.caption).foregroundStyle(.secondary) }
+                    HStack {
+                        if let date = item.date { Text(date.formatted(date: .long, time: .omitted)) }
+                        Spacer()
+                        if let score = item.qualityScore { Label(score.formatted(), systemImage: "star") }
+                    }.font(.caption).foregroundStyle(.secondary)
+                    if let topics = item.topics, !topics.isEmpty { Text(topics.joined(separator: " · ")).font(.caption).foregroundStyle(Brand.blue) }
                     if let track = item.track { TrackActions(track: track) }
-                    HStack(spacing: 24) {
-                        Button(item.status == "pinned" ? "Bewaard" : "Bewaren", systemImage: item.status == "pinned" ? "bookmark.fill" : "bookmark") { Task { await updateStatus(item.status == "pinned" ? "new" : "pinned") } }
-                        Button("Archiveren", systemImage: "archivebox") { Task { await updateStatus("archived"); if error == nil { dismiss() } } }
-                    }.font(.callout).disabled(updating || store.demo)
-                    Divider()
-                    if let summary = item.summary, !summary.isEmpty { MarkdownBody(text: summary) }
-                    else {
-                        Text(item.description ?? "Er is nog geen samenvatting beschikbaar.").textSelection(.enabled)
-                        if !store.demo {
-                            Button("Samenvatting aanvragen", systemImage: "sparkles") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 20) {
+                            Button(item.status == "pinned" ? "Bewaard" : "Bewaren", systemImage: item.status == "pinned" ? "bookmark.fill" : "bookmark") { Task { await status(item.status == "pinned" ? "new" : "pinned") } }
+                            Button(store.queuedIDs.contains(id) ? "Uit wachtrij" : "In wachtrij", systemImage: "text.badge.plus") { Task { await store.setQueued(item, queued: !store.queuedIDs.contains(id)) } }.disabled(item.status == "archived")
+                            Button("Plan", systemImage: "calendar") { scheduling = true }
+                            Button(item.status == "archived" ? "Uit archief" : "Archiveer", systemImage: "archivebox") {
                                 Task {
-                                    updating = true; defer { updating = false }
-                                    do { if let api = store.api { self.item = try await api.request("huygens/items/\(id)/summarize", method: "POST") } }
-                                    catch { self.error = error.localizedDescription }
+                                    if item.status == "archived" { await status("new") }
+                                    else { await store.archive(item); if store.actionError == nil { dismiss() } }
                                 }
-                            }.disabled(updating)
-                            if let status = item.processingStatus, ["queued", "transcribe_queued", "summarize_queued", "transcribing", "summarizing"].contains(status) {
-                                Text("Verwerking loopt. Trek omlaag om de status te verversen.").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.font(.callout).frame(minHeight: 44)
+                    }.disabled(updating || store.changing.contains(id))
+                    if let planned = item.scheduledFor.flatMap(StroomDate.parse) { Label("Gepland voor \(planned.formatted(date: .abbreviated, time: .shortened))", systemImage: "calendar").font(.caption) }
+                    if let message = store.actionError { Text(message).font(.callout).foregroundStyle(.red) }
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(["Bron", "Samenvatting", "Lessen", "Transcript", "Vraag"], id: \.self) { name in
+                                Button(name) { section = name }.font(.subheadline.weight(.medium)).padding(.horizontal, 15).frame(minHeight: 44)
+                                    .background(section == name ? Brand.blue.opacity(0.14) : Color.secondary.opacity(0.06), in: Capsule())
+                                    .accessibilityAddTraits(section == name ? .isSelected : [])
                             }
                         }
                     }
-                    if let transcript = item.transcript, !transcript.isEmpty {
-                        DisclosureGroup("Transcript") { Text(transcript).font(.body).textSelection(.enabled).padding(.top) }
+                    switch section {
+                    case "Bron":
+                        if let text = item.description, !text.isEmpty { MarkdownBody(text: text) }
+                        else { Text("De bron heeft geen artikeltekst meegeleverd. Open het origineel hieronder.").foregroundStyle(.secondary) }
+                    case "Samenvatting":
+                        if let text = item.summary, !text.isEmpty { MarkdownBody(text: text) }
+                        else { Text("Nog geen samenvatting beschikbaar.").foregroundStyle(.secondary) }
+                        processing(item)
+                        Button(item.summary == nil ? "Samenvatten" : "Opnieuw samenvatten", systemImage: "sparkles") { Task { await action("summarize") } }.disabled(updating || store.demo)
+                    case "Lessen": ItemLessonsView(id: id)
+                    case "Transcript":
+                        if let text = item.transcript, !text.isEmpty { MarkdownBody(text: text) }
+                        else {
+                            Text("Nog geen transcript beschikbaar.").foregroundStyle(.secondary)
+                            if item.format == "podcast" || item.format == "video" { Button("Transcriberen", systemImage: "waveform") { Task { await action("transcribe") } }.disabled(updating || store.demo) }
+                        }
+                        processing(item)
+                    default: ItemQuestionsView(id: id)
                     }
+                    if updating { ProgressView("Bezig…") }
+                    Divider()
                     if let raw = item.mediaUrl, !item.isPodcast, let url = URL(string: raw), ["https", "http"].contains(url.scheme ?? "") {
                         Link("Open origineel", destination: url)
-                        ShareLink(item: url)
                     }
-                    if let base = try? ServerAddress.parse(store.server), var parts = URLComponents(url: base, resolvingAgainstBaseURL: false) {
-                        let _ = parts.queryItems = [URLQueryItem(name: "item", value: id)]
-                        if let url = parts.url { ShareLink("Deel via Stroom", item: url) }
+                    if let url = stroomURL(server: store.server, query: ["item": id]) {
+                        ShareLink("Deel via Stroom", item: url)
+                        NavigationLink("Meer artikelopties", destination: StroomWebView(url: url).navigationTitle("Artikelopties"))
                     }
                 } else if error == nil { ProgressView().frame(maxWidth: .infinity) }
                 if let error { ErrorNotice(message: error) { await load() } }
-            }.padding(24).frame(maxWidth: 760, alignment: .leading)
+            }.padding(22).frame(maxWidth: 760, alignment: .leading)
         }.frame(maxWidth: .infinity).background(Brand.paper).navigationTitle("In Stroom").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Gereed") { dismiss() } } }
             .task { await load() }.refreshable { await load() }
+            .sheet(isPresented: $scheduling) {
+                NavigationStack {
+                    Form {
+                        DatePicker("Lezen op", selection: $scheduled, in: Date.now..., displayedComponents: [.date, .hourAndMinute])
+                        Button("Inplannen") { Task { await schedule(scheduled) } }.disabled(updating)
+                        Button("Planning verwijderen") { Task { await schedule(nil) } }.disabled(updating)
+                        if let error { Text(error).foregroundStyle(.red) }
+                    }.navigationTitle("Later lezen").toolbar { Button("Sluiten") { scheduling = false } }
+                }.presentationDetents([.medium, .large])
+            }
+    }
+    @ViewBuilder func processing(_ item: FeedItem) -> some View {
+        if let state = item.processingStatus, ["queued", "transcribe_queued", "summarize_queued", "transcribing", "summarizing"].contains(state) {
+            Label("Verwerking loopt. Trek omlaag om te verversen.", systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+        }
     }
     func load() async {
-        item = store.items.first { $0.id == id }
+        if item == nil { item = (store.items + store.queueItems).first { $0.id == id }.map(store.current) }
         guard !store.demo, let api = store.api else { return }
-        do { item = try await api.item(id); error = nil } catch { self.error = error.localizedDescription }
+        do { let value = try await api.item(id); item = value; store.apply(value); error = nil } catch { self.error = error.localizedDescription }
     }
-    func updateStatus(_ status: String) async {
-        guard let api = store.api else { return }; updating = true; error = nil
-        defer { updating = false }
-        do { let updated = try await api.update(id, status: status); item = updated; store.apply(updated) }
+    func status(_ value: String) async {
+        guard let api = store.api else { return }; updating = true; error = nil; defer { updating = false }
+        do {
+            var updated: FeedItem
+            if store.demo { updated = item!; updated.status = value } else { updated = try await api.update(id, status: value) }
+            item = updated; store.apply(updated)
+        } catch { self.error = error.localizedDescription }
+    }
+    func action(_ endpoint: String) async {
+        guard let api = store.api else { return }; updating = true; error = nil; defer { updating = false }
+        do { let updated: FeedItem = try await api.request("huygens/items/\(id)/\(endpoint)", method: "POST"); item = updated; store.apply(updated) }
         catch { self.error = error.localizedDescription }
+    }
+    func schedule(_ date: Date?) async {
+        guard let api = store.api else { return }; updating = true; error = nil; defer { updating = false }
+        do {
+            let value: Any = date.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull()
+            let updated: FeedItem = try await api.request("huygens/items/\(id)/schedule", method: "POST", body: ["scheduled_for": value])
+            item = updated; store.apply(updated); scheduling = false
+        } catch { self.error = error.localizedDescription }
     }
 }
 
 struct MarkdownBody: View {
     let text: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            ForEach(Array(text.components(separatedBy: "\n\n").enumerated()), id: \.offset) { _, block in
-                let heading = block.hasPrefix("#")
-                let clean = heading ? block.replacingOccurrences(of: "^#{1,6}\\s+", with: "", options: .regularExpression) : block
-                Text((try? AttributedString(markdown: clean, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(clean))
-                    .font(heading ? .system(.title3, design: .serif).weight(.semibold) : .body)
-                    .lineSpacing(5).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(ContentText.markdown(text).components(separatedBy: "\n").enumerated()), id: \.offset) { _, line in
+                if line.trimmingCharacters(in: .whitespaces).isEmpty { Spacer().frame(height: 3) }
+                else {
+                    let heading = line.range(of: #"^#{1,6}\s"#, options: .regularExpression) != nil
+                    let clean = line.replacingOccurrences(of: #"^#{1,6}\s+"#, with: "", options: .regularExpression)
+                        .replacingOccurrences(of: #"^\s*[-*+]\s+"#, with: "• ", options: .regularExpression)
+                        .replacingOccurrences(of: #"^>\s?"#, with: "│ ", options: .regularExpression)
+                    if !clean.hasPrefix("```") {
+                        Text((try? AttributedString(markdown: clean, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(clean))
+                            .font(heading ? .system(.title3, design: .serif).weight(.semibold) : .body)
+                            .lineSpacing(5).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled)
+                    }
+                }
             }
         }
     }
 }
 
+struct DigestRun: Decodable, Identifiable {
+    let id: String; let generatedAt: String; let markdown: String; let model: String?
+}
 struct DigestView: View {
     @EnvironmentObject var store: AppStore
     @Environment(\.dismiss) var dismiss
     let topic: String
     @State private var digest: Digest?
+    @State private var history: [DigestRun] = []
     @State private var error: String?
+    @State private var window = "daily"
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                Picker("Periode", selection: $window) { Text("Dag").tag("daily"); Text("Week").tag("weekly") }.pickerStyle(.segmented)
                 Text("Het grotere plaatje").font(.system(.largeTitle, design: .serif))
+                if let date = digest?.generatedAt.flatMap(StroomDate.parse) { Text(date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary) }
                 if let markdown = digest?.markdown { MarkdownBody(text: markdown) }
-                else if let error { Text(error).foregroundStyle(.secondary) }
-                else if digest?.isGenerating == true { Text("Je dagoverzicht wordt nog gemaakt.") }
-                else if digest != nil { Text("Er is nog geen dagoverzicht beschikbaar.") }
+                else if digest?.isGenerating == true { Text("Je overzicht wordt nog gemaakt.") }
+                else if let error { ErrorNotice(message: error) { await load() } }
                 else { ProgressView() }
-            }.padding(24)
-        }.background(Brand.paper).navigationTitle("Dagoverzicht").navigationBarTitleDisplayMode(.inline)
+                if let url = stroomURL(server: store.server, query: ["topic": topic]) {
+                    NavigationLink("Overzicht maken of model kiezen", destination: StroomWebView(url: url).navigationTitle("Onderwerpoverzicht"))
+                }
+                ForEach(history) { run in
+                    DisclosureGroup("\(StroomDate.parse(run.generatedAt)?.formatted(date: .abbreviated, time: .shortened) ?? run.generatedAt) · \(run.model ?? "")") { MarkdownBody(text: run.markdown).padding(.top) }
+                }
+            }.padding(22)
+        }.background(Brand.paper).navigationTitle("Overzichten").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Gereed") { dismiss() } } }
-            .task {
-                do { if let api = store.api { digest = try await api.request("huygens/\(topic)/digest") } }
-                catch { self.error = error.localizedDescription }
-            }
+            .task(id: window) { await load() }.refreshable { await load() }
+    }
+    func load() async {
+        guard let api = store.api, !store.demo else { error = "Overzichten zijn beschikbaar met je eigen account."; return }
+        digest = nil; history = []; error = nil
+        do { let value: Digest = try await api.request("huygens/\(topic)/digest", query: [.init(name: "window", value: window)]); try Task.checkCancellation(); digest = value }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        do { let value: [DigestRun] = try await api.request("huygens/\(topic)/digest/history", query: [.init(name: "window", value: window)]); try Task.checkCancellation(); history = value }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
 
@@ -129,7 +215,7 @@ struct LibraryView: View {
             }
             Section("Bewaard in Stroom") {
                 if saved.isEmpty { Text("Bewaar een artikel of aflevering via het bladwijzertje.").foregroundStyle(.secondary) }
-                ForEach(saved) { item in Button { store.openItemID = item.id } label: { VStack(alignment: .leading, spacing: 6) { Text(item.title).foregroundStyle(.primary); Text(item.sourceName).font(.caption).foregroundStyle(.secondary) } } }
+                ForEach(saved.map(store.current).filter { $0.status == "pinned" }) { item in Button { store.openItemID = item.id } label: { VStack(alignment: .leading, spacing: 6) { Text(item.title).foregroundStyle(.primary); Text(item.sourceName).font(.caption).foregroundStyle(.secondary) } }.stroomActions(item) }
             }
         }.scrollContentBackground(.hidden).background(Brand.paper).navigationTitle("Bibliotheek")
             .task { await load() }.refreshable { await load() }

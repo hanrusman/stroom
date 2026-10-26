@@ -25,6 +25,8 @@ import { fetchTopics, fetchHuygens, fetchItem, setItemStatus, summarizeItem, tra
          searchItems, SearchHit } from './api';
 import { ScoreDetail, scoreDetailTooltip } from './ScoreDetail';
 import { ModelSelect } from './ModelSelect';
+import { excerptText, readerHTML } from './contentText';
+import { ReadingQueueProvider, QueueButton, ReadingQueuePage, useReadingQueue } from './ReadingQueue';
 
 const OpenSourceContext = React.createContext<((sourceId: string) => void) | null>(null);
 const useOpenSource = () => React.useContext(OpenSourceContext);
@@ -43,8 +45,7 @@ const RAIL_META: Record<ItemFormat, { label: string; icon: React.ComponentType<{
   // short:   { label: 'Short-form', icon: MessageSquare },
 };
 
-const stripHtml = (s: string | null) =>
-  (s ?? '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+const stripHtml = excerptText;
 
 // Security: only allow http(s) URLs as link targets. Feed-supplied media/source
 // URLs are rendered as <a href>, and React does not sanitize href — a
@@ -325,6 +326,7 @@ const CardActions = ({ item, onUpdate, onArchive }: {
   return (
     <div className="flex items-center gap-1.5 mt-3 pt-3 border-t border-brand-ink/5"
          onClick={e => e.stopPropagation()}>
+      <QueueButton id={item.id} archived={item.status === 'archived'} />
       <IconBtn icon={Archive} title={isArchived ? 'Uit archief' : 'Archiveer'}
         active={isArchived} busy={busy === 'archived'}
         onClick={e => run('archived', () => setItemStatus(item.id, isArchived ? 'new' : 'archived'), e)} />
@@ -835,8 +837,8 @@ const firstParagraph = (item: ItemDetail): string | null => {
   if (item.summary) {
     const blocks = parseSummary(item.summary);
     const first = blocks.find(b => b.kind === 'h' || b.kind === 'p');
-    if (first?.kind === 'h') return first.body || first.lead;
-    if (first?.kind === 'p') return first.text;
+    if (first?.kind === 'h') return stripHtml(first.body || first.lead);
+    if (first?.kind === 'p') return stripHtml(first.text);
   }
   if (item.transcript && item.format === 'article') {
     const para = item.transcript.split(/\n\s*\n/).find(p => p.trim().length > 40);
@@ -853,7 +855,7 @@ const ArticleBody = ({ item }: { item: ItemDetail }) => {
   const hero = item.thumbnail_url ?? item.source_image_url;
   const html = item.format === 'article' && item.transcript
     ? sanitizeMarkdown(item.transcript)
-    : DOMPurify.sanitize(item.description ?? '');
+    : readerHTML(item.description);
   const excerpt = firstParagraph(item);
   return (
     <div className="max-w-[680px] mx-auto">
@@ -1677,6 +1679,7 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
           <TopicManager itemId={id} currentTopics={item.topics} onUpdate={setItem} />
         </div>
         <div className="flex items-center gap-1 flex-wrap">
+          <QueueButton id={id} archived={item.status === 'archived'} />
           {onEink && <QuietAction icon={BookOpen} label="E-reader" onClick={onEink} />}
           <QuietAction icon={Bookmark} label="Save" active={item.status === 'pinned'} busy={busy === 'pinned'} onClick={() => toggle('pinned')} />
           <div className="relative">
@@ -1959,9 +1962,9 @@ function AppWithStickyPlayer({ user, onLogout }: { user: User; onLogout: () => v
   const [readerOpen, setReaderOpen] = useState(false);
   return (
     <>
-      <SettingsProvider>
+      <ReadingQueueProvider><SettingsProvider>
         <AuthedApp user={user} onLogout={onLogout} onReaderModeChange={setReaderOpen} />
-      </SettingsProvider>
+      </SettingsProvider></ReadingQueueProvider>
       {!readerOpen && <StickyPlayer />}
       {/* Spacer voor sticky player hoogte */}
       {!readerOpen && currentTrack && <div className="h-[76px]" />}
@@ -2867,6 +2870,13 @@ function SearchPage({ query, format, onChange, onBack, onOpenItem }: {
 
 
 function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogout: () => void; onReaderModeChange?: (open: boolean) => void }) {
+  const queue = useReadingQueue();
+  const [queueView, setQueueView] = useState(() => new URLSearchParams(location.search).has('queue'));
+  const openQueue = () => {
+    goHome();
+    const url = new URL(location.href); url.searchParams.set('queue', '1');
+    window.history.replaceState({}, '', url); setQueueView(true);
+  };
   const [dark, toggleDark] = useDarkMode();
   const [adminMode, setAdminMode] = useState<boolean>(() => readUrl().admin);
   const [topics, setTopics] = useState<Topic[]>([]);
@@ -2887,6 +2897,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
 
   useEffect(() => {
     const onPop = () => {
+      setQueueView(new URLSearchParams(location.search).has("queue"));
       const { itemId, topic, sourceId, admin, lessons, tips, podcast, eink, q, fmt } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
@@ -2904,7 +2915,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   }, []);
 
   const goHome = () => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.delete('item');
@@ -2928,13 +2941,15 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openSearch = () => {
+    setQueueView(false);
     // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
     // naar een oudere vraag springen dan het invoerveld toonde).
-    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView && !podcastView) {
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView && !podcastView && !queueView) {
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       return;
     }
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     const q = url.searchParams.get('q') ?? '';
@@ -2981,7 +2996,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openLessons = () => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('lessons', '1');
@@ -3000,7 +3017,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openPodcast = () => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     for (const key of ['item', 'source', 'admin', 'lessons', 'tips', 'q', 'fmt']) url.searchParams.delete(key);
     url.searchParams.set('podcast', '1');
     window.history.pushState({}, '', url.toString());
@@ -3010,7 +3029,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openTips = () => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('tips', '1');
@@ -3045,7 +3066,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openAdmin = () => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('admin', '1');
@@ -3098,7 +3121,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   };
 
   const openSource = (id: string) => {
+    setQueueView(false);
     const url = new URL(window.location.href);
+    url.searchParams.delete("queue");
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('source', id);
@@ -3165,6 +3190,9 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
             <span className="pt-1 font-display italic font-light text-brand-ink tracking-[-0.02em]">Stroom</span>
           </button>
           <div className="flex gap-2 md:gap-6 items-center text-brand-ink/40">
+            <button onClick={openQueue} className="min-h-11 px-2 text-sm text-brand-accent" aria-label="Wachtrij">
+              Wachtrij{queue.ids.size > 0 ? ` (${queue.ids.size})` : ''}
+            </button>
             <button onClick={openSearch} title="Zoeken" aria-label="Zoeken"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <Search size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
@@ -3202,6 +3230,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
         </div>
       </nav>
 
+      {queue.error && <div role="alert" className="px-6 py-3 text-sm text-red-700">{queue.error} <button onClick={() => void queue.refresh()} className="underline">Opnieuw proberen</button></div>}
       <main className="relative z-10 w-full max-w-screen-2xl mx-auto px-6 md:px-12 pb-32 pt-10">
         {podcastView ? (
           <PodcastConverter onBack={goHome} />
@@ -3212,6 +3241,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
         ) : itemId ? (
           <ItemDetailView id={itemId} onBack={closeItem} onOpenSource={openSource} onEink={openEink}
             onArchive={() => setData(d => d ? { ...d, rails: d.rails.map(r => ({ ...r, items: r.items.filter(it => it.id !== itemId) })) } : d)} />
+        ) : queueView ? (
+          <ReadingQueuePage onOpen={openItem} onBack={goHome} />
         ) : tipsView ? (
           // Na itemId: een aflevering openen vanuit Tips toont het item, terug brengt je weer hier.
           <TipsPage onBack={closeTips} onOpenItem={openItem} />

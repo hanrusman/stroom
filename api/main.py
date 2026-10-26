@@ -43,6 +43,7 @@ from routers import tips as tips_router
 from services import tips_service
 from services import podcast_converter
 from routers import podcast_tests as podcast_tests_router
+from routers import reading_queue as reading_queue_router
 
 
 # --- Queue tunables ---
@@ -577,6 +578,7 @@ app.include_router(transcripts_router.router)
 app.include_router(decision_router.router)
 app.include_router(tips_router.router)
 app.include_router(podcast_tests_router.router)
+app.include_router(reading_queue_router.router)
 
 
 # --- Auth routes ---
@@ -877,16 +879,18 @@ async def list_filtered_items(
     window: HuygensWindow = Query("all"),
     topic: Optional[str] = Query(None, description="Topic slug to constrain to"),
     source_id: Optional[UUID] = Query(None, description="Source UUID to constrain to"),
+    format: Optional[Literal["article", "podcast", "video"]] = Query(None),
     include_archived: bool = Query(False, description="Include archived items"),
     limit: int = Query(100, ge=1, le=500),
     offset: int = Query(0, ge=0),
     session=Depends(get_async_session),
 ):
-    if filter == "all" and window == "all" and not topic and not source_id:
-        raise HTTPException(status_code=400, detail="At least one filter required")
 
     clauses: list[str] = ["s.active = true"]
     params: dict = {"lim": limit, "off": offset}
+    if format:
+        clauses.append("i.format::text = :fmt")
+        params["fmt"] = format
 
     if filter == "saved":
         clauses.append("i.status = 'pinned'::item_status")

@@ -9,15 +9,20 @@
 /* Begin PBXBuildFile section */
 		1B7F5C1276199FB5DCA7093C /* StroomApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB3FF1653841D89F4C73AEC /* StroomApp.swift */; };
 		339B307F5FE4107AEAEDBA21 /* StroomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF518B2E225E20C7662A0FEC /* StroomTests.swift */; };
+		3EEA920421A40939D0B24858 /* ContentText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8C89967C504CF4159327F6 /* ContentText.swift */; };
+		4F2396E705A5ACFA6BF9C6C7 /* ReadingQueueView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7CF7913AA1F9CF83D5F0845 /* ReadingQueueView.swift */; };
 		53F2C0CC0E54E7898713F105 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 03543566C2B62B49FB05640D /* APIClient.swift */; };
 		56EC50159D1FC824621A9391 /* AppStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D839FA712DFA30A2C81453E /* AppStore.swift */; };
 		64FB57833FC784EA791F7AF6 /* Notifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC6CDD8C5BB3BC3CFCC71AFB /* Notifications.swift */; };
 		71B41DC943C4751A62DC40C8 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A7CB2C641957D4D8EFCE8D8 /* SettingsView.swift */; };
 		8F5AA0B2FBC26A50849C64F7 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45E9552B5D640381D478C482 /* Models.swift */; };
+		9E1FB0ACDB57DF9B552C1A46 /* ReaderCompanion.swift in Sources */ = {isa = PBXBuildFile; fileRef = D021C10178E2CE48B39862E4 /* ReaderCompanion.swift */; };
 		BA0C87611B1EFFF1A32D1866 /* DetailViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = E74E6B7E32A4FD7B8C5951AC /* DetailViews.swift */; };
 		BBE8A93356CE3AD19EE390C6 /* LibraryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D2A6DAD4FAAC40CA3CB44457 /* LibraryStore.swift */; };
 		C227AA9B03C4BD07A97135E0 /* AudioPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A5D2498AADA4BD45EC4EED5 /* AudioPlayer.swift */; };
+		C3124D3BA994B91CEEC25F9B /* HTMLEntities.json in Resources */ = {isa = PBXBuildFile; fileRef = FAFFFEBBF2FCEA8FB89EB6F2 /* HTMLEntities.json */; };
 		E77CFC2AA399036EC289ACC9 /* NavigationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82A951E054052A3F3948AC06 /* NavigationTests.swift */; };
+		EBA4892687E200F05C441FFA /* MoreView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C945E11FD3E2221F430B67CC /* MoreView.swift */; };
 		EE562CD18CB92AD73EEE92C4 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 2DA77C7931723F0E72815116 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -45,16 +50,21 @@
 		2DA77C7931723F0E72815116 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3DB3FF1653841D89F4C73AEC /* StroomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StroomApp.swift; sourceTree = "<group>"; };
 		45E9552B5D640381D478C482 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		5A8C89967C504CF4159327F6 /* ContentText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentText.swift; sourceTree = "<group>"; };
 		6888F9CE67B8FFDB450A2F38 /* StroomTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StroomTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		82A951E054052A3F3948AC06 /* NavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NavigationTests.swift; sourceTree = "<group>"; };
 		89CE0611CB34C2C3787C4987 /* StroomUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StroomUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		96CA031A5F46BF9C013DE801 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		9A5D2498AADA4BD45EC4EED5 /* AudioPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioPlayer.swift; sourceTree = "<group>"; };
 		A177667BAD2FB67DDA1AA377 /* Stroom.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = Stroom.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C945E11FD3E2221F430B67CC /* MoreView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MoreView.swift; sourceTree = "<group>"; };
 		CC6CDD8C5BB3BC3CFCC71AFB /* Notifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Notifications.swift; sourceTree = "<group>"; };
+		D021C10178E2CE48B39862E4 /* ReaderCompanion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderCompanion.swift; sourceTree = "<group>"; };
 		D2A6DAD4FAAC40CA3CB44457 /* LibraryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryStore.swift; sourceTree = "<group>"; };
 		E74E6B7E32A4FD7B8C5951AC /* DetailViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailViews.swift; sourceTree = "<group>"; };
+		E7CF7913AA1F9CF83D5F0845 /* ReadingQueueView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReadingQueueView.swift; sourceTree = "<group>"; };
 		EF518B2E225E20C7662A0FEC /* StroomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StroomTests.swift; sourceTree = "<group>"; };
+		FAFFFEBBF2FCEA8FB89EB6F2 /* HTMLEntities.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = HTMLEntities.json; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -101,11 +111,16 @@
 				1D839FA712DFA30A2C81453E /* AppStore.swift */,
 				2DA77C7931723F0E72815116 /* Assets.xcassets */,
 				9A5D2498AADA4BD45EC4EED5 /* AudioPlayer.swift */,
+				5A8C89967C504CF4159327F6 /* ContentText.swift */,
 				E74E6B7E32A4FD7B8C5951AC /* DetailViews.swift */,
+				FAFFFEBBF2FCEA8FB89EB6F2 /* HTMLEntities.json */,
 				96CA031A5F46BF9C013DE801 /* Info.plist */,
 				D2A6DAD4FAAC40CA3CB44457 /* LibraryStore.swift */,
 				45E9552B5D640381D478C482 /* Models.swift */,
+				C945E11FD3E2221F430B67CC /* MoreView.swift */,
 				CC6CDD8C5BB3BC3CFCC71AFB /* Notifications.swift */,
+				D021C10178E2CE48B39862E4 /* ReaderCompanion.swift */,
+				E7CF7913AA1F9CF83D5F0845 /* ReadingQueueView.swift */,
 				1A7CB2C641957D4D8EFCE8D8 /* SettingsView.swift */,
 				3DB3FF1653841D89F4C73AEC /* StroomApp.swift */,
 			);
@@ -220,6 +235,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				EE562CD18CB92AD73EEE92C4 /* Assets.xcassets in Resources */,
+				C3124D3BA994B91CEEC25F9B /* HTMLEntities.json in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -233,10 +249,14 @@
 				53F2C0CC0E54E7898713F105 /* APIClient.swift in Sources */,
 				56EC50159D1FC824621A9391 /* AppStore.swift in Sources */,
 				C227AA9B03C4BD07A97135E0 /* AudioPlayer.swift in Sources */,
+				3EEA920421A40939D0B24858 /* ContentText.swift in Sources */,
 				BA0C87611B1EFFF1A32D1866 /* DetailViews.swift in Sources */,
 				BBE8A93356CE3AD19EE390C6 /* LibraryStore.swift in Sources */,
 				8F5AA0B2FBC26A50849C64F7 /* Models.swift in Sources */,
+				EBA4892687E200F05C441FFA /* MoreView.swift in Sources */,
 				64FB57833FC784EA791F7AF6 /* Notifications.swift in Sources */,
+				9E1FB0ACDB57DF9B552C1A46 /* ReaderCompanion.swift in Sources */,
+				4F2396E705A5ACFA6BF9C6C7 /* ReadingQueueView.swift in Sources */,
 				71B41DC943C4751A62DC40C8 /* SettingsView.swift in Sources */,
 				1B7F5C1276199FB5DCA7093C /* StroomApp.swift in Sources */,
 			);

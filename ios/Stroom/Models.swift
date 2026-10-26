@@ -27,6 +27,7 @@ struct FeedItem: Codable, Identifiable, Hashable {
     var transcript: String?
     var topics: [String]?
     var sourceUrl: String?
+    var scheduledFor: String?
     var isPodcast: Bool { format == "podcast" }
     var artwork: String? { thumbnailUrl ?? sourceImageUrl }
     var track: AudioTrack? {
@@ -114,4 +115,13 @@ struct NotificationSnapshot: Codable {
         initialized = true
         return (fresh, newJobs)
     }
+}
+
+struct ActionOK: Decodable { let ok: Bool }
+struct Lesson: Decodable, Identifiable {
+    let id: String; let title: String; let body: String; var rating: Int?
+    var expansion: String?
+}
+struct ItemQuestion: Decodable, Identifiable {
+    var id: String?; let question: String; let answer: String; var model: String?
 }

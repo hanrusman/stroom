@@ -1,6 +1,6 @@
 # Stroom voor iPhone
 
-Een native SwiftUI-app naast de bestaande Stroom-website. De app gebruikt dezelfde HTTPS-API, login en bewaarde items. Er is geen backendmigratie of deployment nodig.
+Een native SwiftUI-app naast de bestaande Stroom-website. De app gebruikt dezelfde HTTPS-API, login en bewaarde items. Voor de gedeelde leeswachtrij moet ook de Stroom-server worden bijgewerkt: voer migratie `schema/migrations/027-reading-queue.sql` uit en deploy de nieuwe API en website. Tot dat moment geeft de wachtrij een foutmelding; de bestaande lees- en podcastfuncties blijven beschikbaar.
 
 ## Op je iPhone zetten
 
@@ -12,7 +12,7 @@ Een native SwiftUI-app naast de bestaande Stroom-website. De app gebruikt dezelf
 6. Zet zo nodig **Instellingen → Privacy en beveiliging → Ontwikkelaarsmodus** aan op je iPhone, herstart en bevestig. Deze optie verschijnt na koppelen met Xcode. [Apple: Developer Mode](https://developer.apple.com/documentation/xcode/enabling-developer-mode-on-a-device)
 7. Druk **⌘R**. Vertrouw, als iOS dit vraagt, je ontwikkelaarsprofiel bij **Instellingen → Algemeen → VPN- en apparaatbeheer**.
 8. Open Stroom en gebruik het HTTPS-adres van je website en je bestaande Stroom-login. Het invulveld stelt `https://stroom.c4w.nl` voor; pas dit aan als je een ander adres gebruikt. Vul geen `/api` achter het adres in.
-9. Stel onder **Jouw Stroom** de meldingen in en tik **Bewaar meldingsvoorkeuren**. Sta meldingen toe wanneer iOS daarom vraagt.
+9. Stel onder **Meer → Instellingen en meldingen** de meldingen in en tik **Bewaar meldingsvoorkeuren**. Sta meldingen toe wanneer iOS daarom vraagt.
 
 Vereist: iOS 17 of nieuwer en Xcode met ondersteuning voor de iOS-versie van je iPhone. Gecontroleerd met Xcode 27.1; de gebruikte app-API's hebben iOS 17 als minimum.
 
@@ -20,10 +20,15 @@ Met een gratis Personal Team verlopen provisioning profiles na **7 dagen**. Bouw
 
 ## Wat zit erin?
 
-- Native feed met onderwerpen, zoekfunctie, samenvattingen, transcript en bestaande dagoverzichten.
+- Native feed met onderwerpen, zoekfunctie, filters voor status, periode en artikelen/podcasts/video’s.
+- Excerpts worden opgeschoond van HTML, entities en Markdown; de reader toont bron en samenvatting apart met leesbare opmaak.
+- Naar rechts vegen archiveert (met Herstel); naar links vegen voegt toe aan de gedeelde wachtrij of haalt het item eruit.
+- Een eigen tab Wachtrij, opgeslagen per account op de server, met dezelfde FIFO-volgorde op website en iPhone. Bewaren blijft een aparte actie. Archiveren verwijdert het item uit alle wachtrijen, omdat de bestaande itemstatus gedeeld is.
+- Native bronpagina’s, lessen beoordelen, vragen stellen met antwoordgeschiedenis, plannen, dag- en weekoverzichten met geschiedenis.
+- Onder Meer: Tips, volledige lessenbibliotheek, podcast maken, inbox en beheer via de Stroom-website binnen de app, met je bestaande sessie. Artikelopties zoals topics, score aanpassen en Vikunja blijven daar beschikbaar.
 - Bewaren en archiveren synchroniseren via dezelfde API als de website.
 - Podcastspeler met achtergrondgeluid, lockscreen-/Control Center-bediening, AirPlay, 15 seconden terug / 30 seconden vooruit, snelheid, slaaptimer en wachtrij.
-- Luisterpositie blijft lokaal bewaard. Open dezelfde aflevering opnieuw om verder te gaan. De wachtrij geldt voor de huidige appsessie.
+- Luisterpositie blijft lokaal bewaard. Open dezelfde aflevering opnieuw om verder te gaan. De lokale afspeelwachtrij (**Speel hierna af**) geldt voor de huidige appsessie; de gedeelde leeswachtrij blijft op de server bewaard.
 - Podcastdownloads voor offline luisteren; houd de app tijdens het downloaden open. Downloads worden niet automatisch opgeruimd en kun je verwijderen in Bibliotheek.
 - Gegenereerde podcasts uit de bestaande `/podcast-tests`-bibliotheek. Privéaudio wordt eerst geauthenticeerd gedownload en daarna lokaal afgespeeld.
 - Lokale meldingen met onderwerpen, contenttypen, minimumscore, eigen podcasts die klaar zijn en rusturen.
@@ -76,3 +81,21 @@ De unit tests controleren API-decoding, oorsprong-/URL-validatie, meldingsfilter
 **Nog handmatig op je eigen iPhone testen:** echt inloggen op jouw server; een externe podcast streamen en downloaden; een gegenereerde podcast afspelen; vliegtuigmodus na download; scherm vergrendelen, AirPlay en onderbreken door een telefoongesprek; een dagelijkse herinnering ontvangen en aantikken. Die hardware-/accountchecks zijn niet door simulator-tests gedekt. Automatische achtergrondverversing kan alleen over tijd op een echt apparaat beoordeeld worden.
 
 Als je later voor een betaald account kiest, kan de volgende stap een kleine APNs-service zijn met apparaatregistratie en serverfilters. APNs-sleutels horen uitsluitend op de server.
+
+## Wachtrij uitrollen
+
+1. Deploy eerst migratie `027-reading-queue.sql` op de Stroom-database. De migratie is herhaalbaar en verandert bestaande bookmarks niet.
+2. Bouw/deploy de API en website uit dezelfde commit. Nieuwe routes: GET `/reading-queue`, GET `/reading-queue/ids`, PUT/DELETE `/reading-queue/{item_id}` (extern onder `/api`).
+3. Open de website en voeg een artikel toe met het wachtrij-icoon. Open de tab Wachtrij in de app en ververs. Controleer archiveren en Herstel.
+4. Bouw deze iPhone-app opnieuw via Xcode. De lokale projectkopie behoudt je gekozen Personal Team.
+
+De gedeelde leeswachtrij is iets anders dan **Speel hierna af**, de lokale afspeelvolgorde van de audiospeler. Een mislukte serveractie wordt als fout getoond en telt niet als gesynchroniseerd.
+
+## Controle van deze revisie
+
+- Swift unit-tests: HTML/Markdown, entities, sessiegrenzen, API-decodering en meldingsfilters.
+- UI-tests: reader, tabnavigatie, beide veegrichtingen, wachtrij en Herstel.
+- Webtests: veilige excerpts/rich text, toevoegen/verwijderen, archiefsync en foutafhandeling.
+- PostgreSQL-tests op een lokale wegwerpdatabase: FIFO, dubbele toevoegingen, accountisolatie, idempotent verwijderen, migratie herhalen, archiveren en gelijktijdige transacties.
+
+De simulator en lokale website gebruiken voorbeelddata. De nieuwe wachtrij kan pas tegen je echte account worden gecontroleerd nadat de server is uitgerold; er is in deze revisie geen productiegegevensmutatie uitgevoerd.

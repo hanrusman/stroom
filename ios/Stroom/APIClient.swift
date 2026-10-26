@@ -61,19 +61,20 @@ final class APIClient {
         config.timeoutIntervalForRequest = 25
         session = URLSession(configuration: config, delegate: SameOriginRedirects(), delegateQueue: nil)
     }
-    func request<T: Decodable>(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: String]? = nil) async throws -> T {
+    func request<T: Decodable>(_ path: String, query: [URLQueryItem] = [], method: String = "GET", body: [String: Any]? = nil) async throws -> T {
         let data = try await data(path, query: query, method: method, body: body)
         return try Self.decoder.decode(T.self, from: data)
     }
-    private func data(_ path: String, query: [URLQueryItem], method: String, body: [String: String]?) async throws -> Data {
+    private func data(_ path: String, query: [URLQueryItem], method: String, body: [String: Any]?) async throws -> Data {
         var parts = URLComponents(url: baseURL.appendingPathComponent("api").appendingPathComponent(path), resolvingAgainstBaseURL: false)!
         if !query.isEmpty { parts.queryItems = query }
         var request = URLRequest(url: parts.url!)
         request.httpMethod = method
+        if path.hasSuffix("/ask") || path.hasSuffix("/summarize") { request.timeoutInterval = 240 }
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let cookie { request.setValue("stroom_session=\(cookie)", forHTTPHeaderField: "Cookie") }
         if let body {
-            request.httpBody = try JSONEncoder().encode(body)
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
         let (data, response) = try await session.data(for: request)
@@ -103,16 +104,23 @@ final class APIClient {
         clearSession()
     }
     func clearSession() { cookie = nil; KeychainSession.delete(account: baseURL.absoluteString) }
-    func items(topic: String? = nil, saved: Bool = false, offset: Int = 0, limit: Int = 100) async throws -> [FeedItem] {
+    func items(topic: String? = nil, saved: Bool = false, offset: Int = 0, limit: Int = 100, filter: String = "all", window: String = "30d", format: String? = nil, source: String? = nil) async throws -> [FeedItem] {
         var query = [URLQueryItem(name: "limit", value: String(limit)), URLQueryItem(name: "offset", value: String(offset))]
-        query.append(URLQueryItem(name: "filter", value: saved ? "saved" : "all"))
-        if !saved { query.append(URLQueryItem(name: "window", value: "30d")) }
+        query.append(URLQueryItem(name: "filter", value: saved ? "saved" : filter))
+        if !saved { query.append(URLQueryItem(name: "window", value: window)) }
+        if let format { query.append(URLQueryItem(name: "format", value: format)) }
+        if let source { query.append(URLQueryItem(name: "source_id", value: source)) }
         if let topic { query.append(URLQueryItem(name: "topic", value: topic)) }
         return try await request("huygens/items", query: query)
     }
     func item(_ id: String) async throws -> FeedItem { try await request("huygens/items/\(id)") }
     func update(_ id: String, status: String) async throws -> FeedItem {
         try await request("huygens/items/\(id)/status", method: "POST", body: ["status": status])
+    }
+    func webCookie() -> HTTPCookie? {
+        guard let cookie, let host = baseURL.host else { return nil }
+        return HTTPCookie(properties: [.name: "stroom_session", .value: cookie, .domain: host,
+                                      .path: "/", .secure: "TRUE", HTTPCookiePropertyKey("HttpOnly"): "TRUE"])
     }
     func mediaRequest(_ url: URL) -> URLRequest {
         var request = URLRequest(url: url)
