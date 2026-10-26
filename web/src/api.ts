@@ -216,7 +216,21 @@ async function postAction(id: string, path: string, body?: unknown): Promise<Ite
   return r.json();
 }
 
-export const setItemStatus = (id: string, status: ItemStatus) => postAction(id, 'status', { status });
+export const setItemStatus = async (id: string, status: ItemStatus) => {
+  const result = await postAction(id, 'status', { status });
+  window.dispatchEvent(new CustomEvent('stroom:item-status', { detail: { id, status: result.status } }));
+  return result;
+};
+export async function fetchReadingQueue(offset = 0): Promise<HuygensItem[]> {
+  return (await apiFetch(`/api/reading-queue?limit=100&offset=${offset}`)).json();
+}
+export async function fetchReadingQueueIds(): Promise<string[]> {
+  return (await apiFetch('/api/reading-queue/ids')).json();
+}
+export async function changeReadingQueue(id: string, queued: boolean): Promise<void> {
+  await apiFetch(`/api/reading-queue/${encodeURIComponent(id)}`, { method: queued ? 'PUT' : 'DELETE' });
+}
+
 export const summarizeItem  = (id: string) => postAction(id, 'summarize');
 export const transcribeItem = (id: string) => postAction(id, 'transcribe');
 export const scheduleItem   = (id: string, scheduled_for: string | null) =>
