@@ -2,6 +2,39 @@ import XCTest
 @testable import Stroom
 
 final class StroomTests: XCTestCase {
+    @MainActor func testTopicRailsDecodeInEditorialOrder() throws {
+        let json = #"{"slug":"ai","name":"AI","rails":[{"format":"video","items":[]},{"format":"podcast","items":[]},{"format":"article","items":[{"id":"a","title":"Artikel","source_name":"Bron","has_summary":true,"has_transcript":true}]}]}"#
+        let topic = try APIClient.decoder.decode(HuygensTopic.self, from: Data(json.utf8))
+        XCTAssertEqual(topic.orderedRails.map(\.format), ["article", "podcast", "video"])
+        XCTAssertEqual(topic.orderedRails[0].items.first?.initialSection, "Samenvatting")
+    }
+    @MainActor func testFullArticleBodyAndSummaryStart() throws {
+        var article = try item()
+        article.format = "article"
+        article.description = "Excerpt"
+        article.transcript = "Volledige tekst"
+        XCTAssertEqual(article.sourceBody, "Volledige tekst")
+        article.transcript = "  "
+        XCTAssertEqual(article.sourceBody, "Excerpt")
+        article.hasSummary = false
+        XCTAssertEqual(article.initialSection, "Bron")
+        article.summary = "Een samenvatting"
+        XCTAssertEqual(article.initialSection, "Samenvatting")
+        article.format = "podcast"
+        article.transcript = "Gesproken tekst"
+        XCTAssertEqual(article.sourceBody, "Excerpt")
+    }
+    @MainActor func testPlaybackDefaultAndStoredSpeed() {
+        let defaults = UserDefaults(suiteName: "StroomTests.speed")!
+        defaults.removePersistentDomain(forName: "StroomTests.speed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 1.7)
+        defaults.set(2.3, forKey: "playbackSpeed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 2.3)
+        defaults.set(99, forKey: "playbackSpeed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 1.7)
+        XCTAssertEqual(AudioPlayer.playbackRates.count, 16)
+        defaults.removePersistentDomain(forName: "StroomTests.speed")
+    }
     func testHTMLAndMarkdownExcerpts() {
         XCTAssertEqual(ContentText.excerpt("<p>Han&#x27;s idee &mdash; café &amp; thee&nbsp; &#128512;</p>"), "Han's idee — café & thee 😀")
         XCTAssertEqual(ContentText.excerpt("## Kop\n\nEen **goed** [idee](https://example.com)."), "Kop Een goed idee.")
