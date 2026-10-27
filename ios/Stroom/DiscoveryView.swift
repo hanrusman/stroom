@@ -20,13 +20,17 @@ struct TipMentions: Decodable {
 }
 struct TipMention: Decodable, Identifiable {
   let itemId: String
-  let source: String
+  let source: String?
   let episode: String?
   let quote: String?
   let why: String?
   let by: String?
   let published: String?
   var id: String { itemId }
+  var sourceLabel: String {
+    let name = source?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    return name.isEmpty ? "Bron onbekend" : name
+  }
 }
 func tipCategory(_ value: String) -> String {
   [
@@ -157,7 +161,7 @@ struct TipDetailView: View {
       if let error { ErrorNotice(message: error) { await load() } }
       if !loaded { ProgressView() }
       ForEach(mentions) { mention in
-        Section(mention.source) {
+        Section(mention.sourceLabel) {
           if let quote = mention.quote {
             Text("“\(ContentText.excerpt(quote))”").font(.system(.body, design: .serif).italic())
           }

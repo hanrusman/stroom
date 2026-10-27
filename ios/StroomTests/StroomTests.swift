@@ -295,7 +295,8 @@ extension StroomTests {
   @MainActor func testMissingDigestIsEmptyButServerFailureRemainsAnError() async throws {
     let config = URLSessionConfiguration.ephemeral
     config.protocolClasses = [DigestResponseFixture.self]
-    let missing = APIClient(baseURL: URL(string: "https://missing.stroom.test")!, configuration: config)
+    let missing = APIClient(
+      baseURL: URL(string: "https://missing.stroom.test")!, configuration: config)
     let empty = try await missing.digest(topic: "ai", window: "daily")
     XCTAssertNil(empty)
     do {
@@ -305,7 +306,8 @@ extension StroomTests {
       XCTAssertEqual(error.statusCode, 404)
       XCTAssertEqual(error.localizedDescription, "No digest yet")
     }
-    let failed = APIClient(baseURL: URL(string: "https://failed.stroom.test")!, configuration: config)
+    let failed = APIClient(
+      baseURL: URL(string: "https://failed.stroom.test")!, configuration: config)
     do {
       _ = try await failed.digest(topic: "ai", window: "daily")
       XCTFail("Server errors must not look like an empty digest")
@@ -322,8 +324,11 @@ final class DigestResponseFixture: URLProtocol {
   override func startLoading() {
     let host = request.url!.host!
     let status = host.hasPrefix("missing") ? 404 : (host.hasPrefix("failed") ? 500 : 200)
-    let json = status == 200 ? #"{"markdown":"Overzicht","is_generating":false}"# : #"{"detail":"No digest yet"}"#
-    let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
+    let json =
+      status == 200
+      ? #"{"markdown":"Overzicht","is_generating":false}"# : #"{"detail":"No digest yet"}"#
+    let response = HTTPURLResponse(
+      url: request.url!, statusCode: status, httpVersion: nil,
       headerFields: ["Content-Type": "application/json"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(json.utf8))
@@ -334,24 +339,32 @@ final class DigestResponseFixture: URLProtocol {
 
 extension StroomTests {
   func testFastAPIValidationMessagesKeepStatusAndHidePayloadDetails() {
-    let body = Data(#"{"detail":[{"loc":["body","email"],"msg":"Voer een geldig adres in","input":"private@example.com"}]}"#.utf8)
+    let body = Data(
+      #"{"detail":[{"loc":["body","email"],"msg":"Voer een geldig adres in","input":"private@example.com"}]}"#
+        .utf8)
     let error = APIError.fromResponse(status: 422, data: body)
     XCTAssertEqual(error.statusCode, 422)
     XCTAssertEqual(error.localizedDescription, "Voer een geldig adres in")
     XCTAssertEqual(APIError.fromResponse(status: 401, data: body).statusCode, 401)
     for json in [#"{"detail":[]}"#, #"{"detail":{"other":"x"}}"#, "<html>error</html>"] {
-      XCTAssertTrue(APIError.fromResponse(status: 502, data: Data(json.utf8)).localizedDescription.contains("HTTP 502"))
+      XCTAssertTrue(
+        APIError.fromResponse(status: 502, data: Data(json.utf8)).localizedDescription.contains(
+          "HTTP 502"))
     }
   }
   @MainActor func testMalformedTranscriptEnrichmentDoesNotHideTheItem() throws {
-    let prefix = #"{"id":"a","title":"Readable","source_name":"Source","transcript":"Fallback text","transcript_segments":"#
-    let segments = #"[{"start":0,"end":3,"text":"First"},null,{"start":4,"text":"Missing end"},7,{"start":5,"end":4,"text":"Backwards"},{"start":-1,"end":2,"text":"Negative"},{"start":4,"end":8,"text":"Last","speaker":12}]"#
-    let item = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + segments + "}").utf8))
+    let prefix =
+      #"{"id":"a","title":"Readable","source_name":"Source","transcript":"Fallback text","transcript_segments":"#
+    let segments =
+      #"[{"start":0,"end":3,"text":"First"},null,{"start":4,"text":"Missing end"},7,{"start":5,"end":4,"text":"Backwards"},{"start":-1,"end":2,"text":"Negative"},{"start":4,"end":8,"text":"Last","speaker":12}]"#
+    let item = try APIClient.decoder.decode(
+      FeedItem.self, from: Data((prefix + segments + "}").utf8))
     XCTAssertEqual(item.title, "Readable")
     XCTAssertEqual(item.transcriptSegments?.map(\.text), ["First", "Last"])
     XCTAssertNil(item.transcriptSegments?.last?.speaker)
     for invalid in ["null", "{}", "true", "\"bad\""] {
-      let value = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + invalid + "}").utf8))
+      let value = try APIClient.decoder.decode(
+        FeedItem.self, from: Data((prefix + invalid + "}").utf8))
       XCTAssertNil(value.transcriptSegments)
       XCTAssertEqual(value.transcript, "Fallback text")
     }
@@ -363,7 +376,8 @@ extension StroomTests {
 extension StroomTests {
   @MainActor func testMalformedScoreEnrichmentKeepsValidPartsAndItem() throws {
     let prefix = #"{"id":"a","title":"Readable","source_name":"Source","quality_score_detail":"#
-    let score = #"{"quality":{"score10":8,"probabilities":{"good":0.8,"bad":"wrong"}},"interest":{"score10":"wrong"},"calibration":{"method":"partial"},"clickbait":"wrong","model":"chosen"}"#
+    let score =
+      #"{"quality":{"score10":8,"probabilities":{"good":0.8,"bad":"wrong"}},"interest":{"score10":"wrong"},"calibration":{"method":"partial"},"clickbait":"wrong","model":"chosen"}"#
     let item = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + score + "}").utf8))
     XCTAssertEqual(item.qualityScoreDetail?.quality?.score10, 8)
     XCTAssertEqual(item.qualityScoreDetail?.quality?.probabilities, ["good": 0.8])
@@ -372,7 +386,8 @@ extension StroomTests {
     XCTAssertNil(item.qualityScoreDetail?.clickbait)
     XCTAssertEqual(item.qualityScoreDetail?.model, "chosen")
     for invalid in ["null", "[]", "true", "\"bad\""] {
-      let value = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + invalid + "}").utf8))
+      let value = try APIClient.decoder.decode(
+        FeedItem.self, from: Data((prefix + invalid + "}").utf8))
       XCTAssertEqual(value.title, "Readable")
       XCTAssertNil(value.qualityScoreDetail)
     }
@@ -423,5 +438,17 @@ extension StroomTests {
     XCTAssertFalse(partial)
     XCTAssertNotNil(store.actionError)
     XCTAssertFalse(store.canUndo)
+  }
+}
+
+extension StroomTests {
+  @MainActor func testTipsCanOpenWithoutASourceName() throws {
+    for source in ["", ",\"source\":null", ",\"source\":\"  \""] {
+      let json =
+        "{\"mentions\":[{\"item_id\":\"episode\",\"quote\":\"Worth reading\"" + source + "}]}"
+      let value = try APIClient.decoder.decode(TipMentions.self, from: Data(json.utf8))
+      XCTAssertEqual(value.mentions.first?.sourceLabel, "Bron onbekend")
+      XCTAssertEqual(value.mentions.first?.quote, "Worth reading")
+    }
   }
 }
