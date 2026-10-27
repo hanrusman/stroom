@@ -4,7 +4,23 @@ import Security
 enum APIError: LocalizedError {
   case invalidServer, unauthorized
   case response(Int)
+  case http(Int, String)
   case message(String)
+  var statusCode: Int? {
+    switch self {
+    case .response(let code), .http(let code, _): return code
+    case .unauthorized: return 401
+    default: return nil
+    }
+  }
+  static func fromResponse(status: Int, data: Data) -> APIError {
+    if status == 401 { return .unauthorized }
+    let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    if let detail = json?["detail"] as? String, !detail.isEmpty {
+      return .http(status, detail)
+    }
+    return .response(status)
+  }
   var errorDescription: String? {
     switch self {
     case .invalidServer:
@@ -12,6 +28,7 @@ enum APIError: LocalizedError {
     case .unauthorized:
       return "Je sessie is verlopen of je inloggegevens kloppen niet. Log opnieuw in."
     case .response(let code): return "Stroom antwoordde met HTTP \(code). Probeer het opnieuw."
+    case .http(_, let text): return text
     case .message(let text): return text
     }
   }
@@ -68,10 +85,10 @@ final class APIClient {
     return decoder
   }()
 
-  init(baseURL: URL) {
+  init(baseURL: URL, configuration: URLSessionConfiguration = .ephemeral) {
     self.baseURL = baseURL
     cookie = KeychainSession.read(account: baseURL.absoluteString)
-    let config = URLSessionConfiguration.ephemeral
+    let config = configuration
     config.httpShouldSetCookies = false
     config.httpCookieStorage = nil
     config.timeoutIntervalForRequest = 25
@@ -101,14 +118,8 @@ final class APIClient {
     }
     let (data, response) = try await session.data(for: request)
     guard let http = response as? HTTPURLResponse else { throw APIError.response(0) }
-    if http.statusCode == 401 { throw APIError.unauthorized }
     guard (200..<300).contains(http.statusCode) else {
-      if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-        let detail = json["detail"] as? String
-      {
-        throw APIError.message(detail)
-      }
-      throw APIError.response(http.statusCode)
+      throw APIError.fromResponse(status: http.statusCode, data: data)
     }
     if path == "auth/login", let fields = http.allHeaderFields as? [String: String],
       let sessionCookie = HTTPCookie.cookies(withResponseHeaderFields: fields, for: baseURL).first(
@@ -150,6 +161,14 @@ final class APIClient {
     return try await request("huygens/items", query: query)
   }
   func item(_ id: String) async throws -> FeedItem { try await request("huygens/items/\(id)") }
+  func digest(topic: String, window: String) async throws -> Digest? {
+    do {
+      return try await request(
+        "huygens/\(topic)/digest", query: [.init(name: "window", value: window)])
+    } catch let error as APIError where error.statusCode == 404 {
+      return nil
+    }
+  }
   func update(_ id: String, status: String) async throws -> FeedItem {
     try await request("huygens/items/\(id)/status", method: "POST", body: ["status": status])
   }
