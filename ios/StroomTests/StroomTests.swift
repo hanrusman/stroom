@@ -244,3 +244,72 @@ final class StroomTests: XCTestCase {
     XCTAssertNil(StroomDate.parse("broken"))
   }
 }
+
+extension StroomTests {
+  @MainActor func testMissingDigestIsEmptyButServerFailureRemainsAnError() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [DigestResponseFixture.self]
+    let missing = APIClient(baseURL: URL(string: "https://missing.stroom.test")!, configuration: config)
+    let empty = try await missing.digest(topic: "ai", window: "daily")
+    XCTAssertNil(empty)
+    do {
+      let _: Digest = try await missing.request("huygens/ai/digest")
+      XCTFail("A generic request must still report its 404")
+    } catch let error as APIError {
+      XCTAssertEqual(error.statusCode, 404)
+      XCTAssertEqual(error.localizedDescription, "No digest yet")
+    }
+    let failed = APIClient(baseURL: URL(string: "https://failed.stroom.test")!, configuration: config)
+    do {
+      _ = try await failed.digest(topic: "ai", window: "daily")
+      XCTFail("Server errors must not look like an empty digest")
+    } catch let error as APIError { XCTAssertEqual(error.statusCode, 500) }
+    let ready = APIClient(baseURL: URL(string: "https://ready.stroom.test")!, configuration: config)
+    let digest = try await ready.digest(topic: "ai", window: "daily")
+    XCTAssertEqual(digest?.markdown, "Overzicht")
+  }
+}
+
+final class DigestResponseFixture: URLProtocol {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {
+    let host = request.url!.host!
+    let status = host.hasPrefix("missing") ? 404 : (host.hasPrefix("failed") ? 500 : 200)
+    let json = status == 200 ? #"{"markdown":"Overzicht","is_generating":false}"# : #"{"detail":"No digest yet"}"#
+    let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"])!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(json.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+  override func stopLoading() {}
+}
+
+extension StroomTests {
+  func testFastAPIValidationMessagesKeepStatusAndHidePayloadDetails() {
+    let body = Data(#"{"detail":[{"loc":["body","email"],"msg":"Voer een geldig adres in","input":"private@example.com"}]}"#.utf8)
+    let error = APIError.fromResponse(status: 422, data: body)
+    XCTAssertEqual(error.statusCode, 422)
+    XCTAssertEqual(error.localizedDescription, "Voer een geldig adres in")
+    XCTAssertEqual(APIError.fromResponse(status: 401, data: body).statusCode, 401)
+    for json in [#"{"detail":[]}"#, #"{"detail":{"other":"x"}}"#, "<html>error</html>"] {
+      XCTAssertTrue(APIError.fromResponse(status: 502, data: Data(json.utf8)).localizedDescription.contains("HTTP 502"))
+    }
+  }
+  @MainActor func testMalformedTranscriptEnrichmentDoesNotHideTheItem() throws {
+    let prefix = #"{"id":"a","title":"Readable","source_name":"Source","transcript":"Fallback text","transcript_segments":"#
+    let segments = #"[{"start":0,"end":3,"text":"First"},null,{"start":4,"text":"Missing end"},7,{"start":5,"end":4,"text":"Backwards"},{"start":-1,"end":2,"text":"Negative"},{"start":4,"end":8,"text":"Last","speaker":12}]"#
+    let item = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + segments + "}").utf8))
+    XCTAssertEqual(item.title, "Readable")
+    XCTAssertEqual(item.transcriptSegments?.map(\.text), ["First", "Last"])
+    XCTAssertNil(item.transcriptSegments?.last?.speaker)
+    for invalid in ["null", "{}", "true", "\"bad\""] {
+      let value = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + invalid + "}").utf8))
+      XCTAssertNil(value.transcriptSegments)
+      XCTAssertEqual(value.transcript, "Fallback text")
+    }
+    let cached = try JSONDecoder().decode(FeedItem.self, from: JSONEncoder().encode(item))
+    XCTAssertEqual(cached.transcriptSegments, item.transcriptSegments)
+  }
+}

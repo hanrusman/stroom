@@ -1,4 +1,4 @@
-from typing import Literal, Optional, List
+from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -6,17 +6,14 @@ from sqlalchemy import text as sa_text
 
 from core.auth import require_user
 from core.db import get_async_session
+from pipeline.digest_model_map import resolve_model
 from services.llm_service import LLMService
 
 router = APIRouter()
 
-AskModel = Literal["qwen", "sonnet", "opus"]
-
-_MODEL_ALIAS: dict[str, str] = {
-    "qwen": "stroom-bulk",
-    "sonnet": "stroom-sonnet",
-    "opus": "stroom-deep",
-}
+# Vrije Stroom-modelnaam, net als distill/expand/digest: de beheerpagina laat
+# voor 'ask' elk LiteLLM-model kiezen. resolve_model() vertaalt naar de alias.
+AskModel = str
 
 
 class AskBody(BaseModel):
@@ -54,6 +51,7 @@ async def ask_item(item_id: str,
                    model: AskModel = Query("qwen"),
                    session=Depends(get_async_session),
                    user=Depends(require_user)):
+    model_alias = resolve_model(model)  # uitgefaseerd → 400 vóór de LLM-call
     q = (body.question or "").strip()
     if not q:
         raise HTTPException(status_code=400, detail="Lege vraag.")
@@ -116,7 +114,7 @@ async def ask_item(item_id: str,
 
     try:
         answer = await _llm(request).call_llm(
-            _MODEL_ALIAS[model],
+            model_alias,
             [{"role": "system", "content": system}, {"role": "user", "content": user_prompt}],
             temperature=0.2, timeout=180.0,
         )
