@@ -98,6 +98,60 @@ final class NavigationTests: XCTestCase {
     waitForExpectations(timeout: 5)
     app.terminate()
   }
+  @MainActor func testNativeSubmissionTipsAndLessons() throws {
+    for mode in ["--light", "--dark"] {
+      let app = XCUIApplication()
+      app.launchArguments = ["--demo", "--reset-topic", mode]
+      app.launch()
+      XCTAssertTrue(app.tabBars.buttons["Meer"].waitForExistence(timeout: 10))
+      app.tabBars.buttons["Meer"].tap()
+      app.buttons["Content insturen"].tap()
+      let url = app.textFields["submit-url"]
+      XCTAssertTrue(url.waitForExistence(timeout: 5))
+      url.tap()
+      url.typeText("https://example.com/article")
+      app.buttons["Haal titel en beschrijving op"].tap()
+      XCTAssertTrue(
+        app.descendants(matching: .any)["submit-title"].firstMatch.waitForExistence(timeout: 5))
+      app.swipeUp()
+      let shot = XCTAttachment(screenshot: app.screenshot())
+      shot.name = "Fase4-insturen-" + mode
+      shot.lifetime = .keepAlways
+      add(shot)
+      app.buttons["Stuur naar Stroom"].tap()
+      XCTAssertTrue(app.staticTexts["Toegevoegd aan Stroom"].waitForExistence(timeout: 5))
+      app.buttons["Gereed"].tap()
+      app.buttons["Tips uit podcasts en video’s"].tap()
+      let tip = app.staticTexts["Een wereld vol vragen"]
+      XCTAssertTrue(tip.waitForExistence(timeout: 5))
+      tip.tap()
+      XCTAssertTrue(app.staticTexts["De gast"].waitForExistence(timeout: 5))
+      let tips = XCTAttachment(screenshot: app.screenshot())
+      tips.name = "Fase4-tips-" + mode
+      tips.lifetime = .keepAlways
+      add(tips)
+      app.terminate()
+    }
+  }
+  @MainActor func testDarkCurationAndNativeLessonsList() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic", "--dark"]
+    app.launch()
+    XCTAssertTrue(app.tabBars.buttons["Meer"].waitForExistence(timeout: 10))
+    app.tabBars.buttons["Meer"].tap()
+    app.buttons["Alle lessen"].tap()
+    XCTAssertTrue(app.staticTexts["Stel eerst een betere vraag"].waitForExistence(timeout: 5))
+    app.swipeUp()
+    app.buttons["Wat verandert er als AI echt met je meedenkt?"].tap()
+    app.buttons["Plan"].swipeLeft()
+    app.buttons["Score en onderwerpen"].tap()
+    XCTAssertTrue(app.buttons["Score opslaan"].waitForExistence(timeout: 5))
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = "Fase3-curatie-donker"
+    shot.lifetime = .keepAlways
+    add(shot)
+    app.terminate()
+  }
   @MainActor func testNativeNavigationAndReader() throws {
     let app = XCUIApplication()
     app.launchArguments = ["--demo", "--reset-topic"]

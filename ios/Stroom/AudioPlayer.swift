@@ -36,6 +36,10 @@ final class AudioPlayer: ObservableObject {
   private var api: APIClient?
   private var library: LibraryStore?
   private var lastSavedSecond = -1
+  @Published private(set) var listening: [ListeningRecord] = []
+  var onFinished: ((AudioTrack) -> Void)?
+  private var finishedID: String?
+  private var historyKey = ""
   private var pendingSeek: Double?
   private var preparing = false
   private var wantsPlayback = false
@@ -74,7 +78,11 @@ final class AudioPlayer: ObservableObject {
         Task { @MainActor in
           guard let self, item === self.player.currentItem else { return }
           if let current = self.current {
+            self.finishedID = current.id
+            self.listening.removeAll { $0.id == current.id }
+            self.persistHistory()
             UserDefaults.standard.removeObject(forKey: self.positionKey(current))
+            self.onFinished?(current)
           }
           self.elapsed = 0
           self.next(save: false)
@@ -112,6 +120,15 @@ final class AudioPlayer: ObservableObject {
   func configure(api: APIClient, library: LibraryStore) {
     self.api = api
     self.library = library
+    historyKey =
+      "listening.\(UserDefaults.standard.string(forKey: "account") ?? api.baseURL.absoluteString)"
+    if let data = UserDefaults.standard.data(forKey: historyKey),
+      let rows = try? JSONDecoder().decode([ListeningRecord].self, from: data)
+    {
+      listening = rows.filter(\.canResume)
+    } else {
+      listening = []
+    }
   }
   func play(_ track: AudioTrack, at startTime: Double? = nil) {
     savePosition()
@@ -120,6 +137,7 @@ final class AudioPlayer: ObservableObject {
     let ticket = requestID
     player.pause()
     player.replaceCurrentItem(with: nil)
+    finishedID = nil
     pendingSeek = startTime
     current = track
     elapsed = 0
@@ -253,8 +271,41 @@ final class AudioPlayer: ObservableObject {
     "position.\(api?.baseURL.host ?? "").\(track.id)"
   }
   private func savePosition() {
-    if let current, elapsed.isFinite {
-      UserDefaults.standard.set(elapsed, forKey: positionKey(current))
+    guard let current, current.id != finishedID, elapsed.isFinite, elapsed > 0 else { return }
+    UserDefaults.standard.set(elapsed, forKey: positionKey(current))
+    let record = ListeningRecord(
+      track: current, position: elapsed, duration: duration, updatedAt: Date())
+    listening.removeAll { $0.id == current.id }
+    if record.canResume {
+      listening.insert(record, at: 0)
+    } else {
+      UserDefaults.standard.removeObject(forKey: positionKey(current))
+    }
+    listening = Array(listening.prefix(100))
+    persistHistory()
+  }
+  private func persistHistory() {
+    guard !historyKey.isEmpty, let data = try? JSONEncoder().encode(listening) else { return }
+    UserDefaults.standard.set(data, forKey: historyKey)
+  }
+  func restoreHistory(tracks: [AudioTrack]) {
+    // Upgrade old position-only preferences for episodes we can identify.
+    for track in tracks where !listening.contains(where: { $0.id == track.id }) {
+      let position = UserDefaults.standard.double(forKey: positionKey(track))
+      if position > 5 {
+        listening.append(
+          ListeningRecord(track: track, position: position, duration: 0, updatedAt: .distantPast))
+      }
+    }
+    listening = Array(listening.sorted { $0.updatedAt > $1.updatedAt }.prefix(100))
+    persistHistory()
+  }
+  func clearHistory() {
+    listening = []
+    persistHistory()
+    let prefix = "position.\(api?.baseURL.host ?? "")."
+    for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix(prefix) {
+      UserDefaults.standard.removeObject(forKey: key)
     }
   }
   private func updateNowPlaying() {

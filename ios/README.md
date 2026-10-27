@@ -20,20 +20,36 @@ Met een gratis Personal Team verlopen provisioning profiles na **7 dagen**. Bouw
 
 ## Wat zit erin?
 
-- Native feed met onderwerpen, zoekfunctie, filters voor status, periode en artikelen/podcasts/video’s.
+- Home per onderwerp met gerangschikte artikelen, podcasts en video’s zoals op de website, met dag- en weekoverzicht erboven. De laatste onderwerpkeuze wordt onthouden; status, periode en formaat zijn aanvullende filters.
 - Excerpts worden opgeschoond van HTML, entities en Markdown; de reader toont bron en samenvatting apart met leesbare opmaak.
 - Naar rechts vegen archiveert (met Herstel); naar links vegen voegt toe aan de gedeelde wachtrij of haalt het item eruit.
 - Een eigen tab Wachtrij, opgeslagen per account op de server, met dezelfde FIFO-volgorde op website en iPhone. Bewaren blijft een aparte actie. Archiveren verwijdert het item uit alle wachtrijen, omdat de bestaande itemstatus gedeeld is.
-- Native bronpagina’s, lessen beoordelen, vragen stellen met antwoordgeschiedenis, plannen, dag- en weekoverzichten met geschiedenis.
-- Onder Meer: Tips, volledige lessenbibliotheek, podcast maken, inbox en beheer via de Stroom-website binnen de app, met je bestaande sessie. Artikelopties zoals topics, score aanpassen en Vikunja blijven daar beschikbaar.
+- Volledige artikeltekst onder Bron, afbeelding, openingscitaat en onthouden leesgrootte (18–28 pt). Podcasttranscripten met sprekers, aanklikbare tijdcodes en markering van de actieve passage.
+- Native lessen destilleren, verdiepen, beoordelen en naar Vikunja sturen; vraagvoorstellen, antwoordgeschiedenis en bronvermelding. AI-acties gebruiken de modelinstellingen van de website.
+- Dag- en weekoverzichten met geschiedenis en opnieuw genereren; automatische voortgangscontrole zolang het scherm open is.
+- Score en onderwerpen aanpassen, score-uitleg, plannen op datum, Later zonder datum en Wis. Snelle acties via lang indrukken en een hele rail archiveren na bevestiging.
+- Onder Meer: native Tips met filters en bronvermeldingen, lessenbibliotheek en Content insturen. Podcast maken, lesoverzichten en beheer openen de website met je bestaande sessie. Video’s hebben een thumbnail met afspeelknop naar de bron.
 - Bewaren en archiveren synchroniseren via dezelfde API als de website.
 - Podcastspeler met achtergrondgeluid, lockscreen-/Control Center-bediening, AirPlay, 15 seconden terug / 30 seconden vooruit, snelheid, slaaptimer en wachtrij.
-- Luisterpositie blijft lokaal bewaard. Open dezelfde aflevering opnieuw om verder te gaan. De lokale afspeelwachtrij (**Speel hierna af**) geldt voor de huidige appsessie; de gedeelde leeswachtrij blijft op de server bewaard.
+- Verder luisteren toont begonnen afleveringen en resterende tijd waar bekend. De snelheid blijft bewaard (standaard 1,7×; keuze 1,0–2,5×). Automatisch archiveren na afloop is optioneel en staat standaard uit. De lokale afspeelwachtrij (**Speel hierna af**) geldt voor de huidige appsessie; de gedeelde leeswachtrij blijft op de server bewaard.
 - Podcastdownloads voor offline luisteren; houd de app tijdens het downloaden open. Downloads worden niet automatisch opgeruimd en kun je verwijderen in Bibliotheek.
 - Gegenereerde podcasts uit de bestaande `/podcast-tests`-bibliotheek. Privéaudio wordt eerst geauthenticeerd gedownload en daarna lokaal afgespeeld.
 - Lokale meldingen met onderwerpen, contenttypen, minimumscore, eigen podcasts die klaar zijn en rusturen.
 - Dagelijkse lees-/luisterherinnering op een zelfgekozen tijdstip.
 - Donkere modus, Dynamic Type en Nederlandse bediening.
+
+## Een link delen naar Stroom
+
+Installeer deze versie en open Stroom één keer. Maak daarna in de iPhone-app **Opdrachten** een opdracht:
+
+1. Voeg de Stroom-actie **Open link in Stroom** toe. Kies **Opdrachtinvoer** als waarde voor **Link**.
+2. Zet bij de details **Toon in deelpaneel** aan en laat de opdracht URL’s ontvangen. Noem de opdracht bijvoorbeeld **Bewaar in Stroom**.
+3. Kies in Safari of een andere app **Deel → Bewaar in Stroom**. Stroom opent met de gedeelde link.
+4. Haal titel en beschrijving op, controleer soort en onderwerp en tik **Stuur naar Stroom**. Als ophalen mislukt kun je de velden zelf invullen.
+
+Dit is een App Intents/Opdrachten-route naar het native formulier. Er is geen aparte Share Extension, App Group of nieuw inbox-token nodig: het insturen gebeurt in de ingelogde app. Een gedeelde link wordt nooit automatisch verzonden. Ben je uitgelogd, dan blijft de link klaarstaan tot je inlogt. Kies één link per opdracht. De eerste ingebruikname moet nog op je eigen iPhone worden gecontroleerd.
+
+De bestaande ondersteuning voor `X-Stroom-Inbox-Token` staat al in `main`; de oude branch uit de roadmap hoeft hiervoor niet alsnog gemerged of in productie geconfigureerd te worden. [Apple: App Shortcuts](https://developer.apple.com/documentation/appintents/appshortcutsprovider).
 
 ## Hoe meldingen werken met je gewone Apple ID
 
@@ -99,3 +115,7 @@ De gedeelde leeswachtrij is iets anders dan **Speel hierna af**, de lokale afspe
 - PostgreSQL-tests op een lokale wegwerpdatabase: FIFO, dubbele toevoegingen, accountisolatie, idempotent verwijderen, migratie herhalen, archiveren en gelijktijdige transacties.
 
 De simulator en lokale website gebruiken voorbeelddata. De nieuwe wachtrij kan pas tegen je echte account worden gecontroleerd nadat de server is uitgerold; er is in deze revisie geen productiegegevensmutatie uitgevoerd.
+
+## Uitwerking van PR #84
+
+Zie [IMPLEMENTATION.md](IMPLEMENTATION.md) voor de vier fases en de controle van deze versie. Deze iOS-uitbreiding verandert de backend en website niet. De UI-tests controleren ook onderwerpselectie, artikeltekst, lessen, vraagvoorstellen, curatie, native insturen en Tips in lichte en donkere modus. Live AI-aanroepen, Vikunja, delen via Opdrachten en afspelen op een fysiek apparaat zijn niet afgedekt door de simulatorfixtures.

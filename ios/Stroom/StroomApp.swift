@@ -18,6 +18,10 @@ struct StroomApp: App {
       .task { await store.start() }
       .onOpenURL { url in
         guard url.scheme == "stroom" else { return }
+        if let link = IncomingLink.submission(from: url) {
+          store.incomingURL = link.absoluteString
+          return
+        }
         if url.host == "item", let id = url.pathComponents.last, UUID(uuidString: id) != nil {
           store.openItemID = id
           store.tab = 0
@@ -80,6 +84,12 @@ struct RootView: View {
           tabRoot { MoreView() }.tabItem { Label("Meer", systemImage: "ellipsis.circle") }.tag(4)
         }
         .sheet(isPresented: $showingPlayer) { NowPlayingView() }
+        .sheet(
+          item: Binding(
+            get: { store.incomingURL.map(ItemLink.init) }, set: { store.incomingURL = $0?.id })
+        ) { link in
+          NavigationStack { SubmitView(initialURL: link.id, presentedAsSheet: true) }
+        }
         .sheet(
           item: Binding(
             get: { store.openItemID.map(ItemLink.init) }, set: { store.openItemID = $0?.id })

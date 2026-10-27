@@ -10,7 +10,7 @@ De vier fases worden als opeenvolgende branches opgebouwd. Elke volgende fase bo
 - Afspeelsnelheid standaard 1,7×, onthouden, instelbaar van 1,0–2,5×. Ook via de externe spelerbediening.
 - Schermen opgesplitst en Swift-bronnen geformatteerd met `swift-format`.
 
-Validatie en screenshots worden per fase toegevoegd na de simulatortests.
+De screenshots en validatieresultaten staan onderaan dit document.
 
 ## Fase 2 — native AI-companion
 
@@ -27,3 +27,34 @@ Validatie en screenshots worden per fase toegevoegd na de simulatortests.
 - Per rail: bevestigen, zichtbare items archiveren, nieuwe selectie ophalen. Bij een fout stopt de reeks en blijft de fout zichtbaar. Herstel betreft het laatst gearchiveerde item.
 - Native kwaliteitsscore (PATCH, volgens de actuele API), reden en toelichting. Uitleg met kalibratie en deelscores. Onderwerpen toevoegen/verwijderen gebruikt de slug uit `/inbox/topics`; de detail-API levert namen terug.
 - Planning met alleen een datum, Later zonder datum, en Wis. Wissen zet status `later` terug naar `new`; andere statussen blijven behouden.
+
+## Fase 4 — delen, luisteren en ontdekken
+
+- Native instuurformulier met preview, onderwerpkeuze, foutafhandeling en expliciete bevestiging. De server vereist een onderwerp; het formulier stelt het huidige onderwerp voor.
+- App Intents/Opdrachten opent het formulier met een gedeelde URL. Dit wijkt af van de twee voorgestelde technische routes: geen aparte Share Extension en geen tokenkopie, omdat het formulier de bestaande sessie gebruikt. Zo werkt het deelmenu zonder extra capability of serverwijziging. Dit is geen claim dat gedeelde Keychain-toegang onmogelijk is met een Personal Team.
+- Verder luisteren met bewaarde afleveringsgegevens en resterende tijd; migratie van bestaande luisterposities. Voltooide afleveringen verdwijnen. Optioneel archiveren na daadwerkelijk afspelen tot het einde, standaard uit. Luisterhistorie wordt opgeruimd bij uitloggen of accountwisseling.
+- Video-thumbnail met afspeelknop naar de bron. Tijdcode-seek en actief volgen gelden voor de native podcastspeler; video opent bij de aanbieder.
+- Native Tips met categorie, zoekterm, volgorde, sterke aanbevelingen, paginering en bronvermeldingen; native lessenbibliotheek met beoordelingen en bronlinks. Geavanceerde lesoverzichten blijven op de website.
+- Eindcontrole: een automatische lesverversing wist een destilleerfout niet; het vraagveld is vergrendeld tijdens beantwoorden; onderwerpfeed ververst na synchronisatie met bescherming tegen achterhaalde antwoorden; oude offline-cache blijft bereikbaar.
+
+## Levering en controle
+
+Vier opeenvolgende branches: `feat/ios-curated-home`, `feat/ios-companion`, `feat/ios-curation`, `feat/ios-phone-workflows`. Iedere volgende PR krijgt de vorige branch als basis totdat die is gemerged. PR #84 blijft de oorspronkelijke roadmap.
+
+De simulator gebruikt uitsluitend duidelijk gemarkeerde voorbeeldinhoud. Er zijn geen productiedata gewijzigd, geen echte AI-generaties gestart en geen Vikunja-taken aangemaakt. Op een fysieke iPhone moeten vooral Opdrachten, achtergrondgeluid, AirPlay en meldingen nog worden gecontroleerd.
+
+Gecontroleerd op 27 oktober 2026: 25 unit-tests en 7 UI-tests geslaagd op iPhone 17 Pro / iOS 26.3 (`Verified.xcresult`). De gerichte hertest van insturen en Tips in beide kleurmodi meldt eveneens nul fouten (`share-polish.log`); Xcode bleef daarna wachten bij het verzamelen van simulator-diagnostiek. De screenshots komen uit de volledig afgeronde run en tonen het formulier vóór de kleine toetsenbord-/navigatieverbetering. De opgeleverde projectkopie bouwt succesvol voor `generic/platform=iOS` met signing uit. Deze laatste build bevat ook de begrensde offline-terugval en het wissen van de podcastlijst bij accountwisseling. Dit bevestigt compilatie, niet installatie of werking op echte hardware.
+
+### Screenshots
+
+Alle beelden gebruiken demodata.
+
+| Fase | Licht | Donker |
+| --- | --- | --- |
+| 1 — Home | [Home](review/fase1-home-licht.png) | [Home](review/fase1-home-donker.png) |
+| 2 — Lessen | [Lessen](review/fase2-lessen-licht.png) | [Lessen](review/fase2-lessen-donker.png) |
+| 3 — Curatie | [Score en onderwerpen](review/fase3-curatie-licht.png) | [Score en onderwerpen](review/fase3-curatie-donker.png) |
+| 4 — Insturen | [Formulier](review/fase4-insturen-licht.png) | [Formulier](review/fase4-insturen-donker.png) |
+| 4 — Tips | [Bronvermeldingen](review/fase4-tips-licht.png) | [Bronvermeldingen](review/fase4-tips-donker.png) |
+
+[Volledige artikeltekst](review/fase1-reader-licht.png).

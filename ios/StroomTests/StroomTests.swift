@@ -91,6 +91,52 @@ final class StroomTests: XCTestCase {
       [TopicChoice].self, from: Data(#"[{"slug":"science","name":"Wetenschap"}]"#.utf8))
     XCTAssertEqual(choices.first?.slug, "science")
   }
+  func testShareLinksValidateAndPreserveQuery() {
+    let incoming = URL(
+      string: "stroom://submit?url=https%3A%2F%2Fexample.com%2Fstory%3Fa%3D1%26b%3D2")!
+    XCTAssertEqual(
+      IncomingLink.submission(from: incoming)?.absoluteString, "https://example.com/story?a=1&b=2")
+    for raw in [
+      "javascript:alert(1)", "file:///private/file", "https://user:password@example.com",
+      "not a link",
+    ] {
+      XCTAssertNil(IncomingLink.validated(raw))
+    }
+    XCTAssertNil(IncomingLink.submission(from: URL(string: "stroom://item/abc")!))
+  }
+  func testListeningRecordsExcludeNewCompletedAndInvalidPositions() throws {
+    let track = AudioTrack(
+      id: "p", title: "Podcast", author: "Bron", url: "https://example.com/audio.mp3", artwork: nil)
+    let begun = ListeningRecord(track: track, position: 60, duration: 600, updatedAt: Date())
+    XCTAssertTrue(begun.canResume)
+    XCTAssertEqual(begun.remaining, 540)
+    XCTAssertFalse(
+      ListeningRecord(track: track, position: 0, duration: 600, updatedAt: Date()).canResume)
+    XCTAssertFalse(
+      ListeningRecord(track: track, position: 600, duration: 600, updatedAt: Date()).canResume)
+    XCTAssertFalse(
+      ListeningRecord(track: track, position: .nan, duration: 600, updatedAt: Date()).canResume)
+    let old = ListeningRecord(track: track, position: 60, duration: 0, updatedAt: Date())
+    XCTAssertTrue(old.canResume)
+    XCTAssertNil(old.remaining)
+    XCTAssertEqual(
+      try JSONDecoder().decode(ListeningRecord.self, from: JSONEncoder().encode(begun)).position, 60
+    )
+  }
+  @MainActor func testTipsAndInboxContractsDecode() throws {
+    let page = try APIClient.decoder.decode(
+      TipPage.self,
+      from: Data(
+        #"{"total":1,"categories":{"book":1},"works":[{"title":"Boek","title_key":"boek","category":"book","creator":null,"episodes":2,"blurb":null,"sources":["Bron"]}]}"#
+          .utf8))
+    XCTAssertEqual(page.works.first?.id, "book|boek")
+    let preview = try APIClient.decoder.decode(
+      InboxPreview.self,
+      from: Data(
+        #"{"url":"https://example.com","title":"Titel","format":"article","description":null,"author":null}"#
+          .utf8))
+    XCTAssertEqual(preview.title, "Titel")
+  }
   func testHTMLAndMarkdownExcerpts() {
     XCTAssertEqual(
       ContentText.excerpt("<p>Han&#x27;s idee &mdash; café &amp; thee&nbsp; &#128512;</p>"),

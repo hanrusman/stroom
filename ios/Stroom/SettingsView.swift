@@ -4,6 +4,7 @@ import UserNotifications
 struct SettingsView: View {
   @EnvironmentObject var store: AppStore
   @EnvironmentObject var notifications: Notifications
+  @AppStorage("archiveAfterListening") private var archiveAfterListening = false
   @State private var rules = NotificationRules()
   @State private var message: String?
   @State private var saving = false
@@ -14,6 +15,12 @@ struct SettingsView: View {
         Text("Maak ruimte voor wat telt.").font(.system(.title2, design: .serif))
         Text("Jij kiest wanneer Stroom je aandacht vraagt.").font(.subheadline).foregroundStyle(
           .secondary)
+      }
+      Section("Luisteren") {
+        Toggle("Na afloop automatisch archiveren", isOn: $archiveAfterListening)
+        Text(
+          "Alleen bij volledig afgespeelde bronafleveringen. Zelfgemaakte podcasts blijven staan."
+        ).font(.caption).foregroundStyle(.secondary)
       }
       Section {
         Toggle("Nieuwe inhoud melden", isOn: $rules.enabled)

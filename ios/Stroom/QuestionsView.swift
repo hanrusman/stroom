@@ -21,7 +21,7 @@ struct ItemQuestionsView: View {
       }
       TextField("Je vraag", text: $question, axis: .vertical).accessibilityIdentifier(
         "question-input"
-      ).lineLimit(3...8).padding(14)
+      ).disabled(asking).lineLimit(3...8).padding(14)
         .background(Brand.card, in: RoundedRectangle(cornerRadius: 12))
         .onChange(of: question) { _, value in
           if value.count > 500 { question = String(value.prefix(500)) }
