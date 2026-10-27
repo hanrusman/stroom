@@ -70,8 +70,7 @@ struct ActionFeedback: View {
           Button("Herstel") { Task { await store.undoArchive() } }.font(.caption.weight(.semibold))
         }
         Button {
-          store.actionError = nil
-          store.actionMessage = nil
+          store.dismissActionFeedback()
         } label: {
           Image(systemName: "xmark").frame(width: 36, height: 36)
         }.accessibilityLabel("Melding sluiten")

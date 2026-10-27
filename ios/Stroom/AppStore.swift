@@ -24,6 +24,7 @@ final class AppStore: ObservableObject {
   private var queueVersion = 0
   private var undoItem: FeedItem?
   private var undoWasQueued = false
+  private var archivingRail = false
   @Published var aiTasks: Set<String> = []
   @Published var busy = false
   @Published var starting = true
@@ -40,11 +41,12 @@ final class AppStore: ObservableObject {
   private(set) var api: APIClient?
   private var started = false
   private var refreshing = false
-  let demo = ProcessInfo.processInfo.arguments.contains("--demo")
+  let demo: Bool
   private let cacheURL = FileManager.default.urls(
     for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("feed.json")
 
-  init() {
+  init(demo: Bool = ProcessInfo.processInfo.arguments.contains("--demo")) {
+    self.demo = demo
     server = UserDefaults.standard.string(forKey: "server") ?? "https://stroom.c4w.nl"
     if let base = try? ServerAddress.parse(server) { api = APIClient(baseURL: base) }
     if let api { player.configure(api: api, library: library) }
@@ -236,6 +238,7 @@ final class AppStore: ObservableObject {
   }
   func setQueued(_ item: FeedItem, queued: Bool) async {
     guard !changing.contains(item.id) else { return }
+    dismissActionFeedback()
     changing.insert(item.id)
     queueVersion += 1
     contentVersion += 1
@@ -263,6 +266,7 @@ final class AppStore: ObservableObject {
   }
   func archive(_ item: FeedItem) async {
     guard !changing.contains(item.id) else { return }
+    dismissActionFeedback()
     changing.insert(item.id)
     queueVersion += 1
     contentVersion += 1
@@ -285,9 +289,17 @@ final class AppStore: ObservableObject {
       actionMessage = "Gearchiveerd"
     } catch { actionError = error.localizedDescription }
   }
-  var canUndo: Bool { undoItem != nil }
+  var canUndo: Bool {
+    undoItem != nil && !archivingRail && actionError == nil && actionMessage == "Gearchiveerd"
+  }
+  func dismissActionFeedback() {
+    undoItem = nil
+    undoWasQueued = false
+    actionError = nil
+    actionMessage = nil
+  }
   func undoArchive() async {
-    guard let item = undoItem else { return }
+    guard canUndo, let item = undoItem else { return }
     do {
       if !demo, let api {
         apply(try await api.update(item.id, status: item.status ?? "new"))
@@ -349,6 +361,7 @@ final class AppStore: ObservableObject {
     demoChange: (inout FeedItem) -> Void
   ) async -> Bool {
     guard !changing.contains(item.id) else { return false }
+    dismissActionFeedback()
     changing.insert(item.id)
     contentVersion += 1
     defer {
@@ -375,9 +388,7 @@ final class AppStore: ObservableObject {
   @discardableResult
   func plan(_ item: FeedItem, date: Date?, later: Bool = false) async -> Bool {
     await change(item) { api in
-      let stamp = date.map {
-        ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: $0))
-      }
+      let stamp = date.map { ScheduledDay.apiStamp($0) }
       let updated: FeedItem = try await api.request(
         "huygens/items/\(item.id)/schedule", method: "POST",
         body: ["scheduled_for": stamp as Any? ?? NSNull()])
@@ -387,9 +398,7 @@ final class AppStore: ObservableObject {
       }
       return updated
     } demoChange: { row in
-      row.scheduledFor = date.map {
-        ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: $0))
-      }
+      row.scheduledFor = date.map { ScheduledDay.apiStamp($0) }
       if date != nil || later {
         row.status = "later"
       } else if row.status == "later" {
@@ -398,6 +407,14 @@ final class AppStore: ObservableObject {
     }
   }
   func archiveRail(_ rows: [FeedItem]) async -> Bool {
+    guard !archivingRail else { return false }
+    archivingRail = true
+    dismissActionFeedback()
+    defer {
+      undoItem = nil
+      undoWasQueued = false
+      archivingRail = false
+    }
     for row in rows {
       guard !Task.isCancelled else { return false }
       guard !changing.contains(row.id) else {

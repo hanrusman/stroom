@@ -93,6 +93,7 @@ final class NavigationTests: XCTestCase {
     app.buttons["archive-rail-article"].tap()
     app.buttons["Archiveer 1 artikelen"].tap()
     XCTAssertTrue(app.staticTexts["1 items gearchiveerd"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Herstel"].exists)
     let gone = NSPredicate(format: "exists == false")
     expectation(for: gone, evaluatedWith: app.buttons["De stille revolutie in onze oceanen"])
     waitForExpectations(timeout: 5)

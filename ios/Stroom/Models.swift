@@ -32,9 +32,9 @@ struct FeedItem: Codable, Identifiable, Hashable {
   var sourceUrl: String?
   var scheduledFor: String?
   var summaryModel: String?
-  var transcriptSegments: [TranscriptSegment]?
+  @LossyArray var transcriptSegments: [TranscriptSegment]? = nil
   var queuePosition: Int?
-  var qualityScoreDetail: QualityScoreDetail?
+  @LossyOptional var qualityScoreDetail: QualityScoreDetail? = nil
   var author: String?
   var hasTranscript: Bool?
   var sourceBody: String? {
@@ -208,8 +208,57 @@ struct TranscriptSegment: Codable, Hashable {
   let end: Double
   let text: String
   var speaker: String?
+  init(start: Double, end: Double, text: String, speaker: String? = nil) {
+    self.start = start
+    self.end = end
+    self.text = text
+    self.speaker = speaker
+  }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    start = try values.decode(Double.self, forKey: .start)
+    end = try values.decode(Double.self, forKey: .end)
+    text = try values.decode(String.self, forKey: .text)
+    speaker = try? values.decode(String.self, forKey: .speaker)
+    guard start.isFinite, end.isFinite, start >= 0, end > start,
+      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw DecodingError.dataCorrupted(
+        .init(
+          codingPath: decoder.codingPath,
+          debugDescription: "Invalid transcript segment"))
+    }
+  }
   static func activeIndex(in segments: [TranscriptSegment], at time: Double) -> Int? {
     segments.lastIndex { $0.start <= time && time < $0.end }
+  }
+}
+
+/// Optional enrichment must not make an otherwise readable feed item fail to decode.
+@propertyWrapper
+struct LossyArray<Element: Codable & Hashable>: Codable, Hashable {
+  var wrappedValue: [Element]?
+  init(wrappedValue: [Element]? = nil) { self.wrappedValue = wrappedValue }
+  init(from decoder: Decoder) throws {
+    guard var values = try? decoder.unkeyedContainer() else {
+      wrappedValue = nil
+      return
+    }
+    var decoded: [Element] = []
+    while !values.isAtEnd {
+      let element = try values.superDecoder()
+      if let value = try? Element(from: element) { decoded.append(value) }
+    }
+    wrappedValue = decoded
+  }
+  func encode(to encoder: Encoder) throws {
+    var value = encoder.singleValueContainer()
+    try value.encode(wrappedValue)
+  }
+}
+extension KeyedDecodingContainer {
+  func decode<T>(_ type: LossyArray<T>.Type, forKey key: Key) throws -> LossyArray<T> {
+    try decodeIfPresent(type, forKey: key) ?? LossyArray()
   }
 }
 struct VikunjaResult: Decodable {
@@ -231,10 +280,27 @@ struct QualityScoreDetail: Codable, Hashable {
   var scoredAt: String?
   var error: String?
   var calibration: ScoreCalibration?
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    quality = try? values.decode(ScoreRubric.self, forKey: .quality)
+    interest = try? values.decode(ScoreRubric.self, forKey: .interest)
+    clickbait = try? values.decode(Double.self, forKey: .clickbait)
+    interestWeight = try? values.decode(Double.self, forKey: .interestWeight)
+    model = try? values.decode(String.self, forKey: .model)
+    scoredAt = try? values.decode(String.self, forKey: .scoredAt)
+    error = try? values.decode(String.self, forKey: .error)
+    calibration = try? values.decode(ScoreCalibration.self, forKey: .calibration)
+  }
 }
 struct ScoreRubric: Codable, Hashable {
   let score10: Double
   let probabilities: [String: Double]
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    score10 = try values.decode(Double.self, forKey: .score10)
+    let weights = try? values.decode([String: LossyOptional<Double>].self, forKey: .probabilities)
+    probabilities = weights?.compactMapValues(\.wrappedValue) ?? [:]
+  }
 }
 struct ScoreCalibration: Codable, Hashable {
   let method: String
@@ -254,4 +320,43 @@ struct ListeningRecord: Codable, Identifiable {
     position > 5 && position.isFinite && (duration <= 0 || position < duration - 5)
   }
   var remaining: Double? { duration > 0 ? max(0, duration - position) : nil }
+}
+
+@propertyWrapper
+struct LossyOptional<Value: Codable & Hashable>: Codable, Hashable {
+  var wrappedValue: Value?
+  init(wrappedValue: Value? = nil) { self.wrappedValue = wrappedValue }
+  init(from decoder: Decoder) throws { wrappedValue = try? Value(from: decoder) }
+  func encode(to encoder: Encoder) throws {
+    var value = encoder.singleValueContainer()
+    try value.encode(wrappedValue)
+  }
+}
+extension KeyedDecodingContainer {
+  func decode<T>(_ type: LossyOptional<T>.Type, forKey key: Key) throws -> LossyOptional<T> {
+    try decodeIfPresent(type, forKey: key) ?? LossyOptional()
+  }
+}
+
+/// The web stores calendar days as UTC midnight, regardless of the device's time zone.
+enum ScheduledDay {
+  static func apiStamp(_ date: Date, timeZone: TimeZone = .current) -> String {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = timeZone
+    let day = calendar.dateComponents([.year, .month, .day], from: date)
+    return String(format: "%04d-%02d-%02dT00:00:00Z", day.year!, day.month!, day.day!)
+  }
+  static func localDate(_ stamp: String, timeZone: TimeZone = .current) -> Date? {
+    let day = String(stamp.prefix(10))
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.timeZone = timeZone
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.isLenient = false
+    guard let date = formatter.date(from: day), formatter.string(from: date) == day else {
+      return nil
+    }
+    return date
+  }
 }
