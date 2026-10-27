@@ -52,7 +52,7 @@ Vier opeenvolgende branches: `feat/ios-curated-home`, `feat/ios-companion`, `fea
 
 De simulator gebruikt uitsluitend duidelijk gemarkeerde voorbeeldinhoud. Er zijn geen productiedata gewijzigd, geen echte AI-generaties gestart en geen Vikunja-taken aangemaakt. Op een fysieke iPhone moeten vooral Opdrachten, achtergrondgeluid, AirPlay en meldingen nog worden gecontroleerd.
 
-Gecontroleerd op 27 oktober 2026 na verwerking van de review: 32 unit-tests en 7 UI-tests geslaagd op iPhone 17 Pro / iOS 26.3. De regressietests dekken ontbrekende overzichten, onvolledige API-data en cache-roundtrips, foutmeldingen, datumoverdracht in drie tijdzones, herstel na individuele en gedeeltelijk mislukte bulkacties, en Tips zonder bronnaam. De UI-test controleert dat bulkarchivering geen Herstel-knop toont. Alle testcases zijn afgerond; Xcode verzamelt nog simulator-diagnostiek voor `Review.xcresult`.
+Gecontroleerd op 27 oktober 2026 na verwerking van de review: 32 unit-tests en 7 UI-tests geslaagd op iPhone 17 Pro / iOS 26.3. De regressietests dekken ontbrekende overzichten, onvolledige API-data en cache-roundtrips, foutmeldingen, datumoverdracht in drie tijdzones, herstel na individuele en gedeeltelijk mislukte bulkacties, en Tips zonder bronnaam. De UI-test controleert dat bulkarchivering geen Herstel-knop toont. De volledige run is afgerond met `TEST SUCCEEDED` en resultaatbundle `Review.xcresult`.
 
 De screenshots gebruiken demodata en tonen de definitieve formulierverbetering. De bijgewerkte projectkopie bouwt succesvol voor `generic/platform=iOS` met signing uit. Dit bevestigt compilatie, niet installatie of werking op echte hardware.
 
