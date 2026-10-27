@@ -49,8 +49,7 @@ struct DigestPreview: View {
       }
       repeat {
         do {
-          let value: Digest = try await api.request(
-            "huygens/\(topic)/digest", query: [.init(name: "window", value: window)])
+          let value = try await api.digest(topic: topic, window: window)
           try Task.checkCancellation()
           digest = value
           error = nil
@@ -144,8 +143,7 @@ struct DigestView: View {
     error = nil
     defer { if ticket == window { loading = false } }
     do {
-      let value: Digest = try await api.request(
-        "huygens/\(topic)/digest", query: [.init(name: "window", value: ticket)])
+      let value = try await api.digest(topic: topic, window: ticket)
       try Task.checkCancellation()
       guard ticket == window else { return }
       digest = value
