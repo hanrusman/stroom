@@ -20,3 +20,10 @@ Validatie en screenshots worden per fase toegevoegd na de simulatortests.
 - Vraagvoorstellen, bronvermelding en datum bij antwoorden; modelnaam bij samenvattingen; verwerking wordt elke acht seconden bijgewerkt.
 - Transcriptsegmenten met spreker, tijdcode, seek/start en markering van het actuele segment. Volgen kan uit.
 - Zoeksnippets met veilige markering, publicatiedatum, matchsoort en formaatfilter.
+
+## Fase 3 — cureren
+
+- Lang indrukken: bewaren, later zonder datum, samenvatten en transcriberen. Kaarten tonen beschikbaarheid van tekst/samenvatting en wachtrij/verwerkingsstatus.
+- Per rail: bevestigen, zichtbare items archiveren, nieuwe selectie ophalen. Bij een fout stopt de reeks en blijft de fout zichtbaar. Herstel betreft het laatst gearchiveerde item.
+- Native kwaliteitsscore (PATCH, volgens de actuele API), reden en toelichting. Uitleg met kalibratie en deelscores. Onderwerpen toevoegen/verwijderen gebruikt de slug uit `/inbox/topics`; de detail-API levert namen terug.
+- Planning met alleen een datum, Later zonder datum, en Wis. Wissen zet status `later` terug naar `new`; andere statussen blijven behouden.

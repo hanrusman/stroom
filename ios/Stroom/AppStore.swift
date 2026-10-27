@@ -294,6 +294,90 @@ final class AppStore: ObservableObject {
     }
     return [.init(name: "model", value: model)]
   }
+  @discardableResult
+  func setStatus(_ item: FeedItem, to status: String) async -> Bool {
+    await change(item) { api in
+      try await api.update(item.id, status: status)
+    } demoChange: {
+      $0.status = status
+    }
+  }
+  @discardableResult
+  func process(_ item: FeedItem, action: String) async -> Bool {
+    guard !item.isProcessing else { return false }
+    return await change(item) { api in
+      try await api.request("huygens/items/\(item.id)/\(action)", method: "POST")
+    } demoChange: {
+      $0.processingStatus = action == "transcribe" ? "transcribe_queued" : "summarize_queued"
+    }
+  }
+  @discardableResult
+  private func change(
+    _ item: FeedItem, operation: (APIClient) async throws -> FeedItem,
+    demoChange: (inout FeedItem) -> Void
+  ) async -> Bool {
+    guard !changing.contains(item.id) else { return false }
+    changing.insert(item.id)
+    contentVersion += 1
+    defer {
+      changing.remove(item.id)
+      contentVersion += 1
+    }
+    do {
+      var updated = current(item)
+      if demo {
+        demoChange(&updated)
+      } else {
+        guard let api else { throw APIError.unauthorized }
+        updated = try await operation(api)
+      }
+      apply(updated)
+      actionError = nil
+      actionMessage = "Bijgewerkt"
+      return true
+    } catch {
+      actionError = error.localizedDescription
+      return false
+    }
+  }
+  @discardableResult
+  func plan(_ item: FeedItem, date: Date?, later: Bool = false) async -> Bool {
+    await change(item) { api in
+      let stamp = date.map {
+        ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: $0))
+      }
+      let updated: FeedItem = try await api.request(
+        "huygens/items/\(item.id)/schedule", method: "POST",
+        body: ["scheduled_for": stamp as Any? ?? NSNull()])
+      self.apply(updated)
+      if date == nil && (later || updated.status == "later") {
+        return try await api.update(item.id, status: later ? "later" : "new")
+      }
+      return updated
+    } demoChange: { row in
+      row.scheduledFor = date.map {
+        ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: $0))
+      }
+      if date != nil || later {
+        row.status = "later"
+      } else if row.status == "later" {
+        row.status = "new"
+      }
+    }
+  }
+  func archiveRail(_ rows: [FeedItem]) async -> Bool {
+    for row in rows {
+      guard !Task.isCancelled else { return false }
+      guard !changing.contains(row.id) else {
+        actionError = "Een item wordt nog bijgewerkt. Probeer opnieuw zodra dat klaar is."
+        return false
+      }
+      await archive(current(row))
+      if actionError != nil { return false }
+    }
+    actionMessage = "\(rows.count) items gearchiveerd"
+    return true
+  }
   func loadDemo() {
     if ProcessInfo.processInfo.arguments.contains("--reset-topic") { selectedTopic = "ai" }
     user = StroomUser(id: "demo", email: "demo@stroom.local")

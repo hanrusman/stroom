@@ -34,6 +34,7 @@ struct FeedItem: Codable, Identifiable, Hashable {
   var summaryModel: String?
   var transcriptSegments: [TranscriptSegment]?
   var queuePosition: Int?
+  var qualityScoreDetail: QualityScoreDetail?
   var author: String?
   var hasTranscript: Bool?
   var sourceBody: String? {
@@ -214,4 +215,31 @@ struct TranscriptSegment: Codable, Hashable {
 struct VikunjaResult: Decodable {
   let success: Bool
   let taskId: Int
+}
+
+struct TopicChoice: Decodable, Identifiable {
+  let slug: String
+  let name: String
+  var id: String { slug }
+}
+struct QualityScoreDetail: Codable, Hashable {
+  var quality: ScoreRubric?
+  var interest: ScoreRubric?
+  var clickbait: Double?
+  var interestWeight: Double?
+  var model: String?
+  var scoredAt: String?
+  var error: String?
+  var calibration: ScoreCalibration?
+}
+struct ScoreRubric: Codable, Hashable {
+  let score10: Double
+  let probabilities: [String: Double]
+}
+struct ScoreCalibration: Codable, Hashable {
+  let method: String
+  let score: Double
+  let percentile: Double
+  let n: Int
+  let days: Int
 }

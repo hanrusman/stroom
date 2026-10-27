@@ -31,6 +31,18 @@ struct FeedCard: View {
           width: 64, height: 74
         ).clipShape(RoundedRectangle(cornerRadius: 12))
       }
+      HStack(spacing: 12) {
+        if item.hasSummary == true || item.summary?.isEmpty == false {
+          Label("Samenvatting", systemImage: "sparkles")
+        }
+        if item.hasTranscript == true || item.transcript?.isEmpty == false {
+          Label("Tekst", systemImage: "text.alignleft")
+        }
+        if store.queuedIDs.contains(item.id) {
+          Label("Wachtrij", systemImage: "text.badge.checkmark")
+        }
+        if item.isProcessing { Label("Verwerking", systemImage: "clock") }
+      }.font(.caption2).foregroundStyle(.secondary)
       if let track = item.track {
         TrackActions(track: track)
       } else {

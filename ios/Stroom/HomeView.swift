@@ -14,6 +14,8 @@ struct FeedScreen: View {
   @State private var format = "all"
   @State private var showFilters = false
   @State private var loadedSelection = ""
+  @State private var archiveTarget: HuygensRail?
+  @State private var archiving = false
 
   var isRanked: Bool {
     store.selectedTopic != "__all__" && filter == "all" && window == "all" && format == "all"
@@ -74,6 +76,11 @@ struct FeedScreen: View {
                   .foregroundStyle(.secondary)
               }
               ForEach(rows) { item in card(item) }
+              if !rows.isEmpty {
+                Button("Archiveer alle en laad nieuwe", systemImage: "archivebox") {
+                  archiveTarget = HuygensRail(format: rail.format, items: rows)
+                }.disabled(archiving).accessibilityIdentifier("archive-rail-\(rail.format)")
+              }
             }
           }
         } else {
@@ -95,6 +102,25 @@ struct FeedScreen: View {
     .searchable(text: $query, prompt: "Zoek in Stroom")
     .refreshable { await reload() }
     .task(id: selection) { await loadTopic() }
+    .confirmationDialog(
+      "Deze selectie archiveren?",
+      isPresented: Binding(get: { archiveTarget != nil }, set: { if !$0 { archiveTarget = nil } }),
+      presenting: archiveTarget
+    ) { rail in
+      Button("Archiveer \(rail.items.count) \(rail.title.lowercased())", role: .destructive) {
+        Task {
+          archiving = true
+          let succeeded = await store.archiveRail(rail.items)
+          if succeeded { await loadTopic() }
+          archiving = false
+        }
+      }
+      Button("Annuleer", role: .cancel) {}
+    } message: { _ in
+      Text(
+        "De zichtbare selectie wordt gearchiveerd. Daarna haalt Stroom nieuwe items op. Bij een fout stopt de actie; al gearchiveerde items blijven in het archief."
+      )
+    }
   }
   var topicChips: some View {
     ScrollView(.horizontal, showsIndicators: false) {

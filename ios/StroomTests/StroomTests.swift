@@ -80,6 +80,17 @@ final class StroomTests: XCTestCase {
     XCTAssertEqual(String(text.characters), "Een idee & nog een idee.")
     XCTAssertEqual(text.runs.filter { $0.backgroundColor != nil }.count, 2)
   }
+  @MainActor func testScoreDetailsDecodeAndTopicsUseNames() throws {
+    let json =
+      #"{"id":"a","title":"Artikel","source_name":"Bron","topics":["Wetenschap"],"quality_score_detail":{"quality":{"score10":8,"probabilities":{"Well-argued with specific insights":0.8}},"interest_weight":0.3,"calibration":{"method":"percentile","score":9,"percentile":0.9,"n":100,"days":30}}}"#
+    let value = try APIClient.decoder.decode(FeedItem.self, from: Data(json.utf8))
+    XCTAssertEqual(value.topics, ["Wetenschap"])
+    XCTAssertEqual(value.qualityScoreDetail?.quality?.score10, 8)
+    XCTAssertEqual(value.qualityScoreDetail?.calibration?.percentile, 0.9)
+    let choices = try APIClient.decoder.decode(
+      [TopicChoice].self, from: Data(#"[{"slug":"science","name":"Wetenschap"}]"#.utf8))
+    XCTAssertEqual(choices.first?.slug, "science")
+  }
   func testHTMLAndMarkdownExcerpts() {
     XCTAssertEqual(
       ContentText.excerpt("<p>Han&#x27;s idee &mdash; café &amp; thee&nbsp; &#128512;</p>"),

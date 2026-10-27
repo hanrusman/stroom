@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0FBDF3E4F39D7FA2101FFD6A /* CurationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B6455C6C9861213FA87EBD1 /* CurationView.swift */; };
 		1B7F5C1276199FB5DCA7093C /* StroomApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3DB3FF1653841D89F4C73AEC /* StroomApp.swift */; };
 		339B307F5FE4107AEAEDBA21 /* StroomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF518B2E225E20C7662A0FEC /* StroomTests.swift */; };
 		3EEA920421A40939D0B24858 /* ContentText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A8C89967C504CF4159327F6 /* ContentText.swift */; };
@@ -65,6 +66,7 @@
 		35C8F17E2721F08201302DD6 /* QuestionsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = QuestionsView.swift; sourceTree = "<group>"; };
 		3DB3FF1653841D89F4C73AEC /* StroomApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StroomApp.swift; sourceTree = "<group>"; };
 		45E9552B5D640381D478C482 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		4B6455C6C9861213FA87EBD1 /* CurationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurationView.swift; sourceTree = "<group>"; };
 		50E4F661F5EEF1B39677500A /* LessonsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LessonsView.swift; sourceTree = "<group>"; };
 		53BA04CF06C9292B1B7FDC31 /* ItemDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ItemDetailView.swift; sourceTree = "<group>"; };
 		5A8C89967C504CF4159327F6 /* ContentText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentText.swift; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 				2DA77C7931723F0E72815116 /* Assets.xcassets */,
 				9A5D2498AADA4BD45EC4EED5 /* AudioPlayer.swift */,
 				5A8C89967C504CF4159327F6 /* ContentText.swift */,
+				4B6455C6C9861213FA87EBD1 /* CurationView.swift */,
 				E74E6B7E32A4FD7B8C5951AC /* DetailViews.swift */,
 				5CD38926441A1A2AA8F987E7 /* DigestView.swift */,
 				221FD1A1A3C2CE0BF231F43C /* FeedComponents.swift */,
@@ -286,6 +289,7 @@
 				56EC50159D1FC824621A9391 /* AppStore.swift in Sources */,
 				C227AA9B03C4BD07A97135E0 /* AudioPlayer.swift in Sources */,
 				3EEA920421A40939D0B24858 /* ContentText.swift in Sources */,
+				0FBDF3E4F39D7FA2101FFD6A /* CurationView.swift in Sources */,
 				BA0C87611B1EFFF1A32D1866 /* DetailViews.swift in Sources */,
 				B6E904D329D288107FF6B7CE /* DigestView.swift in Sources */,
 				675E6FAFB2C865161F9B846D /* FeedComponents.swift in Sources */,
