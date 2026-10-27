@@ -51,7 +51,8 @@ struct ItemDetailView: View {
               .disabled(item.status == "archived")
               Button("Plan", systemImage: "calendar") {
                 scheduled =
-                  item.scheduledFor.flatMap(StroomDate.parse) ?? Date.now.addingTimeInterval(86400)
+                  item.scheduledFor.flatMap { ScheduledDay.localDate($0) }
+                  ?? Date.now.addingTimeInterval(86400)
                 scheduling = true
               }
               Button("Score en onderwerpen", systemImage: "slider.horizontal.3") { curating = true }
@@ -69,7 +70,7 @@ struct ItemDetailView: View {
               }
             }.font(.callout).frame(minHeight: 44)
           }.disabled(updating || store.changing.contains(id))
-          if let planned = item.scheduledFor.flatMap(StroomDate.parse) {
+          if let planned = item.scheduledFor.flatMap({ ScheduledDay.localDate($0) }) {
             Label(
               "Gepland voor \(planned.formatted(date: .abbreviated, time: .omitted))",
               systemImage: "calendar"

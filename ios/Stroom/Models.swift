@@ -34,7 +34,7 @@ struct FeedItem: Codable, Identifiable, Hashable {
   var summaryModel: String?
   @LossyArray var transcriptSegments: [TranscriptSegment]? = nil
   var queuePosition: Int?
-  var qualityScoreDetail: QualityScoreDetail?
+  @LossyOptional var qualityScoreDetail: QualityScoreDetail? = nil
   var author: String?
   var hasTranscript: Bool?
   var sourceBody: String? {
@@ -280,10 +280,27 @@ struct QualityScoreDetail: Codable, Hashable {
   var scoredAt: String?
   var error: String?
   var calibration: ScoreCalibration?
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    quality = try? values.decode(ScoreRubric.self, forKey: .quality)
+    interest = try? values.decode(ScoreRubric.self, forKey: .interest)
+    clickbait = try? values.decode(Double.self, forKey: .clickbait)
+    interestWeight = try? values.decode(Double.self, forKey: .interestWeight)
+    model = try? values.decode(String.self, forKey: .model)
+    scoredAt = try? values.decode(String.self, forKey: .scoredAt)
+    error = try? values.decode(String.self, forKey: .error)
+    calibration = try? values.decode(ScoreCalibration.self, forKey: .calibration)
+  }
 }
 struct ScoreRubric: Codable, Hashable {
   let score10: Double
   let probabilities: [String: Double]
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    score10 = try values.decode(Double.self, forKey: .score10)
+    let weights = try? values.decode([String: LossyOptional<Double>].self, forKey: .probabilities)
+    probabilities = weights?.compactMapValues(\.wrappedValue) ?? [:]
+  }
 }
 struct ScoreCalibration: Codable, Hashable {
   let method: String
@@ -291,4 +308,43 @@ struct ScoreCalibration: Codable, Hashable {
   let percentile: Double
   let n: Int
   let days: Int
+}
+
+@propertyWrapper
+struct LossyOptional<Value: Codable & Hashable>: Codable, Hashable {
+  var wrappedValue: Value?
+  init(wrappedValue: Value? = nil) { self.wrappedValue = wrappedValue }
+  init(from decoder: Decoder) throws { wrappedValue = try? Value(from: decoder) }
+  func encode(to encoder: Encoder) throws {
+    var value = encoder.singleValueContainer()
+    try value.encode(wrappedValue)
+  }
+}
+extension KeyedDecodingContainer {
+  func decode<T>(_ type: LossyOptional<T>.Type, forKey key: Key) throws -> LossyOptional<T> {
+    try decodeIfPresent(type, forKey: key) ?? LossyOptional()
+  }
+}
+
+/// The web stores calendar days as UTC midnight, regardless of the device's time zone.
+enum ScheduledDay {
+  static func apiStamp(_ date: Date, timeZone: TimeZone = .current) -> String {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = timeZone
+    let day = calendar.dateComponents([.year, .month, .day], from: date)
+    return String(format: "%04d-%02d-%02dT00:00:00Z", day.year!, day.month!, day.day!)
+  }
+  static func localDate(_ stamp: String, timeZone: TimeZone = .current) -> Date? {
+    let day = String(stamp.prefix(10))
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.timeZone = timeZone
+    formatter.dateFormat = "yyyy-MM-dd"
+    formatter.isLenient = false
+    guard let date = formatter.date(from: day), formatter.string(from: date) == day else {
+      return nil
+    }
+    return date
+  }
 }

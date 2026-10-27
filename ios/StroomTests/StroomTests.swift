@@ -313,3 +313,69 @@ extension StroomTests {
     XCTAssertEqual(cached.transcriptSegments, item.transcriptSegments)
   }
 }
+
+extension StroomTests {
+  @MainActor func testMalformedScoreEnrichmentKeepsValidPartsAndItem() throws {
+    let prefix = #"{"id":"a","title":"Readable","source_name":"Source","quality_score_detail":"#
+    let score = #"{"quality":{"score10":8,"probabilities":{"good":0.8,"bad":"wrong"}},"interest":{"score10":"wrong"},"calibration":{"method":"partial"},"clickbait":"wrong","model":"chosen"}"#
+    let item = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + score + "}").utf8))
+    XCTAssertEqual(item.qualityScoreDetail?.quality?.score10, 8)
+    XCTAssertEqual(item.qualityScoreDetail?.quality?.probabilities, ["good": 0.8])
+    XCTAssertNil(item.qualityScoreDetail?.interest)
+    XCTAssertNil(item.qualityScoreDetail?.calibration)
+    XCTAssertNil(item.qualityScoreDetail?.clickbait)
+    XCTAssertEqual(item.qualityScoreDetail?.model, "chosen")
+    for invalid in ["null", "[]", "true", "\"bad\""] {
+      let value = try APIClient.decoder.decode(FeedItem.self, from: Data((prefix + invalid + "}").utf8))
+      XCTAssertEqual(value.title, "Readable")
+      XCTAssertNil(value.qualityScoreDetail)
+    }
+    let cached = try JSONDecoder().decode(FeedItem.self, from: JSONEncoder().encode(item))
+    XCTAssertEqual(cached.qualityScoreDetail, item.qualityScoreDetail)
+  }
+  func testScheduledCalendarDayMatchesWebsiteAcrossTimeZonesAndDST() throws {
+    for zone in ["Europe/Amsterdam", "America/Los_Angeles", "Pacific/Kiritimati"] {
+      let timeZone = TimeZone(identifier: zone)!
+      for day in ["2026-10-28", "2026-07-01", "2026-03-29", "2026-10-25"] {
+        let local = try XCTUnwrap(ScheduledDay.localDate(day, timeZone: timeZone))
+        let stamp = ScheduledDay.apiStamp(local, timeZone: timeZone)
+        XCTAssertEqual(stamp, day + "T00:00:00Z", zone)
+        XCTAssertEqual(ScheduledDay.localDate(stamp, timeZone: timeZone), local, zone)
+      }
+    }
+    XCTAssertNil(ScheduledDay.localDate("2026-02-30T00:00:00Z"))
+    XCTAssertNil(ScheduledDay.localDate("invalid"))
+  }
+  @MainActor func testArchiveUndoBelongsOnlyToTheLatestSingleArchive() async {
+    let store = AppStore(demo: true)
+    let first = FeedItem(id: "one", title: "One", sourceName: "Source", status: "new")
+    let second = FeedItem(id: "two", title: "Two", sourceName: "Source", status: "pinned")
+    store.items = [first, second]
+    await store.archive(first)
+    XCTAssertTrue(store.canUndo)
+    await store.undoArchive()
+    XCTAssertEqual(store.current(first).status, "new")
+    XCTAssertFalse(store.canUndo)
+    await store.archive(first)
+    await store.setQueued(second, queued: true)
+    XCTAssertFalse(store.canUndo)
+    await store.undoArchive()
+    XCTAssertEqual(store.current(first).status, "archived")
+    await store.archive(second)
+    let changed = await store.setStatus(first, to: "new")
+    XCTAssertTrue(changed)
+    XCTAssertFalse(store.canUndo)
+    await store.archive(first)
+    store.dismissActionFeedback()
+    XCTAssertFalse(store.canUndo)
+    let all = await store.archiveRail([first, second])
+    XCTAssertTrue(all)
+    XCTAssertEqual(store.actionMessage, "2 items gearchiveerd")
+    XCTAssertFalse(store.canUndo)
+    store.changing.insert(second.id)
+    let partial = await store.archiveRail([first, second])
+    XCTAssertFalse(partial)
+    XCTAssertNotNil(store.actionError)
+    XCTAssertFalse(store.canUndo)
+  }
+}
