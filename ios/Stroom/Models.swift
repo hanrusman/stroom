@@ -32,7 +32,7 @@ struct FeedItem: Codable, Identifiable, Hashable {
   var sourceUrl: String?
   var scheduledFor: String?
   var summaryModel: String?
-  var transcriptSegments: [TranscriptSegment]?
+  @LossyArray var transcriptSegments: [TranscriptSegment]? = nil
   var queuePosition: Int?
   var author: String?
   var hasTranscript: Bool?
@@ -207,8 +207,57 @@ struct TranscriptSegment: Codable, Hashable {
   let end: Double
   let text: String
   var speaker: String?
+  init(start: Double, end: Double, text: String, speaker: String? = nil) {
+    self.start = start
+    self.end = end
+    self.text = text
+    self.speaker = speaker
+  }
+  init(from decoder: Decoder) throws {
+    let values = try decoder.container(keyedBy: CodingKeys.self)
+    start = try values.decode(Double.self, forKey: .start)
+    end = try values.decode(Double.self, forKey: .end)
+    text = try values.decode(String.self, forKey: .text)
+    speaker = try? values.decode(String.self, forKey: .speaker)
+    guard start.isFinite, end.isFinite, start >= 0, end > start,
+      !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      throw DecodingError.dataCorrupted(
+        .init(
+          codingPath: decoder.codingPath,
+          debugDescription: "Invalid transcript segment"))
+    }
+  }
   static func activeIndex(in segments: [TranscriptSegment], at time: Double) -> Int? {
     segments.lastIndex { $0.start <= time && time < $0.end }
+  }
+}
+
+/// Optional enrichment must not make an otherwise readable feed item fail to decode.
+@propertyWrapper
+struct LossyArray<Element: Codable & Hashable>: Codable, Hashable {
+  var wrappedValue: [Element]?
+  init(wrappedValue: [Element]? = nil) { self.wrappedValue = wrappedValue }
+  init(from decoder: Decoder) throws {
+    guard var values = try? decoder.unkeyedContainer() else {
+      wrappedValue = nil
+      return
+    }
+    var decoded: [Element] = []
+    while !values.isAtEnd {
+      let element = try values.superDecoder()
+      if let value = try? Element(from: element) { decoded.append(value) }
+    }
+    wrappedValue = decoded
+  }
+  func encode(to encoder: Encoder) throws {
+    var value = encoder.singleValueContainer()
+    try value.encode(wrappedValue)
+  }
+}
+extension KeyedDecodingContainer {
+  func decode<T>(_ type: LossyArray<T>.Type, forKey key: Key) throws -> LossyArray<T> {
+    try decodeIfPresent(type, forKey: key) ?? LossyArray()
   }
 }
 struct VikunjaResult: Decodable {

@@ -19,6 +19,11 @@ enum APIError: LocalizedError {
     if let detail = json?["detail"] as? String, !detail.isEmpty {
       return .http(status, detail)
     }
+    if let details = json?["detail"] as? [[String: Any]],
+      let message = details.compactMap({ $0["msg"] as? String }).first(where: { !$0.isEmpty })
+    {
+      return .http(status, message)
+    }
     return .response(status)
   }
   var errorDescription: String? {
