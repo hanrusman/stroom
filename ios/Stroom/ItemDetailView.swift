@@ -102,13 +102,18 @@ struct ItemDetailView: View {
             } else {
               Text("Nog geen samenvatting beschikbaar.").foregroundStyle(.secondary)
             }
+            if let model = item.summaryModel {
+              Text("Samengevat met \(model)").font(.caption).foregroundStyle(.secondary)
+            }
             processing(item)
             Button(
               item.summary == nil ? "Samenvatten" : "Opnieuw samenvatten", systemImage: "sparkles"
             ) { Task { await action("summarize") } }.disabled(updating || store.demo)
           case "Lessen": ItemLessonsView(id: id)
           case "Transcript":
-            if let text = item.transcript, !text.isEmpty {
+            if let segments = item.transcriptSegments, !segments.isEmpty {
+              TranscriptView(item: item, segments: segments)
+            } else if let text = item.transcript, !text.isEmpty {
               MarkdownBody(text: text)
             } else {
               Text("Nog geen transcript beschikbaar.").foregroundStyle(.secondary)
@@ -142,7 +147,16 @@ struct ItemDetailView: View {
     }.frame(maxWidth: .infinity).background(Brand.paper).navigationTitle("In Stroom")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Gereed") { dismiss() } } }
-      .task { await load() }.refreshable { await load() }
+      .task { await load() }
+      .task(id: item?.isProcessing == true) {
+        while item?.isProcessing == true && !Task.isCancelled {
+          do {
+            try await Task.sleep(for: .seconds(8))
+            try Task.checkCancellation()
+          } catch { return }
+          await load()
+        }
+      }.refreshable { await load() }
       .sheet(isPresented: $scheduling) {
         NavigationStack {
           Form {
@@ -157,12 +171,16 @@ struct ItemDetailView: View {
       }
   }
   @ViewBuilder func processing(_ item: FeedItem) -> some View {
-    if let state = item.processingStatus,
-      ["queued", "transcribe_queued", "summarize_queued", "transcribing", "summarizing"].contains(
-        state)
-    {
-      Label("Verwerking loopt. Trek omlaag om te verversen.", systemImage: "clock").font(.caption)
-        .foregroundStyle(.secondary)
+    if item.isProcessing {
+      Label(
+        item.queuePosition.map { "In de rij · #\($0)" } ?? "Wordt verwerkt…", systemImage: "clock"
+      )
+      .font(.caption).foregroundStyle(.secondary)
+    } else if item.processingStatus == "failed" {
+      Label(
+        "Verwerking mislukt. Probeer de actie opnieuw.", systemImage: "exclamationmark.triangle"
+      )
+      .font(.callout).foregroundStyle(.red)
     }
   }
   func load() async {

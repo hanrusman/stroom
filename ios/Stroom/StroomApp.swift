@@ -12,7 +12,9 @@ struct StroomApp: App {
       )
       .environmentObject(store.notifications)
       .tint(Brand.blue)
-        .preferredColorScheme(store.demo && ProcessInfo.processInfo.arguments.contains("--dark") ? .dark : nil)
+      .preferredColorScheme(
+        store.demo && ProcessInfo.processInfo.arguments.contains("--dark") ? .dark : nil
+      )
       .task { await store.start() }
       .onOpenURL { url in
         guard url.scheme == "stroom" else { return }

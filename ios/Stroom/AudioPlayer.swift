@@ -36,6 +36,7 @@ final class AudioPlayer: ObservableObject {
   private var api: APIClient?
   private var library: LibraryStore?
   private var lastSavedSecond = -1
+  private var pendingSeek: Double?
   private var preparing = false
   private var wantsPlayback = false
   private var resumeAfterInterruption = false
@@ -112,13 +113,14 @@ final class AudioPlayer: ObservableObject {
     self.api = api
     self.library = library
   }
-  func play(_ track: AudioTrack) {
+  func play(_ track: AudioTrack, at startTime: Double? = nil) {
     savePosition()
     loadTask?.cancel()
     requestID = UUID()
     let ticket = requestID
     player.pause()
     player.replaceCurrentItem(with: nil)
+    pendingSeek = startTime
     current = track
     elapsed = 0
     duration = 0
@@ -158,7 +160,8 @@ final class AudioPlayer: ObservableObject {
           }
         }
         player.replaceCurrentItem(with: item)
-        let position = UserDefaults.standard.double(forKey: positionKey(track))
+        let position = pendingSeek ?? UserDefaults.standard.double(forKey: positionKey(track))
+        pendingSeek = nil
         if position > 0 {
           await player.seek(to: CMTime(seconds: position, preferredTimescale: 600))
         }
@@ -201,6 +204,7 @@ final class AudioPlayer: ObservableObject {
   func seek(_ seconds: Double) {
     guard seconds.isFinite else { return }
     let target = max(0, duration > 0 ? min(seconds, duration) : seconds)
+    if preparing { pendingSeek = target }
     player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
     elapsed = target
     savePosition()

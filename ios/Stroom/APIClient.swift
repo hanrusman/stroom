@@ -75,6 +75,7 @@ final class APIClient {
     config.httpShouldSetCookies = false
     config.httpCookieStorage = nil
     config.timeoutIntervalForRequest = 25
+    config.timeoutIntervalForResource = 600
     session = URLSession(configuration: config, delegate: SameOriginRedirects(), delegateQueue: nil)
   }
   func request<T: Decodable>(
@@ -92,7 +93,7 @@ final class APIClient {
     if !query.isEmpty { parts.queryItems = query }
     var request = URLRequest(url: parts.url!)
     request.httpMethod = method
-    if path.hasSuffix("/ask") || path.hasSuffix("/summarize") { request.timeoutInterval = 240 }
+    request.timeoutInterval = Self.timeout(for: path)
     request.setValue("application/json", forHTTPHeaderField: "Accept")
     if let cookie { request.setValue("stroom_session=\(cookie)", forHTTPHeaderField: "Cookie") }
     if let body {
@@ -118,6 +119,11 @@ final class APIClient {
       cookie = sessionCookie.value
     }
     return data
+  }
+  static func timeout(for path: String) -> TimeInterval {
+    if path.hasSuffix("/lessons/distill") || path.hasSuffix("/expand") { return 480 }
+    if path.hasSuffix("/ask") || path.hasSuffix("/summarize") { return 240 }
+    return 25
   }
   func login(email: String, password: String) async throws -> StroomUser {
     clearSession()

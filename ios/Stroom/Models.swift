@@ -31,6 +31,9 @@ struct FeedItem: Codable, Identifiable, Hashable {
   var topics: [String]?
   var sourceUrl: String?
   var scheduledFor: String?
+  var summaryModel: String?
+  var transcriptSegments: [TranscriptSegment]?
+  var queuePosition: Int?
   var author: String?
   var hasTranscript: Bool?
   var sourceBody: String? {
@@ -46,6 +49,10 @@ struct FeedItem: Codable, Identifiable, Hashable {
     let paragraph = ContentText.markdown(text).components(separatedBy: "\n\n")
       .first { ContentText.excerpt($0).count > 40 }
     return paragraph.map { String(ContentText.excerpt($0).prefix(300)) }
+  }
+  var isProcessing: Bool {
+    ["queued", "transcribe_queued", "summarize_queued", "transcribing", "summarizing"].contains(
+      processingStatus ?? "")
   }
   var initialSection: String {
     (summary?.isEmpty == false || hasSummary == true) ? "Samenvatting" : "Bron"
@@ -85,6 +92,9 @@ struct Digest: Decodable {
   let isGenerating: Bool
 }
 struct SearchHit: Decodable, Identifiable {
+  var snippet: String?
+  var publishedAt: String?
+  var match: String?
   let id: String
   let title: String
   let sourceName: String
@@ -153,8 +163,15 @@ struct Lesson: Decodable, Identifiable {
   let body: String
   var rating: Int?
   var expansion: String?
+  var vikunjaTaskId: Int?
+  var sourceName: String?
+  var itemTitle: String?
+  var itemId: String?
+  var mediaUrl: String?
 }
 struct ItemQuestion: Decodable, Identifiable {
+  var sourcesUsed: [String]?
+  var createdAt: String?
   var id: String?
   let question: String
   let answer: String
@@ -183,4 +200,18 @@ struct HuygensTopic: Codable {
 }
 struct ModelSettings: Decodable {
   let modelDefaults: [String: String]
+}
+
+struct TranscriptSegment: Codable, Hashable {
+  let start: Double
+  let end: Double
+  let text: String
+  var speaker: String?
+  static func activeIndex(in segments: [TranscriptSegment], at time: Double) -> Int? {
+    segments.lastIndex { $0.start <= time && time < $0.end }
+  }
+}
+struct VikunjaResult: Decodable {
+  let success: Bool
+  let taskId: Int
 }
