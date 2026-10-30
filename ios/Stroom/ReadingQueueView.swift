@@ -30,14 +30,30 @@ struct ItemActions: ViewModifier {
       }
       .contextMenu {
         Button("Open") { store.openItemID = item.id }
+        Button(item.status == "pinned" ? "Niet meer bewaren" : "Bewaren", systemImage: "bookmark") {
+          Task { await store.setStatus(item, to: item.status == "pinned" ? "new" : "pinned") }
+        }
+        Button("Later (geen datum)", systemImage: "clock") {
+          Task { await store.plan(item, date: nil, later: true) }
+        }
+        Button("Samenvatten", systemImage: "sparkles") {
+          Task { await store.process(item, action: "summarize") }
+        }.disabled(item.isProcessing)
+        if item.format == "podcast" || item.format == "video" {
+          Button("Transcriberen", systemImage: "waveform") {
+            Task { await store.process(item, action: "transcribe") }
+          }.disabled(item.isProcessing)
+        }
         if item.status != "archived" {
           Button(
             store.queuedIDs.contains(item.id) ? "Uit wachtrij" : "In wachtrij",
             systemImage: "text.badge.plus"
-          ) { Task { await store.setQueued(item, queued: !store.queuedIDs.contains(item.id)) } }
+          ) {
+            Task { await store.setQueued(item, queued: !store.queuedIDs.contains(item.id)) }
+          }
           Button("Archiveren", systemImage: "archivebox") { Task { await store.archive(item) } }
         }
-      }
+      }.disabled(store.changing.contains(item.id))
   }
 }
 extension View {
@@ -54,8 +70,7 @@ struct ActionFeedback: View {
           Button("Herstel") { Task { await store.undoArchive() } }.font(.caption.weight(.semibold))
         }
         Button {
-          store.actionError = nil
-          store.actionMessage = nil
+          store.dismissActionFeedback()
         } label: {
           Image(systemName: "xmark").frame(width: 36, height: 36)
         }.accessibilityLabel("Melding sluiten")

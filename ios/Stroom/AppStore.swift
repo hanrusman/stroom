@@ -24,6 +24,7 @@ final class AppStore: ObservableObject {
   private var queueVersion = 0
   private var undoItem: FeedItem?
   private var undoWasQueued = false
+  private var archivingRail = false
   @Published var aiTasks: Set<String> = []
   @Published var busy = false
   @Published var starting = true
@@ -39,11 +40,12 @@ final class AppStore: ObservableObject {
   private(set) var api: APIClient?
   private var started = false
   private var refreshing = false
-  let demo = ProcessInfo.processInfo.arguments.contains("--demo")
+  let demo: Bool
   private let cacheURL = FileManager.default.urls(
     for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("feed.json")
 
-  init() {
+  init(demo: Bool = ProcessInfo.processInfo.arguments.contains("--demo")) {
+    self.demo = demo
     server = UserDefaults.standard.string(forKey: "server") ?? "https://stroom.c4w.nl"
     if let base = try? ServerAddress.parse(server) { api = APIClient(baseURL: base) }
     if let api { player.configure(api: api, library: library) }
@@ -204,6 +206,7 @@ final class AppStore: ObservableObject {
   }
   func setQueued(_ item: FeedItem, queued: Bool) async {
     guard !changing.contains(item.id) else { return }
+    dismissActionFeedback()
     changing.insert(item.id)
     queueVersion += 1
     contentVersion += 1
@@ -231,6 +234,7 @@ final class AppStore: ObservableObject {
   }
   func archive(_ item: FeedItem) async {
     guard !changing.contains(item.id) else { return }
+    dismissActionFeedback()
     changing.insert(item.id)
     queueVersion += 1
     contentVersion += 1
@@ -253,9 +257,17 @@ final class AppStore: ObservableObject {
       actionMessage = "Gearchiveerd"
     } catch { actionError = error.localizedDescription }
   }
-  var canUndo: Bool { undoItem != nil }
+  var canUndo: Bool {
+    undoItem != nil && !archivingRail && actionError == nil && actionMessage == "Gearchiveerd"
+  }
+  func dismissActionFeedback() {
+    undoItem = nil
+    undoWasQueued = false
+    actionError = nil
+    actionMessage = nil
+  }
   func undoArchive() async {
-    guard let item = undoItem else { return }
+    guard canUndo, let item = undoItem else { return }
     do {
       if !demo, let api {
         apply(try await api.update(item.id, status: item.status ?? "new"))
@@ -293,6 +305,95 @@ final class AppStore: ObservableObject {
         "Geen model ingesteld voor deze actie. Controleer je Stroom-instellingen.")
     }
     return [.init(name: "model", value: model)]
+  }
+  @discardableResult
+  func setStatus(_ item: FeedItem, to status: String) async -> Bool {
+    await change(item) { api in
+      try await api.update(item.id, status: status)
+    } demoChange: {
+      $0.status = status
+    }
+  }
+  @discardableResult
+  func process(_ item: FeedItem, action: String) async -> Bool {
+    guard !item.isProcessing else { return false }
+    return await change(item) { api in
+      try await api.request("huygens/items/\(item.id)/\(action)", method: "POST")
+    } demoChange: {
+      $0.processingStatus = action == "transcribe" ? "transcribe_queued" : "summarize_queued"
+    }
+  }
+  @discardableResult
+  private func change(
+    _ item: FeedItem, operation: (APIClient) async throws -> FeedItem,
+    demoChange: (inout FeedItem) -> Void
+  ) async -> Bool {
+    guard !changing.contains(item.id) else { return false }
+    dismissActionFeedback()
+    changing.insert(item.id)
+    contentVersion += 1
+    defer {
+      changing.remove(item.id)
+      contentVersion += 1
+    }
+    do {
+      var updated = current(item)
+      if demo {
+        demoChange(&updated)
+      } else {
+        guard let api else { throw APIError.unauthorized }
+        updated = try await operation(api)
+      }
+      apply(updated)
+      actionError = nil
+      actionMessage = "Bijgewerkt"
+      return true
+    } catch {
+      actionError = error.localizedDescription
+      return false
+    }
+  }
+  @discardableResult
+  func plan(_ item: FeedItem, date: Date?, later: Bool = false) async -> Bool {
+    await change(item) { api in
+      let stamp = date.map { ScheduledDay.apiStamp($0) }
+      let updated: FeedItem = try await api.request(
+        "huygens/items/\(item.id)/schedule", method: "POST",
+        body: ["scheduled_for": stamp as Any? ?? NSNull()])
+      self.apply(updated)
+      if date == nil && (later || updated.status == "later") {
+        return try await api.update(item.id, status: later ? "later" : "new")
+      }
+      return updated
+    } demoChange: { row in
+      row.scheduledFor = date.map { ScheduledDay.apiStamp($0) }
+      if date != nil || later {
+        row.status = "later"
+      } else if row.status == "later" {
+        row.status = "new"
+      }
+    }
+  }
+  func archiveRail(_ rows: [FeedItem]) async -> Bool {
+    guard !archivingRail else { return false }
+    archivingRail = true
+    dismissActionFeedback()
+    defer {
+      undoItem = nil
+      undoWasQueued = false
+      archivingRail = false
+    }
+    for row in rows {
+      guard !Task.isCancelled else { return false }
+      guard !changing.contains(row.id) else {
+        actionError = "Een item wordt nog bijgewerkt. Probeer opnieuw zodra dat klaar is."
+        return false
+      }
+      await archive(current(row))
+      if actionError != nil { return false }
+    }
+    actionMessage = "\(rows.count) items gearchiveerd"
+    return true
   }
   func loadDemo() {
     if ProcessInfo.processInfo.arguments.contains("--reset-topic") { selectedTopic = "ai" }

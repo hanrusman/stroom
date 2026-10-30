@@ -62,6 +62,43 @@ final class NavigationTests: XCTestCase {
       app.terminate()
     }
   }
+  @MainActor func testPlanningScoreTopicsAndArchiveRail() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic"]
+    app.launch()
+    XCTAssertTrue(app.buttons["topic-science"].waitForExistence(timeout: 10))
+    app.buttons["topic-science"].tap()
+    app.swipeUp()
+    app.buttons["De stille revolutie in onze oceanen"].tap()
+    app.buttons["Plan"].tap()
+    app.buttons["Later (geen datum)"].tap()
+    XCTAssertTrue(app.staticTexts["Later · geen datum"].waitForExistence(timeout: 5))
+    app.buttons["Plan"].tap()
+    app.buttons["Wis planning"].tap()
+    XCTAssertFalse(app.staticTexts["Later · geen datum"].exists)
+    app.buttons["Plan"].swipeLeft()
+    app.buttons["Score en onderwerpen"].tap()
+    XCTAssertTrue(app.buttons["Score opslaan"].waitForExistence(timeout: 5))
+    app.buttons["Score opslaan"].tap()
+    XCTAssertTrue(app.staticTexts["Score opgeslagen"].waitForExistence(timeout: 5))
+    app.buttons["AI & technologie, niet toegevoegd"].tap()
+    XCTAssertTrue(app.buttons["AI & technologie, toegevoegd"].waitForExistence(timeout: 5))
+    let shot = XCTAttachment(screenshot: app.screenshot())
+    shot.name = "Fase3-curatie-licht"
+    shot.lifetime = .keepAlways
+    add(shot)
+    app.buttons["curation-done"].tap()
+    app.buttons["Gereed"].tap()
+    app.swipeUp()
+    app.buttons["archive-rail-article"].tap()
+    app.buttons["Archiveer 1 artikelen"].tap()
+    XCTAssertTrue(app.staticTexts["1 items gearchiveerd"].waitForExistence(timeout: 5))
+    XCTAssertFalse(app.buttons["Herstel"].exists)
+    let gone = NSPredicate(format: "exists == false")
+    expectation(for: gone, evaluatedWith: app.buttons["De stille revolutie in onze oceanen"])
+    waitForExpectations(timeout: 5)
+    app.terminate()
+  }
   @MainActor func testNativeNavigationAndReader() throws {
     let app = XCUIApplication()
     app.launchArguments = ["--demo", "--reset-topic"]

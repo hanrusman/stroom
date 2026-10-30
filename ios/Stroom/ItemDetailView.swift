@@ -12,6 +12,7 @@ struct ItemDetailView: View {
   @State private var didChooseSection = false
   @State private var scheduled = Date.now.addingTimeInterval(86400)
   @State private var scheduling = false
+  @State private var curating = false
   var body: some View {
     ScrollView {
       VStack(alignment: .leading, spacing: 22) {
@@ -48,7 +49,13 @@ struct ItemDetailView: View {
                 systemImage: "text.badge.plus"
               ) { Task { await store.setQueued(item, queued: !store.queuedIDs.contains(id)) } }
               .disabled(item.status == "archived")
-              Button("Plan", systemImage: "calendar") { scheduling = true }
+              Button("Plan", systemImage: "calendar") {
+                scheduled =
+                  item.scheduledFor.flatMap { ScheduledDay.localDate($0) }
+                  ?? Date.now.addingTimeInterval(86400)
+                scheduling = true
+              }
+              Button("Score en onderwerpen", systemImage: "slider.horizontal.3") { curating = true }
               Button(
                 item.status == "archived" ? "Uit archief" : "Archiveer", systemImage: "archivebox"
               ) {
@@ -63,11 +70,14 @@ struct ItemDetailView: View {
               }
             }.font(.callout).frame(minHeight: 44)
           }.disabled(updating || store.changing.contains(id))
-          if let planned = item.scheduledFor.flatMap(StroomDate.parse) {
+          if let planned = item.scheduledFor.flatMap({ ScheduledDay.localDate($0) }) {
             Label(
-              "Gepland voor \(planned.formatted(date: .abbreviated, time: .shortened))",
+              "Gepland voor \(planned.formatted(date: .abbreviated, time: .omitted))",
               systemImage: "calendar"
             ).font(.caption)
+          }
+          if item.status == "later" && item.scheduledFor == nil {
+            Label("Later · geen datum", systemImage: "clock").font(.caption)
           }
           if let message = store.actionError { Text(message).font(.callout).foregroundStyle(.red) }
           ScrollView(.horizontal, showsIndicators: false) {
@@ -157,14 +167,24 @@ struct ItemDetailView: View {
           await load()
         }
       }.refreshable { await load() }
+      .sheet(isPresented: $curating) {
+        if let item {
+          ItemCurationView(item: item) { updated in
+            self.item = updated
+            store.apply(updated)
+          }
+        }
+      }
       .sheet(isPresented: $scheduling) {
         NavigationStack {
           Form {
             DatePicker(
-              "Lezen op", selection: $scheduled, in: Date.now...,
-              displayedComponents: [.date, .hourAndMinute])
+              "Lezen op", selection: $scheduled,
+              displayedComponents: [.date])
             Button("Inplannen") { Task { await schedule(scheduled) } }.disabled(updating)
-            Button("Planning verwijderen") { Task { await schedule(nil) } }.disabled(updating)
+            Button("Later (geen datum)") { Task { await schedule(nil, later: true) } }.disabled(
+              updating)
+            Button("Wis planning") { Task { await schedule(nil) } }.disabled(updating)
             if let error { Text(error).foregroundStyle(.red) }
           }.navigationTitle("Later lezen").toolbar { Button("Sluiten") { scheduling = false } }
         }.presentationDetents([.medium, .large])
@@ -228,18 +248,17 @@ struct ItemDetailView: View {
       store.apply(updated)
     } catch { self.error = error.localizedDescription }
   }
-  func schedule(_ date: Date?) async {
-    guard let api = store.api else { return }
+  func schedule(_ date: Date?, later: Bool = false) async {
+    guard let item else { return }
     updating = true
-    error = nil
     defer { updating = false }
-    do {
-      let value: Any = date.map { ISO8601DateFormatter().string(from: $0) } as Any? ?? NSNull()
-      let updated: FeedItem = try await api.request(
-        "huygens/items/\(id)/schedule", method: "POST", body: ["scheduled_for": value])
-      item = updated
-      store.apply(updated)
+    if await store.plan(item, date: date, later: later) {
+      self.item = store.current(item)
       scheduling = false
-    } catch { self.error = error.localizedDescription }
+      error = nil
+    } else {
+      self.item = store.current(item)
+      error = store.actionError
+    }
   }
 }
