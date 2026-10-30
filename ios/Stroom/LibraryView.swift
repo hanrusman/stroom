@@ -1,6 +1,10 @@
 import AVKit
 import SwiftUI
 
+private enum LibraryDestination: Hashable {
+  case lessons, tips
+}
+
 struct LibraryView: View {
   @EnvironmentObject var store: AppStore
   @EnvironmentObject var player: AudioPlayer
@@ -10,6 +14,7 @@ struct LibraryView: View {
   @State private var error: String?
   @State private var loading = true
   @State private var selection = "saved"
+  @State private var destination: LibraryDestination?
   var body: some View {
     List {
       VStack(alignment: .leading, spacing: 18) {
@@ -18,14 +23,14 @@ struct LibraryView: View {
           typeSize.isAccessibilitySize
           ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
         layout {
-          NavigationLink {
-            AllLessonsView()
+          Button {
+            destination = .lessons
           } label: {
             Label("Alle lessen", systemImage: "book.closed").frame(
               maxWidth: .infinity, minHeight: 48)
           }
-          NavigationLink {
-            TipsView()
+          Button {
+            destination = .tips
           } label: {
             Label("Tips", systemImage: "lightbulb").frame(maxWidth: .infinity, minHeight: 48)
           }
@@ -88,6 +93,12 @@ struct LibraryView: View {
       }
     }.listStyle(.plain).scrollContentBackground(.hidden).background(Brand.paper)
       .navigationTitle("Bibliotheek").navigationBarTitleDisplayMode(.inline)
+      .navigationDestination(item: $destination) { destination in
+        switch destination {
+        case .lessons: AllLessonsView()
+        case .tips: TipsView()
+        }
+      }
       .task { await load() }.refreshable { await load() }
   }
   func load() async {

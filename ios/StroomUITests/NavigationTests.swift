@@ -255,9 +255,16 @@ extension NavigationTests {
         XCTAssertTrue(
           app.buttons["Wat verandert er als AI echt met je meedenkt?"].isHittable,
           "De eerste bron moet bereikbaar zijn zonder eerst door bediening te scrollen")
-        app.buttons["digest-daily"].tap()
-        XCTAssertTrue(app.staticTexts["Het grotere plaatje"].waitForExistence(timeout: 5))
-        app.navigationBars["Overzichten"].buttons.element(boundBy: 0).tap()
+        for (window, period) in [("daily", "Dag"), ("weekly", "Week")] {
+          XCTAssertTrue(app.staticTexts["digest-excerpt-\(window)"].exists)
+          app.buttons["digest-\(window)"].tap()
+          XCTAssertTrue(app.staticTexts["Het grotere plaatje"].waitForExistence(timeout: 5))
+          XCTAssertTrue(app.segmentedControls.buttons[period].isSelected)
+          app.swipeUp()
+          app.swipeDown()
+          XCTAssertTrue(app.navigationBars["Overzichten"].exists)
+          app.navigationBars["Overzichten"].buttons.element(boundBy: 0).tap()
+        }
       }
       app.buttons["Filters"].tap()
       XCTAssertTrue(app.buttons["Wis alle filters"].waitForExistence(timeout: 5))
@@ -274,6 +281,16 @@ extension NavigationTests {
       library.name = "Design-bibliotheek-" + mode
       library.lifetime = .keepAlways
       add(library)
+      for (button, title, content) in [
+        ("Tips", "Tips", "Een wereld vol vragen"),
+        ("Alle lessen", "Lessen", "Stel eerst een betere vraag"),
+      ] {
+        app.buttons[button].tap()
+        XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[content].exists)
+        app.navigationBars[title].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["Jouw verzameling"].exists)
+      }
       if mode == "--large-text" {
         app.tabBars.buttons["Stroom"].tap()
         let article = app.buttons["Wat verandert er als AI echt met je meedenkt?"]
@@ -291,5 +308,60 @@ extension NavigationTests {
       }
       app.terminate()
     }
+  }
+
+  @MainActor func testHeadingDoesNotClearActiveFilters() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Filters"].waitForExistence(timeout: 10))
+    app.buttons["Filters"].tap()
+    app.buttons["filter-period"].tap()
+    app.buttons["7 dagen"].tap()
+    app.buttons["Gereed"].tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].waitForExistence(timeout: 5))
+    app.staticTexts["AI & technologie"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].exists)
+    app.staticTexts["JOUW SELECTIE"].tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].exists)
+    app.buttons["Wis filters"].firstMatch.tap()
+    XCTAssertFalse(app.staticTexts["1 filters actief"].exists)
+    app.terminate()
+  }
+
+  @MainActor func testReadingQueueAndPlayNextStayIndependent() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic", "--design-preview"]
+    app.launch()
+    XCTAssertTrue(app.tabBars.buttons["Luisteren"].waitForExistence(timeout: 10))
+    app.tabBars.buttons["Luisteren"].tap()
+    let next = app.buttons["Speel hierna af"]
+    for _ in 0..<5 {
+      if next.isHittable { break }
+      app.swipeUp()
+    }
+    XCTAssertTrue(next.isHittable)
+    next.tap()
+    XCTAssertEqual(next.value as? String, "Staat in Hierna")
+    app.buttons["In leeswachtrij"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["Toegevoegd aan je wachtrij"].waitForExistence(timeout: 5))
+    let queues = XCTAttachment(screenshot: app.screenshot())
+    queues.name = "Review-twee-wachtrijen"
+    queues.lifetime = .keepAlways
+    add(queues)
+    app.buttons["Open speler: Wat verandert er als AI echt met je meedenkt?"].tap()
+    let remove = app.buttons["Verwijder uit Hierna: Wat verandert er als AI echt met je meedenkt?"]
+    for _ in 0..<4 {
+      if remove.isHittable { break }
+      app.swipeUp()
+    }
+    XCTAssertTrue(remove.isHittable)
+    remove.tap()
+    XCTAssertFalse(remove.exists)
+    app.buttons["Gereed"].tap()
+    app.tabBars.buttons["Wachtrij"].tap()
+    XCTAssertTrue(
+      app.buttons["Wat verandert er als AI echt met je meedenkt?"].waitForExistence(timeout: 5))
+    app.terminate()
   }
 }

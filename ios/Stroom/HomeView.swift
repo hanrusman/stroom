@@ -1,5 +1,10 @@
 import SwiftUI
 
+private struct DigestDestination: Hashable {
+  let topic: String
+  let window: String
+}
+
 struct FeedScreen: View {
   @EnvironmentObject var store: AppStore
   @Environment(\.dynamicTypeSize) private var typeSize
@@ -18,6 +23,7 @@ struct FeedScreen: View {
   @State private var requestID = UUID()
   @State private var archiveTarget: HuygensRail?
   @State private var archiving = false
+  @State private var digestDestination: DigestDestination?
 
   var isRanked: Bool {
     store.selectedTopic != "__all__" && filter == "all" && window == "all" && format == "all"
@@ -58,7 +64,7 @@ struct FeedScreen: View {
             Label("\(activeFilters) filters actief", systemImage: "line.3.horizontal.decrease")
               .font(.subheadline)
             Spacer()
-            Button("Wis filters") { resetFilters() }.frame(minHeight: 44)
+            Button("Wis filters") { resetFilters() }.buttonStyle(.borderless).frame(minHeight: 44)
           }
         }
         if let error { ErrorNotice(message: error) { await reload() } }
@@ -136,6 +142,9 @@ struct FeedScreen: View {
       }
     }
     .listStyle(.plain).scrollContentBackground(.hidden).background(Brand.paper)
+    .navigationDestination(item: $digestDestination) { destination in
+      DigestView(topic: destination.topic, initialWindow: destination.window)
+    }
     .navigationTitle(podcastsOnly ? "Luisteren" : "Stroom").navigationBarTitleDisplayMode(.inline)
     .toolbar {
       ToolbarItem(placement: .principal) {
@@ -198,8 +207,12 @@ struct FeedScreen: View {
     }
   }
   @ViewBuilder var digestLinks: some View {
-    DigestPreview(topic: store.selectedTopic, window: "daily")
-    DigestPreview(topic: store.selectedTopic, window: "weekly")
+    DigestPreview(topic: store.selectedTopic, window: "daily") {
+      digestDestination = DigestDestination(topic: store.selectedTopic, window: "daily")
+    }
+    DigestPreview(topic: store.selectedTopic, window: "weekly") {
+      digestDestination = DigestDestination(topic: store.selectedTopic, window: "weekly")
+    }
   }
   var topicChips: some View {
     ScrollView(.horizontal, showsIndicators: false) {
@@ -227,7 +240,7 @@ struct FeedScreen: View {
       Text("24 uur").tag("24h")
       Text("7 dagen").tag("7d")
       Text("30 dagen").tag("30d")
-    }
+    }.accessibilityIdentifier("filter-period")
     if !podcastsOnly {
       Picker("Soort", selection: $format) {
         Text("Alles").tag("all")

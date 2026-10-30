@@ -11,14 +11,12 @@ struct DigestPreview: View {
   @EnvironmentObject var store: AppStore
   let topic: String
   let window: String
+  let open: () -> Void
   @State private var digest: Digest?
   @State private var error: String?
   @State private var loading = true
-  @State private var showingDigest = false
   var body: some View {
-    Button {
-      showingDigest = true
-    } label: {
+    Button(action: open) {
       VStack(alignment: .leading, spacing: 10) {
         HStack {
           Image(systemName: window == "daily" ? "sun.max" : "calendar")
@@ -27,24 +25,28 @@ struct DigestPreview: View {
         }.foregroundStyle(Brand.blue).accessibilityHidden(true)
         Text(window == "daily" ? "Vandaag" : "Deze week")
           .font(Brand.editorial(22)).foregroundStyle(Brand.ink)
-        Text(
-          digest?.isGenerating == true
-            ? "Wordt gemaakt…"
-            : (digest?.markdown != nil
-              ? "Lees het overzicht"
+        if let markdown = digest?.markdown, !ContentText.excerpt(markdown).isEmpty {
+          Text(ContentText.excerpt(markdown)).font(.caption).foregroundStyle(Brand.muted)
+            .lineLimit(3).multilineTextAlignment(.leading)
+            .accessibilityIdentifier("digest-excerpt-\(window)")
+          if digest?.isGenerating == true {
+            Text("Wordt vernieuwd…").font(.caption).foregroundStyle(Brand.muted)
+          }
+        } else {
+          Text(
+            digest?.isGenerating == true
+              ? "Wordt gemaakt…"
               : (loading
-                ? "Ophalen…" : (error != nil ? "Ophalen mislukt · open" : "Maak een overzicht")))
-        )
-        .font(.caption).foregroundStyle(Brand.muted).fixedSize(horizontal: false, vertical: true)
+                ? "Ophalen…" : (error != nil ? "Ophalen mislukt · open" : "Maak een overzicht"))
+          )
+          .font(.caption).foregroundStyle(Brand.muted).fixedSize(horizontal: false, vertical: true)
+        }
       }.frame(minWidth: 120, maxWidth: .infinity, alignment: .leading)
         .padding(16).background(Brand.card, in: RoundedRectangle(cornerRadius: 18))
     }.buttonStyle(.plain).accessibilityHint(
       "Open het \(window == "daily" ? "dagoverzicht" : "weekoverzicht")"
     )
     .accessibilityIdentifier("digest-\(window)")
-    .navigationDestination(isPresented: $showingDigest) {
-      DigestView(topic: topic, initialWindow: window)
-    }
     .task(id: "\(topic)|\(window)") {
       digest = nil
       error = nil

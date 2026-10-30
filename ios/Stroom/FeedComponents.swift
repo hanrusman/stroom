@@ -55,31 +55,34 @@ struct FeedCard: View {
           item.sourceName + (item.qualityScore.map { ", kwaliteit \($0.formatted()) op 10" } ?? "")
         )
         .accessibilityHint("Open bron, samenvatting en inzichten")
+      if let track = item.track {
+        TrackActions(track: track).padding(.horizontal, 20).padding(.bottom, 4)
+      }
       HStack(spacing: 10) {
-        if let track = item.track {
-          TrackActions(track: track)
+        if item.hasSummary == true || item.summary?.isEmpty == false {
+          Label("Samengevat", systemImage: "sparkles").font(.caption).foregroundStyle(Brand.blue)
         } else {
-          if item.hasSummary == true || item.summary?.isEmpty == false {
-            Label("Samengevat", systemImage: "sparkles").font(.caption).foregroundStyle(Brand.blue)
-          } else {
-            Label(
-              item.format == "video" ? "Bekijk bron en inzichten" : "Lees artikel",
-              systemImage: item.format == "video" ? "play.rectangle" : "text.alignleft"
-            )
-            .font(.caption).foregroundStyle(Brand.muted)
-          }
-          Spacer(minLength: 0)
-          Button {
-            Task { await store.setQueued(item, queued: !store.queuedIDs.contains(item.id)) }
-          } label: {
-            Image(
-              systemName: store.queuedIDs.contains(item.id)
-                ? "text.badge.checkmark" : "text.badge.plus"
-            )
-            .frame(width: 44, height: 44)
-          }.accessibilityLabel(store.queuedIDs.contains(item.id) ? "Uit wachtrij" : "In wachtrij")
-            .disabled(item.status == "archived" || store.changing.contains(item.id))
+          Label(
+            item.format == "video" ? "Bekijk bron en inzichten" : "Lees artikel",
+            systemImage: item.format == "video" ? "play.rectangle" : "text.alignleft"
+          )
+          .font(.caption).foregroundStyle(Brand.muted)
         }
+        Spacer(minLength: 0)
+        Button {
+          Task { await store.setQueued(item, queued: !store.queuedIDs.contains(item.id)) }
+        } label: {
+          Label(
+            "Wachtrij",
+            systemImage: store.queuedIDs.contains(item.id)
+              ? "text.badge.checkmark" : "text.badge.plus"
+          )
+          .font(.caption).frame(minWidth: 44, minHeight: 44)
+        }.accessibilityLabel(
+          store.queuedIDs.contains(item.id) ? "Uit leeswachtrij" : "In leeswachtrij"
+        )
+        .accessibilityHint("Gedeeld met de Stroom-website")
+        .disabled(item.status == "archived" || store.changing.contains(item.id))
       }.buttonStyle(.borderless).padding(.horizontal, 20).padding(.bottom, 10)
     }.background(Brand.card, in: RoundedRectangle(cornerRadius: 22))
       .clipShape(RoundedRectangle(cornerRadius: 22))
@@ -157,8 +160,10 @@ struct TrackActions: View {
         } label: {
           Image(
             systemName: player.queue.contains(where: { $0.id == track.id })
-              ? "checkmark" : "text.badge.plus")
+              ? "checkmark" : "text.line.last.and.arrowtriangle.forward")
         }.frame(minWidth: 44, minHeight: 44).accessibilityLabel("Speel hierna af")
+          .accessibilityValue(
+            player.queue.contains(where: { $0.id == track.id }) ? "Staat in Hierna" : "")
         if library.downloading.contains(track.id) {
           ProgressView().accessibilityLabel("Downloaden")
         } else if library.localURL(for: track) != nil {
@@ -188,6 +193,7 @@ struct ErrorNotice: View {
     VStack(alignment: .leading, spacing: 8) {
       Label(message, systemImage: "exclamationmark.circle").font(.callout)
       Button("Opnieuw proberen") { Task { await retry() } }.font(.callout.weight(.semibold))
+        .buttonStyle(.borderless)
     }.foregroundStyle(.secondary).padding(16).frame(maxWidth: .infinity, alignment: .leading)
       .background(Brand.card, in: RoundedRectangle(cornerRadius: 14))
   }

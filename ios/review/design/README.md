@@ -8,8 +8,9 @@ Onbewerkte screenshots van iPhone 17 Pro (iOS 26.3), met expliciete demodata.
 - `bibliotheek-*`: bewaarde inhoud en downloads, inclusief lege toestand.
 - `filters-*`: status, periode en formaat.
 - `wachtrij-licht`: toevoegen aan de gedeelde wachtrij.
+- `twee-wachtrijen`: afzonderlijke leeswachtrij- en Hierna-bediening op een podcastkaart.
 - `*-grote-tekst`: Dynamic Type op toegankelijkheidsniveau 2.
 
-Validatie: 33 unittests en 9 UI-tests geslaagd; de definitieve speler en de doorgifte van tekstgrootte naar sheets daarna afzonderlijk opnieuw gecontroleerd. De leverbare projectkopie compileert voor een generiek iOS-apparaat met signing uitgeschakeld. Dit bevestigt geen installatie of audio-/notificatiegedrag op een fysieke iPhone.
+Validatie: 33 unittests en 11 UI-tests geslaagd in één volledige run, inclusief de vijf reviewcorrecties. De leverbare projectkopie compileert voor een generiek iOS-apparaat met signing uitgeschakeld. Dit bevestigt geen installatie of audio-/notificatiegedrag op een fysieke iPhone.
 
 Zie [DESIGN.md](../../DESIGN.md) voor onderzoek en ontwerpkeuzes.

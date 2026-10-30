@@ -148,7 +148,7 @@ struct NowPlayingView: View {
                     player.removeFromQueue(at: IndexSet(integer: index))
                   } label: {
                     Image(systemName: "minus.circle").frame(width: 44, height: 44)
-                  }.accessibilityLabel("Verwijder uit wachtrij")
+                  }.accessibilityLabel("Verwijder uit Hierna: \(track.title)")
                 }
               }
             }
