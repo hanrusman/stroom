@@ -6,11 +6,18 @@ struct ItemLessonsView: View {
   @State private var lessons: [Lesson] = []
   @State private var loaded = false
   @State private var error: String?
+  @State private var operationError: String?
   @State private var distilling = false
   var isDistilling: Bool { distilling || store.aiTasks.contains("distill-\(id)") }
   var body: some View {
     VStack(alignment: .leading, spacing: 24) {
       if let error { ErrorNotice(message: error) { await load() } }
+      if let operationError {
+        ErrorNotice(message: operationError) {
+          self.operationError = nil
+          await load()
+        }
+      }
       if !loaded && error == nil { ProgressView() }
       if loaded && lessons.isEmpty {
         Text("Nog geen lessen bij dit item. Maak eerst een samenvatting.").foregroundStyle(
@@ -50,6 +57,7 @@ struct ItemLessonsView: View {
     store.aiTasks.insert(key)
     distilling = true
     error = nil
+    operationError = nil
     defer {
       distilling = false
       store.aiTasks.remove(key)
@@ -60,7 +68,7 @@ struct ItemLessonsView: View {
         "huygens/items/\(id)/lessons/distill", query: query, method: "POST")
       loaded = true
     } catch {
-      self.error =
+      self.operationError =
         "Destilleren niet afgerond: \(error.localizedDescription). Vernieuw de lessen voordat je opnieuw probeert."
     }
   }

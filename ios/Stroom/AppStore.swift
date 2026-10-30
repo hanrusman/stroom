@@ -31,6 +31,7 @@ final class AppStore: ObservableObject {
   @Published var error: String?
   @Published var tab = 0
   @Published var openItemID: String?
+  @Published var incomingURL: String?
   @Published var lastSync: Date?
   @Published var offline = false
   @Published var jobsError: String?
@@ -49,6 +50,22 @@ final class AppStore: ObservableObject {
     server = UserDefaults.standard.string(forKey: "server") ?? "https://stroom.c4w.nl"
     if let base = try? ServerAddress.parse(server) { api = APIClient(baseURL: base) }
     if let api { player.configure(api: api, library: library) }
+    player.onFinished = { [weak self] track in
+      guard let self, UserDefaults.standard.bool(forKey: "archiveAfterListening"),
+        UUID(uuidString: track.id) != nil
+      else { return }
+      Task { @MainActor in
+        let account = self.user?.id
+        guard account != nil, let api = self.api else { return }
+        do {
+          let item = try await api.item(track.id)
+          guard self.user?.id == account else { return }
+          await self.archive(item)
+        } catch {
+          self.actionError = "Automatisch archiveren mislukt: \(error.localizedDescription)"
+        }
+      }
+    }
   }
   func start() async {
     guard !started else { return }
@@ -76,6 +93,9 @@ final class AppStore: ObservableObject {
         lastSync = cache.date
         offline = true
         topicFeeds = cache.topicFeeds ?? [:]
+        selectInitialTopic()
+        if topicFeeds[selectedTopic] == nil { selectedTopic = "__all__" }
+        player.restoreHistory(tracks: allKnownItems.compactMap(\.track) + library.downloads)
       } else {
         self.error = error.localizedDescription
       }
@@ -94,6 +114,15 @@ final class AppStore: ObservableObject {
         old != "\(base.absoluteString)|\(account.id)"
       {
         player.stop()
+        player.clearHistory()
+        items = []
+        jobs = []
+        jobsError = nil
+        queueItems = []
+        queuedIDs = []
+        mutations = [:]
+        topicFeeds = [:]
+        topics = []
         try library.clear()
         notifications.reset()
         try? FileManager.default.removeItem(at: cacheURL)
@@ -138,6 +167,8 @@ final class AppStore: ObservableObject {
         jobs = try await api.request("podcast-tests")
         jobsError = nil
       } catch { jobsError = error.localizedDescription }
+      player.restoreHistory(
+        tracks: allKnownItems.compactMap(\.track) + library.downloads + jobs.compactMap(\.track))
       do { try await notifications.check(api: api) } catch {
         notifications.schedulingMessage =
           "De laatste meldingencontrole is mislukt: \(error.localizedDescription)"
@@ -159,6 +190,7 @@ final class AppStore: ObservableObject {
     do {
       try await api.logout()
       player.stop()
+      player.clearHistory()
       try library.clear()
       notifications.reset()
       try? FileManager.default.removeItem(at: cacheURL)

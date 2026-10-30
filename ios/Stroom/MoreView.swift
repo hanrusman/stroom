@@ -13,10 +13,23 @@ struct MoreView: View {
   var body: some View {
     List {
       Section("Verder ontdekken") {
-        webLink("Tips uit podcasts en video’s", symbol: "lightbulb", query: ["tips": "1"])
-        webLink("Alle lessen en lesoverzichten", symbol: "book.closed", query: ["lessons": "1"])
+        NavigationLink {
+          TipsView()
+        } label: {
+          Label("Tips uit podcasts en video’s", systemImage: "lightbulb")
+        }
+        NavigationLink {
+          AllLessonsView()
+        } label: {
+          Label("Alle lessen", systemImage: "book.closed")
+        }
         webLink("Podcast maken uit tekst", symbol: "waveform", query: ["podcast": "1"])
-        webLink("Content insturen / volledige website", symbol: "tray.and.arrow.down", query: [:])
+        NavigationLink {
+          SubmitView()
+        } label: {
+          Label("Content insturen", systemImage: "tray.and.arrow.down")
+        }
+        webLink("Volledige website", symbol: "globe", query: [:])
       }
       Section {
         webLink(
@@ -29,7 +42,7 @@ struct MoreView: View {
         }
       } footer: {
         Text(
-          "De uitgebreide Stroom-functies openen hier binnen de app, met je bestaande sessie. Je kunt daar ook lessen verdiepen, topics aanpassen en taken doorsturen."
+          "Podcastgeneratie en beheer openen de volledige Stroom-website binnen de app, met je bestaande sessie."
         )
       }
     }.navigationTitle("Meer Stroom").scrollContentBackground(.hidden).background(Brand.paper)

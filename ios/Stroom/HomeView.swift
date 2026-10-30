@@ -14,6 +14,7 @@ struct FeedScreen: View {
   @State private var format = "all"
   @State private var showFilters = false
   @State private var loadedSelection = ""
+  @State private var requestID = UUID()
   @State private var archiveTarget: HuygensRail?
   @State private var archiving = false
 
@@ -60,6 +61,7 @@ struct FeedScreen: View {
       if !query.trimmingCharacters(in: .whitespaces).isEmpty {
         SearchResultsView(query: query, podcastsOnly: podcastsOnly)
       } else {
+        if podcastsOnly { ContinueListeningSection() }
         if !podcastsOnly && store.selectedTopic != "__all__" && !store.selectedTopic.isEmpty {
           Section {
             DigestPreview(topic: store.selectedTopic, window: "daily")
@@ -101,7 +103,7 @@ struct FeedScreen: View {
     .navigationTitle(podcastsOnly ? "Luisteren" : "Stroom").navigationBarTitleDisplayMode(.inline)
     .searchable(text: $query, prompt: "Zoek in Stroom")
     .refreshable { await reload() }
-    .task(id: selection) { await loadTopic() }
+    .task(id: selection + "|" + String(describing: store.lastSync)) { await loadTopic() }
     .confirmationDialog(
       "Deze selectie archiveren?",
       isPresented: Binding(get: { archiveTarget != nil }, set: { if !$0 { archiveTarget = nil } }),
@@ -199,13 +201,15 @@ struct FeedScreen: View {
   func loadTopic() async {
     guard !store.selectedTopic.isEmpty else { return }
     let ticket = selection
+    let request = UUID()
+    requestID = request
     loading = true
     error = nil
     if loadedSelection != ticket {
       filtered = []
       more = false
     }
-    defer { if ticket == selection { loading = false } }
+    defer { if request == requestID { loading = false } }
     if store.demo {
       filtered = store.items.filter {
         (!podcastsOnly || $0.isPodcast) && (format == "all" || $0.format == format)
@@ -214,23 +218,30 @@ struct FeedScreen: View {
       return
     }
     guard let api = store.api else { return }
+    if store.offline && store.selectedTopic == "__all__" && filter == "all"
+      && window == "all" && format == "all" && filtered.isEmpty
+    {
+      filtered = store.items.filter { !podcastsOnly || $0.isPodcast }
+    }
     do {
       if isRanked {
         let topic: HuygensTopic = try await api.request("huygens/\(store.selectedTopic)")
         try Task.checkCancellation()
-        guard ticket == selection else { return }
+        guard ticket == selection && request == requestID else { return }
         store.remember(topic)
       } else {
         let rows = try await fetch(api: api, offset: 0)
         try Task.checkCancellation()
-        guard ticket == selection else { return }
+        guard ticket == selection && request == requestID else { return }
         filtered = rows
         offset = rows.count
         more = rows.count == 100
       }
       loadedSelection = ticket
     } catch {
-      if !Task.isCancelled && ticket == selection { self.error = error.localizedDescription }
+      if !Task.isCancelled && ticket == selection && request == requestID {
+        self.error = error.localizedDescription
+      }
     }
   }
   func fetch(api: APIClient, offset: Int) async throws -> [FeedItem] {
@@ -242,15 +253,19 @@ struct FeedScreen: View {
   func loadMore() async {
     guard let api = store.api, !loading else { return }
     let ticket = selection
+    let request = UUID()
+    requestID = request
     loading = true
-    defer { if ticket == selection { loading = false } }
+    defer { if request == requestID { loading = false } }
     do {
       let rows = try await fetch(api: api, offset: offset)
-      guard ticket == selection else { return }
+      guard ticket == selection && request == requestID else { return }
       let existing = Set(filtered.map(\.id))
       filtered += rows.filter { !existing.contains($0.id) }
       offset += rows.count
       more = rows.count == 100
-    } catch { if ticket == selection { self.error = error.localizedDescription } }
+    } catch {
+      if ticket == selection && request == requestID { self.error = error.localizedDescription }
+    }
   }
 }

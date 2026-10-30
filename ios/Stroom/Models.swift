@@ -310,6 +310,18 @@ struct ScoreCalibration: Codable, Hashable {
   let days: Int
 }
 
+struct ListeningRecord: Codable, Identifiable {
+  let track: AudioTrack
+  let position: Double
+  let duration: Double
+  let updatedAt: Date
+  var id: String { track.id }
+  var canResume: Bool {
+    position > 5 && position.isFinite && (duration <= 0 || position < duration - 5)
+  }
+  var remaining: Double? { duration > 0 ? max(0, duration - position) : nil }
+}
+
 @propertyWrapper
 struct LossyOptional<Value: Codable & Hashable>: Codable, Hashable {
   var wrappedValue: Value?

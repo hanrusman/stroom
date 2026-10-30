@@ -38,6 +38,7 @@ struct ItemDetailView: View {
             Text(topics.joined(separator: " · ")).font(.caption).foregroundStyle(Brand.blue)
           }
           if let track = item.track { TrackActions(track: track) }
+          if item.format == "video" { VideoPreview(item: item) }
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 20) {
               Button(
