@@ -26,8 +26,8 @@ struct MarkdownBody: View {
             )
             .font(
               heading
-                ? .system(.title3, design: .serif).weight(.semibold)
-                : readingSize.map { .system(size: $0, design: .serif) } ?? .body
+                ? Brand.editorial(25, relativeTo: .title2).weight(.semibold)
+                : Brand.editorial(CGFloat(readingSize ?? 21), relativeTo: .body)
             )
             .lineSpacing(readingSize.map { $0 * 0.4 } ?? 5).frame(
               maxWidth: .infinity, alignment: .leading
@@ -47,21 +47,14 @@ struct ArticleBody: View {
       if let artwork = item.artwork {
         Artwork(raw: artwork).frame(height: 200).clipShape(RoundedRectangle(cornerRadius: 18))
       }
-      if let quote = item.openingQuote {
-        HStack(alignment: .top, spacing: 16) {
-          Rectangle().fill(Brand.blue.opacity(0.4)).frame(width: 2)
-          Text(quote).font(.system(size: fontSize, design: .serif).italic()).foregroundStyle(
-            .secondary)
-        }.fixedSize(horizontal: false, vertical: true)
-      }
       HStack {
-        Text("Leesgrootte").font(.caption).foregroundStyle(.secondary)
+        Text("LEESGROOTTE").font(Brand.meta).foregroundStyle(.secondary)
         Spacer()
         Button("A−") { fontSize = max(18, fontSize - 1) }.accessibilityLabel("Kleinere letters")
           .disabled(fontSize <= 18)
         Button("A+") { fontSize = min(28, fontSize + 1) }.accessibilityLabel("Grotere letters")
           .disabled(fontSize >= 28)
-      }.buttonStyle(.bordered).frame(minHeight: 44)
+      }.buttonStyle(.bordered).controlSize(.large).frame(minHeight: 44)
       if let text = item.sourceBody { MarkdownBody(text: text, readingSize: fontSize) }
     }
   }

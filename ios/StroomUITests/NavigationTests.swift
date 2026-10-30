@@ -70,13 +70,15 @@ final class NavigationTests: XCTestCase {
     app.buttons["topic-science"].tap()
     app.swipeUp()
     app.buttons["De stille revolutie in onze oceanen"].tap()
+    app.buttons["reader-actions"].tap()
     app.buttons["Plan"].tap()
     app.buttons["Later (geen datum)"].tap()
     XCTAssertTrue(app.staticTexts["Later · geen datum"].waitForExistence(timeout: 5))
+    app.buttons["reader-actions"].tap()
     app.buttons["Plan"].tap()
     app.buttons["Wis planning"].tap()
     XCTAssertFalse(app.staticTexts["Later · geen datum"].exists)
-    app.buttons["Plan"].swipeLeft()
+    app.buttons["reader-actions"].tap()
     app.buttons["Score en onderwerpen"].tap()
     XCTAssertTrue(app.buttons["Score opslaan"].waitForExistence(timeout: 5))
     app.buttons["Score opslaan"].tap()
@@ -90,6 +92,7 @@ final class NavigationTests: XCTestCase {
     app.buttons["curation-done"].tap()
     app.buttons["Gereed"].tap()
     app.swipeUp()
+    app.buttons["Opties voor artikelen"].tap()
     app.buttons["archive-rail-article"].tap()
     app.buttons["Archiveer 1 artikelen"].tap()
     XCTAssertTrue(app.staticTexts["1 items gearchiveerd"].waitForExistence(timeout: 5))
@@ -144,7 +147,7 @@ final class NavigationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Stel eerst een betere vraag"].waitForExistence(timeout: 5))
     app.swipeUp()
     app.buttons["Wat verandert er als AI echt met je meedenkt?"].tap()
-    app.buttons["Plan"].swipeLeft()
+    app.buttons["reader-actions"].tap()
     app.buttons["Score en onderwerpen"].tap()
     XCTAssertTrue(app.buttons["Score opslaan"].waitForExistence(timeout: 5))
     let shot = XCTAttachment(screenshot: app.screenshot())
@@ -157,7 +160,7 @@ final class NavigationTests: XCTestCase {
     let app = XCUIApplication()
     app.launchArguments = ["--demo", "--reset-topic"]
     app.launch()
-    XCTAssertTrue(app.staticTexts["Volg je nieuwsgierigheid."].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.buttons["topic-ai"].waitForExistence(timeout: 10))
     let home = XCTAttachment(screenshot: app.screenshot())
     home.name = "Stroom-feed"
     home.lifetime = .keepAlways
@@ -176,9 +179,9 @@ final class NavigationTests: XCTestCase {
         .waitForExistence(timeout: 5))
     app.buttons["Gereed"].tap()
     app.tabBars.buttons["Luisteren"].tap()
-    XCTAssertTrue(app.staticTexts["Goed gezelschap voor onderweg."].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["OP JOUW RITME"].waitForExistence(timeout: 5))
     app.tabBars.buttons["Bibliotheek"].tap()
-    XCTAssertTrue(app.staticTexts["Jouw eigen verzameling"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.staticTexts["Jouw verzameling"].waitForExistence(timeout: 5))
     app.tabBars.buttons["Meer"].tap()
     app.buttons["Instellingen en meldingen"].tap()
     XCTAssertTrue(app.staticTexts["Maak ruimte voor wat telt."].waitForExistence(timeout: 5))
@@ -204,5 +207,161 @@ final class NavigationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["Ruimte voor je volgende idee"].waitForExistence(timeout: 5))
     app.buttons["Herstel"].tap()
     XCTAssertTrue(app.buttons[title].waitForExistence(timeout: 5))
+  }
+}
+
+extension NavigationTests {
+  @MainActor func testListeningDesignAndPlayerPresentation() throws {
+    for mode in ["--light", "--dark"] {
+      let app = XCUIApplication()
+      app.launchArguments = ["--demo", "--reset-topic", "--design-preview", mode]
+      app.launch()
+      XCTAssertTrue(app.tabBars.buttons["Luisteren"].waitForExistence(timeout: 10))
+      app.tabBars.buttons["Luisteren"].tap()
+      XCTAssertTrue(app.buttons["Verder luisteren"].waitForExistence(timeout: 5))
+      let listening = XCTAttachment(screenshot: app.screenshot())
+      listening.name = "Design-luisteren-" + mode
+      listening.lifetime = .keepAlways
+      add(listening)
+      app.buttons["Open speler: Wat verandert er als AI echt met je meedenkt?"].tap()
+      XCTAssertTrue(app.sliders["Luisterpositie"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.buttons["15 seconden terug"].exists)
+      XCTAssertTrue(
+        app.buttons["Afspeelsnelheid"].isHittable,
+        "Tempo moet zonder scrollen bereikbaar zijn")
+      XCTAssertTrue(app.buttons["Slaaptimer"].isHittable)
+      // Presentation can be hittable before its rendered layers finish transitioning.
+      Thread.sleep(forTimeInterval: 1)
+      let player = XCTAttachment(screenshot: app.screenshot())
+      player.name = "Design-speler-" + mode
+      player.lifetime = .keepAlways
+      add(player)
+      app.buttons["Gereed"].tap()
+      XCTAssertTrue(app.tabBars.buttons["Luisteren"].exists)
+      app.terminate()
+    }
+  }
+  @MainActor func testEditorialDesignFiltersAndLargeText() throws {
+    for mode in ["--light", "--dark", "--large-text"] {
+      let app = XCUIApplication()
+      app.launchArguments = ["--demo", "--reset-topic", mode]
+      app.launch()
+      XCTAssertTrue(app.buttons["topic-ai"].waitForExistence(timeout: 10))
+      let home = XCTAttachment(screenshot: app.screenshot())
+      home.name = "Design-home-" + mode
+      home.lifetime = .keepAlways
+      add(home)
+      if mode != "--large-text" {
+        XCTAssertTrue(
+          app.buttons["Wat verandert er als AI echt met je meedenkt?"].isHittable,
+          "De eerste bron moet bereikbaar zijn zonder eerst door bediening te scrollen")
+        for (window, period) in [("daily", "Dag"), ("weekly", "Week")] {
+          XCTAssertTrue(app.staticTexts["digest-excerpt-\(window)"].exists)
+          app.buttons["digest-\(window)"].tap()
+          XCTAssertTrue(app.staticTexts["Het grotere plaatje"].waitForExistence(timeout: 5))
+          XCTAssertTrue(app.segmentedControls.buttons[period].isSelected)
+          app.swipeUp()
+          app.swipeDown()
+          XCTAssertTrue(app.navigationBars["Overzichten"].exists)
+          app.navigationBars["Overzichten"].buttons.element(boundBy: 0).tap()
+        }
+      }
+      app.buttons["Filters"].tap()
+      XCTAssertTrue(app.buttons["Wis alle filters"].waitForExistence(timeout: 5))
+      let filters = XCTAttachment(screenshot: app.screenshot())
+      filters.name = "Design-filters-" + mode
+      filters.lifetime = .keepAlways
+      add(filters)
+      app.buttons["Wis alle filters"].tap()
+      app.buttons["Gereed"].tap()
+      app.tabBars.buttons["Bibliotheek"].tap()
+      XCTAssertTrue(app.staticTexts["Jouw verzameling"].waitForExistence(timeout: 5))
+      XCTAssertTrue(app.buttons["Alle lessen"].exists)
+      let library = XCTAttachment(screenshot: app.screenshot())
+      library.name = "Design-bibliotheek-" + mode
+      library.lifetime = .keepAlways
+      add(library)
+      for (button, title, content) in [
+        ("Tips", "Tips", "Een wereld vol vragen"),
+        ("Alle lessen", "Lessen", "Stel eerst een betere vraag"),
+      ] {
+        app.buttons[button].tap()
+        XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[content].exists)
+        app.navigationBars[title].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.staticTexts["Jouw verzameling"].exists)
+      }
+      if mode == "--large-text" {
+        app.tabBars.buttons["Stroom"].tap()
+        let article = app.buttons["Wat verandert er als AI echt met je meedenkt?"]
+        for _ in 0..<6 {
+          if article.isHittable { break }
+          app.swipeUp()
+        }
+        article.tap()
+        XCTAssertTrue(app.buttons["reader-actions"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["Bewaren"].isHittable)
+        let reader = XCTAttachment(screenshot: app.screenshot())
+        reader.name = "Design-reader-grote-tekst"
+        reader.lifetime = .keepAlways
+        add(reader)
+      }
+      app.terminate()
+    }
+  }
+
+  @MainActor func testHeadingDoesNotClearActiveFilters() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic"]
+    app.launch()
+    XCTAssertTrue(app.buttons["Filters"].waitForExistence(timeout: 10))
+    app.buttons["Filters"].tap()
+    app.buttons["filter-period"].tap()
+    app.buttons["7 dagen"].tap()
+    app.buttons["Gereed"].tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].waitForExistence(timeout: 5))
+    app.staticTexts["AI & technologie"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].exists)
+    app.staticTexts["JOUW SELECTIE"].tap()
+    XCTAssertTrue(app.staticTexts["1 filters actief"].exists)
+    app.buttons["Wis filters"].firstMatch.tap()
+    XCTAssertFalse(app.staticTexts["1 filters actief"].exists)
+    app.terminate()
+  }
+
+  @MainActor func testReadingQueueAndPlayNextStayIndependent() throws {
+    let app = XCUIApplication()
+    app.launchArguments = ["--demo", "--reset-topic", "--design-preview"]
+    app.launch()
+    XCTAssertTrue(app.tabBars.buttons["Luisteren"].waitForExistence(timeout: 10))
+    app.tabBars.buttons["Luisteren"].tap()
+    let next = app.buttons["Speel hierna af"]
+    for _ in 0..<5 {
+      if next.isHittable { break }
+      app.swipeUp()
+    }
+    XCTAssertTrue(next.isHittable)
+    next.tap()
+    XCTAssertEqual(next.value as? String, "Staat in Hierna")
+    app.buttons["In leeswachtrij"].firstMatch.tap()
+    XCTAssertTrue(app.staticTexts["Toegevoegd aan je wachtrij"].waitForExistence(timeout: 5))
+    let queues = XCTAttachment(screenshot: app.screenshot())
+    queues.name = "Review-twee-wachtrijen"
+    queues.lifetime = .keepAlways
+    add(queues)
+    app.buttons["Open speler: Wat verandert er als AI echt met je meedenkt?"].tap()
+    let remove = app.buttons["Verwijder uit Hierna: Wat verandert er als AI echt met je meedenkt?"]
+    for _ in 0..<4 {
+      if remove.isHittable { break }
+      app.swipeUp()
+    }
+    XCTAssertTrue(remove.isHittable)
+    remove.tap()
+    XCTAssertFalse(remove.exists)
+    app.buttons["Gereed"].tap()
+    app.tabBars.buttons["Wachtrij"].tap()
+    XCTAssertTrue(
+      app.buttons["Wat verandert er als AI echt met je meedenkt?"].waitForExistence(timeout: 5))
+    app.terminate()
   }
 }
