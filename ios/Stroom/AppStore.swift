@@ -24,6 +24,7 @@ final class AppStore: ObservableObject {
   private var queueVersion = 0
   private var undoItem: FeedItem?
   private var undoWasQueued = false
+  @Published var aiTasks: Set<String> = []
   @Published var busy = false
   @Published var starting = true
   @Published var error: String?
@@ -320,6 +321,16 @@ final class AppStore: ObservableObject {
         id: "demo-3", title: "Een goed idee begint met een omweg",
         description: "Over aandacht, wandelen en de kunst van het nietsdoen.",
         sourceName: "Nooit meer slapen", format: "podcast", qualityScore: 9.1),
+    ]
+    items[0].summaryModel = "Voorbeeldmodel"
+    items[0].transcriptSegments = [
+      TranscriptSegment(
+        start: 0, end: 30, text: "Goede technologie begint met betere vragen.",
+        speaker: "Presentator"),
+      TranscriptSegment(
+        start: 30, end: 65,
+        text: "Nieuwsgierigheid helpt ons om verder te kijken dan het eerste antwoord.",
+        speaker: "Gast"),
     ]
     for topic in topics {
       let selected = topic.slug == "ai" ? [items[0], items[2]] : [items[1]]
