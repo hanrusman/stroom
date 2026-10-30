@@ -5,57 +5,99 @@ struct LibraryView: View {
   @EnvironmentObject var store: AppStore
   @EnvironmentObject var player: AudioPlayer
   @EnvironmentObject var library: LibraryStore
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var saved: [FeedItem] = []
   @State private var error: String?
+  @State private var loading = true
+  @State private var selection = "saved"
   var body: some View {
     List {
-      Section {
-        Text("Jouw eigen verzameling").font(.system(.title, design: .serif)).listRowBackground(
-          Color.clear)
-      }
-      if let error { Section { Text(error).font(.callout).foregroundStyle(.red) } }
-      Section("Offline beschikbaar · \(library.downloads.count)") {
+      VStack(alignment: .leading, spacing: 18) {
+        EditorialHeader(eyebrow: "Om bij terug te komen", title: "Jouw verzameling")
+        let layout =
+          typeSize.isAccessibilitySize
+          ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(spacing: 12))
+        layout {
+          NavigationLink {
+            AllLessonsView()
+          } label: {
+            Label("Alle lessen", systemImage: "book.closed").frame(
+              maxWidth: .infinity, minHeight: 48)
+          }
+          NavigationLink {
+            TipsView()
+          } label: {
+            Label("Tips", systemImage: "lightbulb").frame(maxWidth: .infinity, minHeight: 48)
+          }
+        }.font(.subheadline).buttonStyle(.bordered).tint(Brand.blue)
+        Picker("Verzameling", selection: $selection) {
+          Text("Bewaard").tag("saved")
+          Text("Downloads (\(library.downloads.count))").tag("downloads")
+        }.pickerStyle(.segmented)
+      }.editorialRow()
+      if let error { ErrorNotice(message: error) { await load() }.editorialRow() }
+      if selection == "downloads" {
         if library.downloads.isEmpty {
-          Text("Download een podcast met het pijltje. Daarna luister je ook zonder internet.")
-            .foregroundStyle(.secondary)
+          ContentUnavailableView(
+            "Ook zonder internet", systemImage: "arrow.down.circle",
+            description: Text(
+              "Download een podcast via de downloadknop naast Luister. Je vindt hem daarna hier.")
+          )
+          .editorialRow()
         }
         ForEach(library.downloads) { track in
-          VStack(alignment: .leading, spacing: 10) {
-            Text(track.title).font(.headline)
-            Text(track.author).font(.caption).foregroundStyle(.secondary)
+          VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 14) {
+              Artwork(raw: track.artwork, symbol: "headphones").frame(width: 64, height: 64)
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+              VStack(alignment: .leading, spacing: 8) {
+                Text(track.title).font(Brand.editorial(23))
+                Text(track.author).font(Brand.meta).foregroundStyle(Brand.muted)
+              }
+            }
             TrackActions(track: track)
-          }
-          .swipeActions {
-            Button("Verwijder download", role: .destructive) {
-              do {
-                if player.current?.id == track.id { player.stop() }
-                try library.remove(track)
-              } catch { self.error = error.localizedDescription }
+          }.padding(20).background(Brand.card, in: RoundedRectangle(cornerRadius: 20))
+            .editorialRow()
+            .swipeActions {
+              Button("Verwijder download", role: .destructive) {
+                do {
+                  if player.current?.id == track.id { player.stop() }
+                  try library.remove(track)
+                } catch { self.error = error.localizedDescription }
+              }
             }
+        }
+      } else {
+        let rows = saved.map(store.current).filter { $0.status == "pinned" }
+        if rows.isEmpty && loading {
+          FeedSkeleton().editorialRow()
+        } else if rows.isEmpty && error == nil {
+          ContentUnavailableView {
+            Label("Een plek voor blijvers", systemImage: "bookmark")
+          } description: {
+            Text(
+              "Bewaar een artikel of aflevering met het bladwijzertje. Je verzameling blijft gelijk op de website en je iPhone."
+            )
+          } actions: {
+            Button("Ontdek in Stroom") { store.tab = 0 }.buttonStyle(.borderedProminent).tint(
+              Brand.navy)
           }
+          .editorialRow()
         }
+        ForEach(rows) { item in FeedCard(item: item).editorialRow().stroomActions(item) }
       }
-      Section("Bewaard in Stroom") {
-        if saved.isEmpty {
-          Text("Bewaar een artikel of aflevering via het bladwijzertje.").foregroundStyle(
-            .secondary)
-        }
-        ForEach(saved.map(store.current).filter { $0.status == "pinned" }) { item in
-          Button {
-            store.openItemID = item.id
-          } label: {
-            VStack(alignment: .leading, spacing: 6) {
-              Text(item.title).foregroundStyle(.primary)
-              Text(item.sourceName).font(.caption).foregroundStyle(.secondary)
-            }
-          }.stroomActions(item)
-        }
-      }
-    }.scrollContentBackground(.hidden).background(Brand.paper).navigationTitle("Bibliotheek")
+    }.listStyle(.plain).scrollContentBackground(.hidden).background(Brand.paper)
+      .navigationTitle("Bibliotheek").navigationBarTitleDisplayMode(.inline)
       .task { await load() }.refreshable { await load() }
   }
   func load() async {
-    guard !store.demo, let api = store.api else { return }
+    loading = true
+    defer { loading = false }
+    if store.demo {
+      saved = store.allKnownItems.filter { $0.status == "pinned" }
+      return
+    }
+    guard let api = store.api else { return }
     do {
       saved = try await api.items(saved: true, limit: 500)
       error = nil

@@ -7,7 +7,7 @@ struct ContinueListeningSection: View {
       Section("Verder luisteren") {
         ForEach(player.listening.filter(\.canResume)) { record in
           VStack(alignment: .leading, spacing: 10) {
-            Text(record.track.title).font(.system(.headline, design: .serif))
+            Text(record.track.title).font(Brand.editorial(23))
             Text(record.track.author).font(.caption).foregroundStyle(.secondary)
             if let remaining = record.remaining {
               ProgressView(value: min(1, record.position / record.duration))
@@ -19,8 +19,9 @@ struct ContinueListeningSection: View {
             }
             Button("Verder luisteren", systemImage: "play.fill") {
               player.play(record.track, at: record.position)
-            }
-          }.padding(.vertical, 8)
+            }.buttonStyle(.borderedProminent).tint(Brand.navy).controlSize(.large)
+          }.padding(20).background(Brand.card, in: RoundedRectangle(cornerRadius: 20))
+            .editorialRow()
         }
       }
     }

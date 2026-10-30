@@ -45,6 +45,21 @@ final class AudioPlayer: ObservableObject {
   private var wantsPlayback = false
   private var resumeAfterInterruption = false
 
+  /// UI-test fixture only. Does not open a media URL or persist listening history.
+  func loadDesignPreview() {
+    let arguments = ProcessInfo.processInfo.arguments
+    guard arguments.contains("--demo"), arguments.contains("--design-preview") else { return }
+    let track = AudioTrack(
+      id: "demo-1", title: "Wat verandert er als AI echt met je meedenkt?",
+      author: "De Technoloog", url: "https://example.invalid/preview.mp3", artwork: nil)
+    current = track
+    elapsed = 742
+    duration = 2520
+    listening = [
+      ListeningRecord(track: track, position: elapsed, duration: duration, updatedAt: Date())
+    ]
+  }
+
   init() {
     timer = player.addPeriodicTimeObserver(
       forInterval: CMTime(seconds: 1, preferredTimescale: 600), queue: .main

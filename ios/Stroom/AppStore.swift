@@ -475,6 +475,7 @@ final class AppStore: ObservableObject {
     }
     selectInitialTopic()
     lastSync = Date()
+    player.loadDesignPreview()
   }
 }
 private struct FeedCache: Codable {

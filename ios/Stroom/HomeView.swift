@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FeedScreen: View {
   @EnvironmentObject var store: AppStore
+  @Environment(\.dynamicTypeSize) private var typeSize
   let podcastsOnly: Bool
   @State private var query = ""
   @State private var filtered: [FeedItem] = []
@@ -24,7 +25,7 @@ struct FeedScreen: View {
   var selection: String { "\(store.selectedTopic)|\(filter)|\(window)|\(format)" }
   var rails: [HuygensRail] {
     (store.topicFeeds[store.selectedTopic]?.orderedRails ?? []).filter {
-      !podcastsOnly || $0.format == "podcast"
+      !$0.items.isEmpty && (!podcastsOnly || $0.format == "podcast")
     }
   }
   var visible: [FeedItem] {
@@ -34,76 +35,148 @@ struct FeedScreen: View {
         && (filter != "scheduled" || $0.scheduledFor != nil)
     }
   }
+  var activeFilters: Int { [filter, window, format].filter { $0 != "all" }.count }
+  var topicName: String {
+    store.topics.first { $0.slug == store.selectedTopic }?.name ?? "Alle onderwerpen"
+  }
   var body: some View {
     List {
-      Section {
-        Text(podcastsOnly ? "Goed gezelschap voor onderweg." : "Volg je nieuwsgierigheid.")
-          .font(.system(.title2, design: .serif).weight(.medium))
+      VStack(alignment: .leading, spacing: 16) {
+        EditorialHeader(
+          eyebrow: podcastsOnly ? "Op jouw ritme" : "Jouw selectie",
+          title: podcastsOnly ? "Luisteren" : topicName)
+        topicChips
         if store.demo {
-          Text("Voorbeeldweergave · geen live gegevens").font(.caption).foregroundStyle(.secondary)
+          Text("Voorbeeldweergave · geen live gegevens").font(Brand.meta).foregroundStyle(
+            Brand.muted)
         }
         if store.offline {
           Label("Offline · laatst opgehaalde inhoud", systemImage: "wifi.slash").font(.callout)
         }
-        topicChips
-        Button {
-          showFilters.toggle()
-        } label: {
-          Label(
-            showFilters
-              ? "Filters verbergen"
-              : (isRanked ? "Filter op status of periode" : "Filters aanpassen"),
-            systemImage: "line.3.horizontal.decrease")
-        }.font(.callout)
-        if showFilters { filters }
+        if activeFilters > 0 {
+          HStack {
+            Label("\(activeFilters) filters actief", systemImage: "line.3.horizontal.decrease")
+              .font(.subheadline)
+            Spacer()
+            Button("Wis filters") { resetFilters() }.frame(minHeight: 44)
+          }
+        }
         if let error { ErrorNotice(message: error) { await reload() } }
-      }.listRowBackground(Color.clear)
+      }.editorialRow()
       if !query.trimmingCharacters(in: .whitespaces).isEmpty {
         SearchResultsView(query: query, podcastsOnly: podcastsOnly)
       } else {
         if podcastsOnly { ContinueListeningSection() }
         if !podcastsOnly && store.selectedTopic != "__all__" && !store.selectedTopic.isEmpty {
-          Section {
-            DigestPreview(topic: store.selectedTopic, window: "daily")
-            DigestPreview(topic: store.selectedTopic, window: "weekly")
-          }.listRowBackground(Brand.card)
+          Group {
+            if typeSize.isAccessibilitySize {
+              VStack(spacing: 12) { digestLinks }
+            } else {
+              HStack(alignment: .top, spacing: 12) { digestLinks }
+            }
+          }.editorialRow()
         }
-        if loading { ProgressView().frame(maxWidth: .infinity) }
+        if loading && (isRanked ? rails.isEmpty : visible.isEmpty) {
+          FeedSkeleton().editorialRow()
+          FeedSkeleton().editorialRow()
+        }
         if isRanked {
           ForEach(rails) { rail in
-            Section(rail.title) {
-              let rows = rail.items.map(store.current).filter { $0.status != "archived" }
-              if rows.isEmpty {
-                Text("Geen \(rail.title.lowercased()) in dit onderwerp.").font(.callout)
-                  .foregroundStyle(.secondary)
-              }
+            let rows = rail.items.map(store.current).filter { $0.status != "archived" }
+            Section {
               ForEach(rows) { item in card(item) }
-              if !rows.isEmpty {
-                Button("Archiveer alle en laad nieuwe", systemImage: "archivebox") {
-                  archiveTarget = HuygensRail(format: rail.format, items: rows)
-                }.disabled(archiving).accessibilityIdentifier("archive-rail-\(rail.format)")
+              if rows.isEmpty && !loading {
+                Text("Je bent bij. Nieuwe \(rail.title.lowercased()) verschijnen hier.")
+                  .font(.subheadline).foregroundStyle(Brand.muted).editorialRow()
               }
+            } header: {
+              HStack {
+                SectionHeading(title: rail.title, count: rows.count)
+                Spacer()
+                if !rows.isEmpty {
+                  Menu {
+                    Button("Archiveer alle en laad nieuwe", systemImage: "archivebox") {
+                      archiveTarget = HuygensRail(format: rail.format, items: rows)
+                    }.disabled(archiving).accessibilityIdentifier("archive-rail-\(rail.format)")
+                  } label: {
+                    Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(
+                      Rectangle())
+                  }.accessibilityLabel("Opties voor \(rail.title.lowercased())")
+                }
+              }.padding(.top, 14).textCase(nil)
             }
           }
+          if rails.isEmpty && !loading && error == nil {
+            ContentUnavailableView(
+              "Nog geen selectie", systemImage: "water.waves",
+              description: Text("Kies een ander onderwerp of bekijk alle onderwerpen.")
+            )
+            .editorialRow()
+          }
         } else {
-          Section("Gefilterde selectie") {
+          Section {
             ForEach(visible) { item in card(item) }
             if visible.isEmpty && !loading {
-              ContentUnavailableView(
-                "Nog niets hier", systemImage: "water.waves",
-                description: Text("Kies een ander onderwerp of filter."))
+              ContentUnavailableView {
+                Label("Geen resultaten", systemImage: "line.3.horizontal.decrease")
+              } description: {
+                Text("Probeer een ander onderwerp of verruim je filters.")
+              } actions: {
+                Button("Wis filters") { resetFilters() }
+              }.editorialRow()
             }
-            if more { Button("Meer ophalen") { Task { await loadMore() } }.disabled(loading) }
+            if more {
+              Button("Meer ophalen") { Task { await loadMore() } }.disabled(loading).editorialRow()
+            }
+          } header: {
+            SectionHeading(title: "Je selectie", count: visible.count)
           }
         }
         if podcastsOnly { generatedSection }
       }
     }
-    .listStyle(.insetGrouped).scrollContentBackground(.hidden).background(Brand.paper)
+    .listStyle(.plain).scrollContentBackground(.hidden).background(Brand.paper)
     .navigationTitle(podcastsOnly ? "Luisteren" : "Stroom").navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .principal) {
+        Text("Stroom").font(Brand.display(25, relativeTo: .title2)).italic().foregroundStyle(
+          Brand.ink)
+      }
+      ToolbarItem(placement: .topBarLeading) {
+        NavigationLink {
+          SubmitView()
+        } label: {
+          Image(systemName: "plus").frame(minWidth: 44, minHeight: 44)
+        }
+        .accessibilityLabel("Content insturen")
+      }
+      ToolbarItem(placement: .topBarTrailing) {
+        Button {
+          showFilters = true
+        } label: {
+          Image(
+            systemName: activeFilters > 0
+              ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease"
+          )
+          .frame(minWidth: 44, minHeight: 44)
+        }.accessibilityLabel("Filters").accessibilityValue("\(activeFilters) actief")
+      }
+    }
     .searchable(text: $query, prompt: "Zoek in Stroom")
     .refreshable { await reload() }
     .task(id: selection + "|" + String(describing: store.lastSync)) { await loadTopic() }
+    .sheet(isPresented: $showFilters) {
+      NavigationStack {
+        Form {
+          Section("Verfijn je selectie") { filters }
+          Section { Button("Wis alle filters") { resetFilters() } }
+        }.scrollContentBackground(.hidden).background(Brand.paper)
+          .navigationTitle("Filters").navigationBarTitleDisplayMode(.inline)
+          .toolbar {
+            ToolbarItem(placement: .confirmationAction) { Button("Gereed") { showFilters = false } }
+          }
+      }.presentationDetents([.medium, .large]).presentationDragIndicator(.visible)
+    }
     .confirmationDialog(
       "Deze selectie archiveren?",
       isPresented: Binding(get: { archiveTarget != nil }, set: { if !$0 { archiveTarget = nil } }),
@@ -124,54 +197,53 @@ struct FeedScreen: View {
       )
     }
   }
+  @ViewBuilder var digestLinks: some View {
+    DigestPreview(topic: store.selectedTopic, window: "daily")
+    DigestPreview(topic: store.selectedTopic, window: "weekly")
+  }
   var topicChips: some View {
     ScrollView(.horizontal, showsIndicators: false) {
       HStack(spacing: 8) {
         ForEach(store.topics) { topic in topicButton(topic.name, slug: topic.slug) }
-        topicButton("Alle onderwerpen · chronologisch", slug: "__all__")
-      }
-    }.listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
-  }
-  func topicButton(_ name: String, slug: String) -> some View {
-    Button(name) { store.selectedTopic = slug }
-      .font(.subheadline.weight(.medium)).padding(.horizontal, 14).frame(minHeight: 44)
-      .background(
-        store.selectedTopic == slug ? Brand.blue.opacity(0.14) : Color.secondary.opacity(0.06),
-        in: Capsule()
-      )
-      .accessibilityIdentifier("topic-\(slug)")
-      .accessibilityAddTraits(store.selectedTopic == slug ? .isSelected : [])
-      .buttonStyle(.plain)
-  }
-  var filters: some View {
-    VStack {
-      Picker("Status", selection: $filter) {
-        Text("Alles").tag("all")
-        Text("Bewaard").tag("saved")
-        Text("Samengevat").tag("summarized")
-        Text("Gepland").tag("scheduled")
-        Text("Archief").tag("archived")
-        Text("Inbox").tag("inbox")
-      }
-      Picker("Periode", selection: $window) {
-        Text("Alle tijd").tag("all")
-        Text("24 uur").tag("24h")
-        Text("7 dagen").tag("7d")
-        Text("30 dagen").tag("30d")
-      }
-      if !podcastsOnly {
-        Picker("Soort", selection: $format) {
-          Text("Alles").tag("all")
-          Text("Artikelen").tag("article")
-          Text("Podcasts").tag("podcast")
-          Text("Video’s").tag("video")
-        }
+        topicButton("Alle onderwerpen", slug: "__all__")
       }
     }
   }
+  func topicButton(_ name: String, slug: String) -> some View {
+    StroomChip(title: name, selected: store.selectedTopic == slug) { store.selectedTopic = slug }
+      .accessibilityIdentifier("topic-\(slug)")
+  }
+  @ViewBuilder var filters: some View {
+    Picker("Status", selection: $filter) {
+      Text("Alles").tag("all")
+      Text("Bewaard").tag("saved")
+      Text("Samengevat").tag("summarized")
+      Text("Gepland").tag("scheduled")
+      Text("Archief").tag("archived")
+      Text("Inbox").tag("inbox")
+    }
+    Picker("Periode", selection: $window) {
+      Text("Alle tijd").tag("all")
+      Text("24 uur").tag("24h")
+      Text("7 dagen").tag("7d")
+      Text("30 dagen").tag("30d")
+    }
+    if !podcastsOnly {
+      Picker("Soort", selection: $format) {
+        Text("Alles").tag("all")
+        Text("Artikelen").tag("article")
+        Text("Podcasts").tag("podcast")
+        Text("Video’s").tag("video")
+      }
+    }
+  }
+  func resetFilters() {
+    filter = "all"
+    window = "all"
+    format = "all"
+  }
   func card(_ item: FeedItem) -> some View {
-    FeedCard(item: item).listRowInsets(EdgeInsets()).listRowBackground(Color.clear).stroomActions(
-      item)
+    FeedCard(item: item).editorialRow().stroomActions(item)
   }
   @ViewBuilder var generatedSection: some View {
     Section("Door Stroom gemaakt") {
