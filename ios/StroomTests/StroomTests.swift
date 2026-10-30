@@ -2,6 +2,39 @@ import XCTest
 @testable import Stroom
 
 final class StroomTests: XCTestCase {
+    @MainActor func testTopicRailsDecodeInEditorialOrder() throws {
+        let json = #"{"slug":"ai","name":"AI","rails":[{"format":"video","items":[]},{"format":"podcast","items":[]},{"format":"article","items":[{"id":"a","title":"Artikel","source_name":"Bron","has_summary":true,"has_transcript":true}]}]}"#
+        let topic = try APIClient.decoder.decode(HuygensTopic.self, from: Data(json.utf8))
+        XCTAssertEqual(topic.orderedRails.map(\.format), ["article", "podcast", "video"])
+        XCTAssertEqual(topic.orderedRails[0].items.first?.initialSection, "Samenvatting")
+    }
+    @MainActor func testFullArticleBodyAndSummaryStart() throws {
+        var article = try item()
+        article.format = "article"
+        article.description = "Excerpt"
+        article.transcript = "Volledige tekst"
+        XCTAssertEqual(article.sourceBody, "Volledige tekst")
+        article.transcript = "  "
+        XCTAssertEqual(article.sourceBody, "Excerpt")
+        article.hasSummary = false
+        XCTAssertEqual(article.initialSection, "Bron")
+        article.summary = "Een samenvatting"
+        XCTAssertEqual(article.initialSection, "Samenvatting")
+        article.format = "podcast"
+        article.transcript = "Gesproken tekst"
+        XCTAssertEqual(article.sourceBody, "Excerpt")
+    }
+    @MainActor func testPlaybackDefaultAndStoredSpeed() {
+        let defaults = UserDefaults(suiteName: "StroomTests.speed")!
+        defaults.removePersistentDomain(forName: "StroomTests.speed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 1.7)
+        defaults.set(2.3, forKey: "playbackSpeed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 2.3)
+        defaults.set(99, forKey: "playbackSpeed")
+        XCTAssertEqual(AudioPlayer.savedSpeed(in: defaults), 1.7)
+        XCTAssertEqual(AudioPlayer.playbackRates.count, 16)
+        defaults.removePersistentDomain(forName: "StroomTests.speed")
+    }
     func testHTMLAndMarkdownExcerpts() {
         XCTAssertEqual(ContentText.excerpt("<p>Han&#x27;s idee &mdash; café &amp; thee&nbsp; &#128512;</p>"), "Han's idee — café & thee 😀")
         XCTAssertEqual(ContentText.excerpt("## Kop\n\nEen **goed** [idee](https://example.com)."), "Kop Een goed idee.")
@@ -105,4 +138,45 @@ final class StroomTests: XCTestCase {
         XCTAssertNotNil(StroomDate.parse("2026-10-25T08:30:00.123456Z"))
         XCTAssertNil(StroomDate.parse("broken"))
     }
+}
+
+extension StroomTests {
+  @MainActor func testMissingDigestIsEmptyButServerFailureRemainsAnError() async throws {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [DigestResponseFixture.self]
+    let missing = APIClient(baseURL: URL(string: "https://missing.stroom.test")!, configuration: config)
+    let empty = try await missing.digest(topic: "ai", window: "daily")
+    XCTAssertNil(empty)
+    do {
+      let _: Digest = try await missing.request("huygens/ai/digest")
+      XCTFail("A generic request must still report its 404")
+    } catch let error as APIError {
+      XCTAssertEqual(error.statusCode, 404)
+      XCTAssertEqual(error.localizedDescription, "No digest yet")
+    }
+    let failed = APIClient(baseURL: URL(string: "https://failed.stroom.test")!, configuration: config)
+    do {
+      _ = try await failed.digest(topic: "ai", window: "daily")
+      XCTFail("Server errors must not look like an empty digest")
+    } catch let error as APIError { XCTAssertEqual(error.statusCode, 500) }
+    let ready = APIClient(baseURL: URL(string: "https://ready.stroom.test")!, configuration: config)
+    let digest = try await ready.digest(topic: "ai", window: "daily")
+    XCTAssertEqual(digest?.markdown, "Overzicht")
+  }
+}
+
+final class DigestResponseFixture: URLProtocol {
+  override class func canInit(with request: URLRequest) -> Bool { true }
+  override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+  override func startLoading() {
+    let host = request.url!.host!
+    let status = host.hasPrefix("missing") ? 404 : (host.hasPrefix("failed") ? 500 : 200)
+    let json = status == 200 ? #"{"markdown":"Overzicht","is_generating":false}"# : #"{"detail":"No digest yet"}"#
+    let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil,
+      headerFields: ["Content-Type": "application/json"])!
+    client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+    client?.urlProtocol(self, didLoad: Data(json.utf8))
+    client?.urlProtocolDidFinishLoading(self)
+  }
+  override func stopLoading() {}
 }
