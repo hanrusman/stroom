@@ -47,6 +47,11 @@ Een proefrun op de software-inkoopvraag (2026-11-08) duurde ~8 minuten:
   "prospectief scenario-archief" noemen. Schrijven, kritiek, herziening en
   doorvragen krijgen nu de datum van vandaag vooraan, en kritiekpunten die de
   datering betwisten worden weggefilterd (`drop_date_disputes`).
+- **Een herziening moet een dossier zijn.** In een vernieuwing gaf Opus zijn
+  overwegingen als tekst ("De gebruiker vraagt me…"), twee keer doorgeschreven
+  tot 46k woorden. `clean_revision` eist nu een titelkop en 0,5-1,6× de lengte
+  van het concept; anders probeert het volgende schrijfmodel het, en anders
+  blijft het concept staan.
 - **De verdiepingsronde verdubbelde het aantal bruikbare bronnen** (112 → 206)
   en vulde vooral tegengeluid en NL/EU-casussen aan.
 
