@@ -163,24 +163,41 @@ def serialize(node: Node) -> str:
     return f"({serialize(node[1])}) {op} ({serialize(node[2])})"
 
 
+def _conjuncts(node: Node) -> list[Node]:
+    """De bovenste AND-keten, van links naar rechts."""
+    out, stack = [], [node]
+    while stack:
+        n = stack.pop()
+        if n[0] == "and":
+            stack.extend((n[2], n[1]))
+        else:
+            out.append(n)
+    return out
+
+
 def global_exclusions(node: Optional[Node]) -> Optional[Node]:
     """De uitsluitingen die voor de hele vraag gelden: NOT-termen in de
     bovenste AND-keten. Onder een OR gelden ze maar voor één tak
     ('fiets OR koken -kabinet' = fiets | (koken & !kabinet)), en dan niet."""
     if node is None:
         return None
-    conjuncts, stack = [], [node]
-    while stack:
-        n = stack.pop()
-        if n[0] == "and":
-            stack.extend((n[2], n[1]))
-        else:
-            conjuncts.append(n)
     excl: Optional[Node] = None
-    for n in conjuncts:
+    for n in _conjuncts(node):
         if n[0] == "not":
             excl = n[1] if excl is None else ("or", excl, n[1])
     return excl
+
+
+def required_terms(tsq: Optional[str]) -> list[str]:
+    """De positieve termen van de bovenste AND-keten van een (al uitgebreide)
+    tsquery, elk als eigen tsquery-tekst. 'inkoop software -excel' →
+    [inkoop, software]; een frase of een OR-groep blijft één term. Zo kan een
+    zoekactie ook resultaten tonen die maar een deel van de woorden bevatten
+    en die rangschikken op hoeveel termen er raken."""
+    tree = parse(tsq or "")
+    if tree is None:
+        return []
+    return [serialize(n) for n in _conjuncts(tree) if n[0] != "not"]
 
 
 # Per token van de vraag: het ruwe lexeem ('simple') naast wat de 'dutch'- en

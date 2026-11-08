@@ -8,6 +8,7 @@ from sqlalchemy import text as sa_text
 
 from core.auth import require_user
 from core.db import async_session_maker, get_async_session
+from services import search_query
 from services.llm_service import LLMService, parse_llm_json
 from services.vikunja_service import VikunjaService
 
@@ -112,7 +113,10 @@ async def list_all_lessons(rating: Optional[int] = Query(None, description="Filt
 
 @router.get("/internal/lessons/search", response_model=List[LessonRead])
 async def search_lessons(
-    q: str = Query("", max_length=200, description="Substring (ILIKE) op title+body+expansion. Leeg = alles."),
+    q: str = Query("", max_length=200, description=(
+        "Zoekvraag op title+body+expansion, met NL+EN-stemming en websearch-syntax "
+        "(\"frase\", OR, -uitsluiting). Lessen met alle woorden eerst, daarna die met "
+        "een deel. Leeg = alles, nieuwste beoordeling eerst.")),
     rating: int = Query(1, description="1 = positief (default), -1 = negatief, 0 = alles."),
     limit: int = Query(10, ge=1, le=50),
     session=Depends(get_async_session),
@@ -127,22 +131,41 @@ async def search_lessons(
 
     where_parts: list[str] = []
     params: dict = {"lim": limit}
+    order = "l.rated_at DESC NULLS LAST, l.idx ASC"
 
     if rating in (1, -1):
         where_parts.append("l.rating = :r")
         params["r"] = rating
 
     if q.strip():
-        where_parts.append(
-            "(l.title ILIKE :pat OR l.body ILIKE :pat OR l.expansion ILIKE :pat)"
-        )
-        params["pat"] = f"%{q.strip()}%"
+        tsq, excl = await search_query.build(session, q)
+        if tsq is None:
+            return []  # alleen stopwoorden of leestekens
+        terms = search_query.required_terms(tsq)
+        if terms:
+            # Elke positieve term mag raken; wie er meer raakt staat hoger.
+            # Uitsluitingen gelden voor de hele vraag.
+            params["tsq"] = " | ".join(f"({t})" for t in terms)
+            where_parts.append("l.search_tsv @@ CAST(:tsq AS tsquery)")
+            if excl:
+                params["excl"] = excl
+                where_parts.append("NOT l.search_tsv @@ CAST(:excl AS tsquery)")
+            hits = []
+            for n, term in enumerate(terms):
+                params[f"t{n}"] = term
+                hits.append(f"(l.search_tsv @@ CAST(:t{n} AS tsquery))::int")
+            rank_by = f"({' + '.join(hits)}) DESC, "
+        else:
+            # Alleen uitsluitingen ('-excel'): de vraag zelf is het filter.
+            params["tsq"] = tsq
+            where_parts.append("l.search_tsv @@ CAST(:tsq AS tsquery)")
+            rank_by = ""
+        order = f"{rank_by}ts_rank(l.search_tsv, CAST(:tsq AS tsquery)) DESC, {order}"
 
     where_clause = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
 
     result = await session.exec(sa_text(
-        f"{_LESSON_SELECT} {where_clause} "
-        "ORDER BY l.rated_at DESC NULLS LAST, l.idx ASC LIMIT :lim"
+        f"{_LESSON_SELECT} {where_clause} ORDER BY {order} LIMIT :lim"
     ).bindparams(**params))
     return [_lesson_row(r) for r in result.all()]
 
