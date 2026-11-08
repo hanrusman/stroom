@@ -95,6 +95,10 @@ Migratie `028-research.sql`: `research_runs`, `research_candidates`,
 `research_findings`. Verwijderen van een run cascadeert naar kandidaten en
 bevindingen. Een vernieuwing blijft dan bestaan, met `parent_id` op NULL.
 
+Toegang: de web-routes tonen alleen je eigen dossiers plus dossiers zonder
+eigenaar (gestart via Okavango); een dossier van een ander geeft 404. Wordt een
+gebruiker verwijderd, dan gaan diens dossiers mee (`ON DELETE CASCADE`).
+
 ## Uitrollen (Strongbad)
 
 Additief: drie nieuwe tabellen, nieuwe routes, geen wijziging aan bestaande

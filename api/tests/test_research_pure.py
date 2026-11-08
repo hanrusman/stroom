@@ -2,6 +2,7 @@
 en de hele pijplijn met MemoryStore, een nep-archief en een nep-LLM."""
 import json
 import sys
+import uuid
 
 import pytest
 from fastapi import HTTPException
@@ -386,3 +387,10 @@ def test_coverage_summary_counts_per_aspect():
 def test_date_spread_by_year_and_recent_quarters():
     srcs = [{"date": d} for d in ("2024-05-01", "2026-01-10", "2026-02-01", "2026-08-30", None)]
     assert rs.date_spread(srcs) == "2024: 1, 2026: 3, ?: 1 (waarvan 2026 per kwartaal: Q1 2, Q3 1)"
+
+
+def test_can_access_owner_and_unowned_only():
+    assert rs.can_access("u1", "u1")
+    assert rs.can_access(None, "u1")  # via Okavango gestart
+    assert not rs.can_access("u2", "u1")
+    assert rs.can_access(uuid.UUID(int=1), str(uuid.UUID(int=1)))

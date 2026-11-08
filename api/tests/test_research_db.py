@@ -171,3 +171,46 @@ async def test_corpus_content_includes_lessons(db):
     assert c["lessons"] == [("Les", "Inhoud")] and c["format"] == "podcast"
     meta = await rs.Corpus(maker, None).meta([iid])
     assert meta[iid]["teaser"].startswith("Met les")
+
+
+async def test_web_routes_only_show_own_and_unowned_runs(db, monkeypatch):
+    """Web-routes: eigen dossiers en dossiers zonder eigenaar (Okavango) wel,
+    die van een andere gebruiker niet (404, ook bij verwijderen)."""
+    from fastapi import HTTPException
+
+    from routers import research as rr
+
+    engine, maker = db
+    monkeypatch.setattr(rr, "async_session_maker", maker)
+    me, other = str(uuid.uuid4()), str(uuid.uuid4())
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO users (id) VALUES (CAST(:a AS uuid)), (CAST(:b AS uuid))"),
+                           {"a": me, "b": other})
+        ids = {}
+        for name, owner in (("mine", me), ("theirs", other), ("okavango", None)):
+            ids[name] = (await conn.execute(text("""
+                INSERT INTO research_runs (question, user_id, status)
+                VALUES (:q, CAST(:u AS uuid), 'done') RETURNING id::text"""),
+                {"q": f"Vraag {name} over inkoop", "u": owner})).scalar()
+    user = {"id": me}
+
+    async with maker() as s:
+        listed = {r["id"] for r in await rr.list_runs(limit=50, session=s, user=user)}
+    assert listed == {ids["mine"], ids["okavango"]}
+
+    assert (await rr._get(ids["mine"], user))["id"] == ids["mine"]
+    assert (await rr._get(ids["okavango"], user))["id"] == ids["okavango"]
+    with pytest.raises(HTTPException) as e:
+        await rr._get(ids["theirs"], user)
+    assert e.value.status_code == 404
+    assert (await rr._get(ids["theirs"]))["id"] == ids["theirs"]  # internal: geen user
+
+    async with maker() as s:
+        with pytest.raises(HTTPException):
+            await rr.delete_run(ids["theirs"], session=s, user=user)
+        with pytest.raises(HTTPException):
+            await rr.funnel(ids["theirs"], session=s, user=user)
+        assert (await rr.delete_run(ids["mine"], session=s, user=user)) == {"ok": True}
+    async with engine.begin() as conn:
+        left = {r[0] for r in await conn.execute(text("SELECT id::text FROM research_runs"))}
+    assert left == {ids["theirs"], ids["okavango"]}

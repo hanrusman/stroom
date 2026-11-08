@@ -379,6 +379,11 @@ class Store(Protocol):
                            findings: list[dict], model: str) -> None: ...
 
 
+def can_access(run_user_id, user_id) -> bool:
+    """Eigen dossiers, plus dossiers zonder eigenaar (via Okavango gestart)."""
+    return run_user_id is None or str(run_user_id) == str(user_id)
+
+
 class MemoryStore:
     """Voor tests en proefruns buiten de database."""
 

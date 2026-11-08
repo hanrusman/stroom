@@ -83,17 +83,29 @@ async def _create(session, question: str, user_id: Optional[str],
     return row[0]
 
 
-async def _get(run_id: str) -> dict:
+# Wie mag een dossier zien: de eigenaar, en iedereen bij dossiers zonder
+# eigenaar (gestart via Okavango met het internal token). Een dossier van een
+# ander geeft 404, net als een onbekend id.
+_OWNED = "(r.user_id = CAST(:u AS uuid) OR r.user_id IS NULL)"
+
+
+async def _get(run_id: str, user: Optional[dict] = None) -> dict:
+    """Run ophalen. Met `user` (web-routes) alleen als die hem mag zien;
+    zonder `user` (internal-routes, al door het token afgeschermd) altijd."""
     try:
-        return await rs.DbStore(async_session_maker).get_run(run_id)
+        run = await rs.DbStore(async_session_maker).get_run(run_id)
     except (KeyError, Exception) as e:
         if isinstance(e, KeyError) or "invalid input syntax for type uuid" in str(e):
             raise HTTPException(status_code=404, detail="Dossier niet gevonden")
         raise
+    if user is not None and not rs.can_access(run.get("user_id"), user.get("id")):
+        raise HTTPException(status_code=404, detail="Dossier niet gevonden")
+    return run
 
 
-async def _ask(request: Request, run_id: str, question: str) -> dict:
-    run = await _get(run_id)
+async def _ask(request: Request, run_id: str, question: str,
+               user: Optional[dict] = None) -> dict:
+    run = await _get(run_id, user)
     try:
         answer, model = await rs.ask(_llm(request), run, question.strip())
     except ValueError as e:
@@ -122,7 +134,8 @@ def _item_url(item_id: str) -> str:
 async def list_runs(limit: int = Query(50, ge=1, le=200),
                     session=Depends(get_async_session), user=Depends(require_user)):
     rows = (await session.exec(sa_text(
-        _LIST_SQL + " ORDER BY r.created_at DESC LIMIT :n").bindparams(n=limit))).all()
+        _LIST_SQL + f" WHERE {_OWNED} ORDER BY r.created_at DESC LIMIT :n")
+        .bindparams(n=limit, u=str(user["id"])))).all()
     return [_list_row(r) for r in rows]
 
 
@@ -136,13 +149,14 @@ async def create_run(body: NewRun, request: Request,
 
 @router.get("/research/{run_id}")
 async def get_run(run_id: str, user=Depends(require_user)):
-    return _public_run(await _get(run_id))
+    return _public_run(await _get(run_id, user))
 
 
 @router.get("/research/{run_id}/funnel")
 async def funnel(run_id: str, session=Depends(get_async_session), user=Depends(require_user)):
     """Alle kandidaten met recall-score, screening en of er bevindingen uit kwamen:
     laat zien waarom een bron wel of niet in het dossier zit."""
+    await _get(run_id, user)
     rows = (await session.exec(sa_text("""
         SELECT c.item_id::text, i.title, s.name, i.format::text, i.published_at,
                c.recall_score, c.queries, c.screen_score,
@@ -164,7 +178,7 @@ async def refresh_run(run_id: str, request: Request,
                       session=Depends(get_async_session), user=Depends(require_user)):
     """Nieuwe run met dezelfde vraag; hergebruikt plan, screening en extracties,
     doet alleen nieuwe items opnieuw en schrijft het dossier opnieuw."""
-    parent = await _get(run_id)
+    parent = await _get(run_id, user)
     if parent["status"] not in rs.TERMINAL:
         raise HTTPException(status_code=409, detail="Dit dossier loopt nog")
     new_id = await _create(session, parent["question"], str(user["id"]), parent_id=run_id)
@@ -175,7 +189,7 @@ async def refresh_run(run_id: str, request: Request,
 @router.post("/research/{run_id}/resume")
 async def resume_run(run_id: str, request: Request, user=Depends(require_user)):
     """Mislukte/geannuleerde run verder laten lopen vanaf de laatste stap."""
-    run = await _get(run_id)
+    run = await _get(run_id, user)
     if run["status"] not in ("failed", "cancelled"):
         raise HTTPException(status_code=409, detail="Alleen een mislukte of gestopte run kan verder")
     await rs.DbStore(async_session_maker).update_run(run_id, status="queued", error=None,
@@ -186,7 +200,7 @@ async def resume_run(run_id: str, request: Request, user=Depends(require_user)):
 
 @router.post("/research/{run_id}/cancel")
 async def cancel_run(run_id: str, user=Depends(require_user)):
-    run = await _get(run_id)
+    run = await _get(run_id, user)
     if run["status"] in rs.TERMINAL:
         return {"ok": True}
     rs.request_cancel(run_id)
@@ -195,23 +209,24 @@ async def cancel_run(run_id: str, user=Depends(require_user)):
 
 @router.delete("/research/{run_id}")
 async def delete_run(run_id: str, session=Depends(get_async_session), user=Depends(require_user)):
-    run = await _get(run_id)
+    run = await _get(run_id, user)
     if run["status"] not in rs.TERMINAL:
         raise HTTPException(status_code=409, detail="Stop het dossier eerst")
-    await session.exec(sa_text("DELETE FROM research_runs WHERE id = CAST(:i AS uuid)")
-                       .bindparams(i=run_id))
+    await session.exec(sa_text(
+        f"DELETE FROM research_runs r WHERE r.id = CAST(:i AS uuid) AND {_OWNED}")
+        .bindparams(i=run_id, u=str(user["id"])))
     await session.commit()
     return {"ok": True}
 
 
 @router.post("/research/{run_id}/ask")
 async def ask_run(run_id: str, body: AskBody, request: Request, user=Depends(require_user)):
-    return await _ask(request, run_id, body.question)
+    return await _ask(request, run_id, body.question, user)
 
 
 @router.get("/research/{run_id}/markdown", response_class=PlainTextResponse)
 async def markdown(run_id: str, user=Depends(require_user)):
-    run = await _get(run_id)
+    run = await _get(run_id, user)
     if not run.get("report"):
         raise HTTPException(status_code=409, detail="Dossier is nog niet af")
     return rs.to_markdown(run, _item_url)
@@ -219,7 +234,7 @@ async def markdown(run_id: str, user=Depends(require_user)):
 
 @router.post("/research/{run_id}/obsidian")
 async def to_obsidian(run_id: str, request: Request, user=Depends(require_user)):
-    run = await _get(run_id)
+    run = await _get(run_id, user)
     if not run.get("report"):
         raise HTTPException(status_code=409, detail="Dossier is nog niet af")
     if not settings.OBSIDIAN_API_KEY or not settings.OBSIDIAN_BASE_URL:

@@ -5,7 +5,7 @@
 -- plan, screening en extracties van de vorige run.
 CREATE TABLE IF NOT EXISTS research_runs (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+    user_id uuid REFERENCES users(id) ON DELETE CASCADE,
     parent_id uuid REFERENCES research_runs(id) ON DELETE SET NULL,
     question text NOT NULL,
     title text,
