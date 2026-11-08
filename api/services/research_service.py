@@ -653,6 +653,27 @@ class Ctx:
     llm: Any
     usage: Usage = field(default_factory=Usage)
     should_cancel: Optional[ProgressFn] = None
+    # Rekentijd van eerdere pogingen (hervatten na herstart of "verder"):
+    # statistiek telt op over alle pogingen in plaats van alleen de laatste.
+    base_secs: float = 0.0
+    t0: float = field(default_factory=time.monotonic)
+
+
+def _resume_usage(ctx: Ctx, stats: Optional[dict]) -> None:
+    stats = stats or {}
+    ctx.usage.calls = int(stats.get("llm_calls") or 0)
+    ctx.usage.failures = int(stats.get("llm_failures") or 0)
+    ctx.usage.by_model = {m: {"calls": int(v.get("calls", 0)), "failures": int(v.get("failures", 0)),
+                              "secs": float(v.get("secs", 0.0))}
+                          for m, v in (stats.get("by_model") or {}).items() if isinstance(v, dict)}
+    ctx.base_secs = float(stats.get("secs") or 0)
+    ctx.t0 = time.monotonic()
+
+
+def _stats(ctx: Ctx) -> dict:
+    return {"llm_calls": ctx.usage.calls, "llm_failures": ctx.usage.failures,
+            "by_model": ctx.usage.by_model,
+            "secs": round(ctx.base_secs + time.monotonic() - ctx.t0)}
 
 
 async def _check_cancel(ctx: Ctx) -> None:
@@ -662,9 +683,7 @@ async def _check_cancel(ctx: Ctx) -> None:
 
 async def _stage(ctx: Ctx, run_id: str, status: str, **progress) -> None:
     await ctx.store.update_run(run_id, status=status, progress={"stage": status, **progress},
-                               stats={"llm_calls": ctx.usage.calls,
-                                      "llm_failures": ctx.usage.failures,
-                                      "by_model": ctx.usage.by_model})
+                               stats=_stats(ctx))
 
 
 async def step_plan(ctx: Ctx, run: dict) -> dict:
@@ -1070,9 +1089,9 @@ def _public_sources(sources: list[dict]) -> list[dict]:
 
 async def run_pipeline(ctx: Ctx, run_id: str) -> None:
     """Draai (of hervat) een run tot het eind. Fouten → status failed."""
-    t0 = time.monotonic()
     try:
         run = await ctx.store.get_run(run_id)
+        _resume_usage(ctx, run.get("stats"))
         if run.get("parent_id") and not run.get("plan"):
             parent = await ctx.store.get_run(run["parent_id"])
             if parent.get("plan"):
@@ -1097,14 +1116,13 @@ async def run_pipeline(ctx: Ctx, run_id: str) -> None:
             progress={"stage": "done", "candidates": len(cands),
                       "screened": sum(1 for c in cands if c.get("screen_score") is not None),
                       "extracted": len(findings), "findings": n_find},
-            stats={"llm_calls": ctx.usage.calls, "llm_failures": ctx.usage.failures,
-                   "by_model": ctx.usage.by_model,
-                   "secs": round(time.monotonic() - t0)})
+            stats=_stats(ctx))
     except Cancelled:
-        await ctx.store.update_run(run_id, status="cancelled", finished_at=True)
+        await ctx.store.update_run(run_id, status="cancelled", finished_at=True, stats=_stats(ctx))
     except Exception as e:
         print(f"[research] run {run_id} faalde: {e!r}", flush=True)
-        await ctx.store.update_run(run_id, status="failed", error=str(e)[:1000], finished_at=True)
+        await ctx.store.update_run(run_id, status="failed", error=str(e)[:1000], finished_at=True,
+                                   stats=_stats(ctx))
 
 
 # ---------------------------------------------------------------- na afloop

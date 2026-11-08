@@ -213,6 +213,13 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('dossier');
   const [activeRef, setActiveRef] = useState<string | null>(null);
+  // Escape sluit het bronpaneel (op mobiel dekt het als bottom sheet de tabs af).
+  useEffect(() => {
+    if (!activeRef) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setActiveRef(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [activeRef]);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
