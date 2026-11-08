@@ -394,3 +394,41 @@ def test_can_access_owner_and_unowned_only():
     assert rs.can_access(None, "u1")  # via Okavango gestart
     assert not rs.can_access("u2", "u1")
     assert rs.can_access(uuid.UUID(int=1), str(uuid.UUID(int=1)))
+
+
+def test_today_note_names_the_date_and_year():
+    from datetime import date
+    note = rs.today_note(date(2026, 11, 8))
+    assert note.startswith("Vandaag is het 8 november 2026.")
+    assert "t/m 2026" not in note and "tot en met 2026" in note
+
+
+def test_drop_date_disputes_keeps_real_issues():
+    issues = [
+        # Letterlijk uit de eerste live-run (Gemini 2.5 Pro):
+        {"type": "unsupported", "where": "Wat verschuift er in de tijd",
+         "fix": "Erken expliciet dat dit een prospectief scenario-archief, fictieve dataset of "
+                "speculatieve exercitie is. Gebruik geen '2026'-bronnen als empirische bewijslast."},
+        {"type": "unsupported", "where": "In het kort",
+         "problem": "Sources dated 2026 are fictional and have not yet been published."},
+        {"type": "miscited", "where": "Nederlandse overheidsdynamiek",
+         "fix": "Wijzig 'verbod' in 'aanbeveling' (S90, 2026)."},
+        {"type": "overgeneralized", "where": "In het kort",
+         "fix": "Meld dat dit een speculatief inzicht van één analist is."},
+    ]
+    kept = rs.drop_date_disputes(issues)
+    assert [i["type"] for i in kept] == ["miscited", "overgeneralized"]
+
+
+async def test_write_critique_and_revise_prompts_carry_todays_date():
+    seen = []
+
+    class DateLLM(FakeLLM):
+        async def call_llm(self, model, messages, **kw):
+            seen.append(messages[-1]["content"])
+            return await super().call_llm(model, messages, **kw)
+
+    run, _ = await _run(rs.MemoryStore(), DateLLM())
+    assert run["status"] == "done"
+    dated = [m for m in seen if m.startswith("Vandaag is het ")]
+    assert len(dated) >= 3  # schrijven, kritiek, herziening

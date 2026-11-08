@@ -153,7 +153,12 @@ Lever JSON:
   ]
 }
 Maximaal 12 issues, belangrijkste eerst. Geen issues verzinnen: een goed \
-concept mag weinig issues hebben."""
+concept mag weinig issues hebben.
+
+Publicatiedata staan niet ter discussie. De bronnen zijn echte items uit \
+Han's archief, verschenen op of vóór de datum van vandaag (die staat \
+bovenaan). Een jaartal dat na je eigen trainingsdata ligt, is daarom geen \
+teken van fictie, speculatie of een scenario: maak er geen issue van."""
 
 CRITIQUE_TEXT_SUFFIX = """
 
@@ -179,7 +184,9 @@ Lever JSON met:
 
 REVISE_SYSTEM = """Je herziet je eigen onderzoeksdossier op basis van de \
 kritiek van een redacteur. Verwerk de terechte punten; negeer kritiek die \
-niet klopt met de bevindingen. Behoud structuur, toon en bronverwijzingen \
+niet klopt met de bevindingen, en kritiek die publicatiedata betwist of het \
+archief fictief, speculatief of prospectief noemt: de bronnen zijn echt en \
+verschenen vóór vandaag. Behoud structuur, toon en bronverwijzingen \
 ([S12]); citeer alleen nummers uit de bronnenlijst. Herhaal niets: elke \
 bewering staat op één plek, ook als je een passage verplaatst of aanvult. Lever het volledige \
 herziene dossier in markdown, zonder toelichting op wat je veranderde."""

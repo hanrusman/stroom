@@ -17,7 +17,7 @@ dat erbij past, en slaat zijn resultaat op voordat de volgende stap begint.
 | 4 | extract | `cloud-gemma` → `cloud-deepseek` | Per bron (max 160: eerst score ≥ 2, dan max 40 twijfelgevallen) specifieke beweringen met aspect, richting, actoren, sector, regio, bewijssoort, spreker en citaat. Citaten die niet letterlijk in de bron staan worden gewist |
 | 5 | deepen | plan-modellen | Ziet de opbrengst per aspect (aantallen, actoren, regio's, bewijs) en zoekt 8-14 nieuwe zoekvragen voor de gaten. Daarna recall → screen → extract op max 160 nieuwe kandidaten (max 60 gelezen) |
 | 6 | write | `stroom-deep` (Opus) → `stroom-sonnet` → `cloud-kimi` | Dossier in markdown met `[S12]`-verwijzingen; bronnen genummerd op datum |
-| 7 | critique | `stroom-long-context` (Gemini) → `cloud-deepseek` → `cloud-kimi` | Andere modelfamilie toetst het concept aan de bevindingen: onderbouwing, citaten, overgeneralisatie, gemist tegengeluid. JSON, met tekst als fallback |
+| 7 | critique | `cloud-deepseek` → `cloud-kimi` (Gemini `stroom-long-context` kan via env terug) | Andere modelfamilie toetst het concept aan de bevindingen: onderbouwing, citaten, overgeneralisatie, gemist tegengeluid. JSON, met tekst als fallback |
 | 8 | revise | schrijfmodellen | Verwerkt de kritiek; ongeldige `[S..]`-nummers worden daarna weggehaald |
 
 Na afloop: **doorvragen** (`ask`) beantwoordt vragen over het dossier met álle
@@ -42,6 +42,11 @@ Een proefrun op de software-inkoopvraag (2026-11-08) duurde ~8 minuten:
   zoekvragen. Daarna gaat het volgende model aan de slag.
 - **Geen jaartallen in zoekvragen**: "build vs buy 2024" sluit de rest van
   het archief uit.
+- **Modellen kennen de datum niet.** In de eerste live-run hield Gemini
+  bronnen uit 2026 voor toekomst en liet het dossier het archief een
+  "prospectief scenario-archief" noemen. Schrijven, kritiek, herziening en
+  doorvragen krijgen nu de datum van vandaag vooraan, en kritiekpunten die de
+  datering betwisten worden weggefilterd (`drop_date_disputes`).
 - **De verdiepingsronde verdubbelde het aantal bruikbare bronnen** (112 → 206)
   en vulde vooral tegengeluid en NL/EU-casussen aan.
 
