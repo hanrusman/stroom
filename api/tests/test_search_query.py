@@ -9,7 +9,7 @@ import pytest
 sys.path.insert(0, "/app")
 
 from services.search_query import (  # noqa: E402
-    expand, global_exclusions, parse, positive_text, serialize,
+    expand, global_exclusions, parse, positive_text, required_terms, serialize,
 )
 
 pytestmark = pytest.mark.unit
@@ -80,3 +80,16 @@ def test_globale_uitsluitingen(text, expected):
 ])
 def test_positive_text(q, expected):
     assert positive_text(q) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("'inkoop' & 'software' & !'excel'", ["'inkoop'", "'software'"]),
+    ("('open') | ('opn')", ["('open') | ('opn')"]),
+    ("'fiets' | 'koken' & !'kabinet'", ["('fiets') | (('koken') & (!('kabinet')))"]),
+    ("'open' <-> 'standaard' & 'inkoop'", ["('open') <-> ('standaard')", "'inkoop'"]),
+    ("!'excel'", []),
+    ("", []),
+    (None, []),
+])
+def test_required_terms(text, expected):
+    assert required_terms(text) == expected
