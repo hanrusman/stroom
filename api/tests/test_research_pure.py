@@ -478,3 +478,15 @@ async def test_all_revisions_bad_keeps_the_draft():
     assert run["models"]["revise"] is None
     assert run["report"].startswith("# Dossier\n\nBedrijven bouwen zelf [S1, S2]")
     assert "S99" not in run["report"]
+
+
+async def test_resume_adds_to_earlier_stats_instead_of_replacing():
+    store = rs.MemoryStore()
+    earlier = {"llm_calls": 5, "llm_failures": 1, "secs": 600,
+               "by_model": {"w1": {"calls": 4, "failures": 1, "secs": 500.0}}}
+    run, _ = await _run(store, FakeLLM(), stats=earlier)
+    s = run["stats"]
+    assert s["llm_calls"] > 5 and s["llm_failures"] >= 1
+    assert s["by_model"]["w1"]["calls"] > 4
+    assert s["by_model"]["w1"]["secs"] >= 500.0
+    assert s["secs"] >= 600
