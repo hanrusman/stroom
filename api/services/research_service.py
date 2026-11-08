@@ -34,6 +34,7 @@ import re
 import time
 from collections import Counter
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
 import httpx
@@ -68,8 +69,9 @@ PLAN_MODELS = _models("RESEARCH_PLAN_MODELS", "stroom-sonnet,cloud-kimi,cloud-de
 SCREEN_MODELS = _models("RESEARCH_SCREEN_MODELS", "cloud-gemma,cloud-gpt-120b")
 EXTRACT_MODELS = _models("RESEARCH_EXTRACT_MODELS", "cloud-gemma,cloud-deepseek")
 WRITE_MODELS = _models("RESEARCH_WRITE_MODELS", "stroom-deep,stroom-sonnet,cloud-kimi")
-CRITIQUE_MODELS = _models("RESEARCH_CRITIQUE_MODELS",
-                          "stroom-long-context,cloud-deepseek,cloud-kimi")
+# Gemini (stroom-long-context) staat er bewust niet in: problemen met
+# API-krediet (2026-11). Terugzetten kan via RESEARCH_CRITIQUE_MODELS.
+CRITIQUE_MODELS = _models("RESEARCH_CRITIQUE_MODELS", "cloud-deepseek,cloud-kimi")
 
 RECALL_POOL = int(os.environ.get("RESEARCH_RECALL_POOL", "40"))     # per zoekvraag per ranglijst
 SCREEN_MAX = int(os.environ.get("RESEARCH_SCREEN_MAX", "650"))      # kandidaten die gescreend worden
@@ -976,7 +978,7 @@ async def step_write(ctx: Ctx, run: dict, plan: dict, findings: dict[str, dict],
     if not sources:
         raise RuntimeError("geen bruikbare bevindingen gevonden — de vraag lijkt buiten het archief te vallen")
     block = findings_block(plan, sources)
-    head = (f"Titel: {plan['title']}\n{_plan_block(plan)}\n\n"
+    head = (f"{today_note()}Titel: {plan['title']}\n{_plan_block(plan)}\n\n"
             f"Aantal bronnen met bevindingen: {len(sources)} "
             f"(periode {sources[0]['date']} t/m {sources[-1]['date']}).\n"
             f"Spreiding in de tijd: {date_spread(sources)}\n\n")
@@ -1008,7 +1010,8 @@ async def step_write(ctx: Ctx, run: dict, plan: dict, findings: dict[str, dict],
                 temperature=0.1, attempts=2)
             if not isinstance(critique, dict):
                 raise RuntimeError("kritiek is geen object")
-            critique["issues"] = [i for i in (critique.get("issues") or []) if isinstance(i, dict)]
+            critique["issues"] = drop_date_disputes(
+                [i for i in (critique.get("issues") or []) if isinstance(i, dict)])
         except RuntimeError as e:
             print(f"[research] JSON-kritiek faalde, probeer als tekst: {e}", flush=True)
             try:
@@ -1099,6 +1102,40 @@ def plan_from_run(run: dict) -> dict:
                                "aspects": [], "queries": []}
 
 
+_MONTHS_NL = ("januari", "februari", "maart", "april", "mei", "juni", "juli",
+              "augustus", "september", "oktober", "november", "december")
+
+
+def today_note(today: Optional[date] = None) -> str:
+    """Modellen kennen de datum niet en houden jaartallen na hun trainingsdata
+    voor toekomst. Een proefrun (2026-11) noemde het archief daardoor een
+    'prospectief scenario-archief'. Dit zet de datum vooraan in de prompt."""
+    d = today or date.today()
+    return (f"Vandaag is het {d.day} {_MONTHS_NL[d.month - 1]} {d.year}. Alle bronnen "
+            f"zijn echte, al verschenen items uit het archief (t/m vandaag); jaartallen "
+            f"tot en met {d.year} zijn verleden of heden, geen toekomst.\n\n")
+
+
+# Kritiek die de datering zelf aanvecht ("fictief", "nog niet verschenen") is
+# een artefact van de trainingsdata van het kritiekmodel, geen inhoudelijk punt.
+_DATE_DISPUTE = re.compile(
+    r"prospectie|fictie|fictief|fictieve|scenario-archief|speculatieve? (?:dataset|archief|exercitie)"
+    r"|nog niet (?:verschenen|gepubliceerd)|in de toekomst|toekomstige? (?:bron|publicatie|datum)"
+    r"|fictional|hypothetical (?:dataset|archive)|future[- ]dated|not yet (?:published|happened)",
+    re.I)
+
+
+def drop_date_disputes(issues: list[dict]) -> list[dict]:
+    keep = []
+    for i in issues:
+        txt = " ".join(str(i.get(k, "")) for k in ("where", "problem", "fix"))
+        if _DATE_DISPUTE.search(txt) and re.search(r"\b20\d\d\b", txt):
+            print(f"[research] kritiekpunt over datering genegeerd: {txt[:160]}", flush=True)
+            continue
+        keep.append(i)
+    return keep
+
+
 def sources_for_prompt(run: dict) -> list[dict]:
     """Opgeslagen (publieke) bronnen terug naar het formaat van findings_block."""
     return [{**s, "recall_score": 0.0} for s in (run.get("sources") or [])]
@@ -1112,7 +1149,7 @@ async def ask(llm, run: dict, question: str) -> tuple[str, str]:
     block = findings_block(plan, sources_for_prompt(run))
     prev = "".join(f"\n\nEerdere vraag: {f['question']}\nAntwoord: {f['answer']}"
                    for f in (run.get("followups") or [])[-4:])
-    user = (f"=== DOSSIER ===\n{run['report']}\n\n=== BEVINDINGEN ===\n{block}{prev}"
+    user = (f"{today_note()}=== DOSSIER ===\n{run['report']}\n\n=== BEVINDINGEN ===\n{block}{prev}"
             f"\n\n=== VRAAG ===\n{question}")
     answer, model = await llm_call(llm, ASK_MODELS, ASK_SYSTEM, user, as_json=False,
                                    max_tokens=8000, timeout=300, temperature=0.2, attempts=2)
