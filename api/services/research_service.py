@@ -1031,16 +1031,31 @@ async def step_write(ctx: Ctx, run: dict, plan: dict, findings: dict[str, dict],
         await _stage(ctx, run["id"], "revising", issues=len(issues))
         issue_txt = "\n".join(f"- [{i.get('type', '')}] {i.get('where', '')}: {i.get('problem', '')} "
                               f"→ {i.get('fix', '')}" for i in issues) or critique.get("text", "")
-        try:
-            report, models["revise"] = await llm_call(
-                ctx.llm, WRITE_MODELS, REVISE_SYSTEM,
-                f"{head}{block}\n\n=== JOUW CONCEPT ===\n{draft}\n\n=== KRITIEK ===\n"
-                f"{critique.get('verdict', '')}\n{issue_txt}",
-                as_json=False, max_tokens=32000, timeout=900, usage=ctx.usage,
-                temperature=0.3, attempts=2)
-        except RuntimeError as e:
-            print(f"[research] herziening faalde, concept blijft staan: {e}", flush=True)
-            report = draft
+        revise_user = (f"{head}{block}\n\n=== JOUW CONCEPT ===\n{draft}\n\n=== KRITIEK ===\n"
+                       f"{critique.get('verdict', '')}\n{issue_txt}")
+        report, models["revise"] = draft, None
+        tried: list[str] = []
+        # Max twee pogingen, elk met een ander model: een herziening die geen
+        # dossier is (denkwerk als tekst, ontspoord doorschrijven) valt terug.
+        for _ in range(2):
+            chain = [m for m in WRITE_MODELS if m not in tried]
+            if not chain:
+                break
+            try:
+                text, used = await llm_call(
+                    ctx.llm, chain, REVISE_SYSTEM, revise_user,
+                    as_json=False, max_tokens=32000, timeout=900, usage=ctx.usage,
+                    temperature=0.3, attempts=2, continuations=1)
+            except RuntimeError as e:
+                print(f"[research] herziening faalde, concept blijft staan: {e}", flush=True)
+                break
+            tried.append(used)
+            cleaned = clean_revision(draft, text)
+            if cleaned is not None:
+                report, models["revise"] = cleaned, used
+                break
+            print(f"[research] herziening van {used} afgekeurd ({len(text.split())} woorden, "
+                  f"begint met {text[:60]!r}); probeer volgend model", flush=True)
     report, used = fix_citations(report, len(sources))
     pub = _public_sources(sources)
     for s in pub:
@@ -1100,6 +1115,27 @@ ASK_MODELS = _models("RESEARCH_ASK_MODELS", "stroom-sonnet,stroom-deep,cloud-kim
 def plan_from_run(run: dict) -> dict:
     return run.get("plan") or {"title": run.get("title") or "", "question": run["question"],
                                "aspects": [], "queries": []}
+
+
+def clean_revision(draft: str, text: str) -> Optional[str]:
+    """Een herziening moet een dossier zijn: beginnen bij de titelkop en
+    ongeveer zo lang als het concept. Opus gaf in een live-run (2026-11) zijn
+    overwegingen als tekst ("De gebruiker vraagt me…", 46k woorden). Losse
+    aanloop vóór de eerste kop wordt weggeknipt; anders None (= afkeuren)."""
+    text = (text or "").strip()
+    m = re.search(r"^# \S", text, re.M)
+    if not m:
+        return None
+    if m.start() > 0:
+        if m.start() > 600:
+            return None
+        text = text[m.start():]
+    n_draft, n = max(len(draft.split()), 1), len(text.split())
+    if not (0.5 * n_draft <= n <= 1.6 * n_draft):
+        return None
+    if re.search(r"^(De gebruiker vraagt|Ik moet |Laten we |Let me |I need to )", text, re.M):
+        return None
+    return text
 
 
 _MONTHS_NL = ("januari", "februari", "maart", "april", "mei", "juni", "juli",

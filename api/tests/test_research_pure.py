@@ -432,3 +432,49 @@ async def test_write_critique_and_revise_prompts_carry_todays_date():
     assert run["status"] == "done"
     dated = [m for m in seen if m.startswith("Vandaag is het ")]
     assert len(dated) >= 3  # schrijven, kritiek, herziening
+
+
+DRAFT = "# Titel\n\n" + "Bedrijven bouwen zelf software [S1]. " * 100
+
+
+def test_clean_revision_accepts_dossier_and_strips_short_preamble():
+    good = "# Titel\n\n" + "Sommige bedrijven bouwen zelf [S1]. " * 100
+    assert rs.clean_revision(DRAFT, good) == good.strip()
+    assert rs.clean_revision(DRAFT, "Hier is het herziene dossier:\n\n" + good) == good.strip()
+
+
+def test_clean_revision_rejects_leaked_reasoning_and_runaway_length():
+    leaked = ("De gebruiker vraagt me om het dossier te herzien. Ik moet:\n1. punten verwerken\n"
+              + "Ik moet ook controleren of ik iets herhaal. " * 200 + "\n# Titel\n\nTekst [S1].")
+    assert rs.clean_revision(DRAFT, leaked) is None
+    assert rs.clean_revision(DRAFT, DRAFT * 3) is None            # ontspoord doorschrijven
+    assert rs.clean_revision(DRAFT, "Geen kop, alleen tekst. " * 100) is None
+    thinking_inside = DRAFT + "\nIk moet nog de tabel aanpassen.\n"
+    assert rs.clean_revision(DRAFT, thinking_inside) is None
+
+
+class LeakyReviseLLM(FakeLLM):
+    def __init__(self, bad_models, **kw):
+        super().__init__(**kw)
+        self.bad_models = set(bad_models)
+
+    async def call_llm(self, model, messages, **kw):
+        out = await super().call_llm(model, messages, **kw)
+        if messages[0]["content"] == REVISE_SYSTEM and model in self.bad_models:
+            return "De gebruiker vraagt me om het onderzoeksdossier te herzien. Ik moet: ..."
+        return out
+
+
+async def test_bad_revision_falls_back_to_next_model():
+    run, _ = await _run(rs.MemoryStore(), LeakyReviseLLM({"w1"}))
+    assert run["status"] == "done"
+    assert run["models"]["revise"] == "w2"
+    assert run["report"].startswith("# Dossier\n\nSommige bedrijven")
+
+
+async def test_all_revisions_bad_keeps_the_draft():
+    run, _ = await _run(rs.MemoryStore(), LeakyReviseLLM({"w1", "w2"}))
+    assert run["status"] == "done"
+    assert run["models"]["revise"] is None
+    assert run["report"].startswith("# Dossier\n\nBedrijven bouwen zelf [S1, S2]")
+    assert "S99" not in run["report"]
