@@ -26,6 +26,7 @@ pytestmark = pytest.mark.db
 TEST_DB_URL = os.environ.get("STROOM_TEST_DB_URL", "")
 SCHEMA = "stroom_test"
 MIGRATION = Path(__file__).resolve().parents[2] / "schema" / "migrations" / "028-research.sql"
+MIGRATION_MOMENTS = MIGRATION.with_name("030-research-moments.sql")
 SOURCE = "00000000-0000-0000-0000-000000000001"
 
 _DDL = f"""
@@ -35,7 +36,8 @@ CREATE TABLE sources (id uuid PRIMARY KEY, name text NOT NULL);
 CREATE TABLE items (id uuid PRIMARY KEY, source_id uuid NOT NULL REFERENCES sources(id),
                     title text NOT NULL, format text, summary text, transcript text,
                     description text, author text, media_url text, external_id text,
-                    published_at timestamptz);
+                    published_at timestamptz, thumbnail_url text, transcript_segments jsonb,
+                    duration_seconds int);
 CREATE TABLE lessons (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), item_id uuid NOT NULL,
                       idx int NOT NULL, title text NOT NULL, body text NOT NULL);
 INSERT INTO sources VALUES ('{SOURCE}', 'Show A');
@@ -57,6 +59,8 @@ async def db():
         await conn.execute(_DDL)
         await conn.execute(MIGRATION.read_text())
         await conn.execute(MIGRATION.read_text())  # idempotent
+        await conn.execute(MIGRATION_MOMENTS.read_text())
+        await conn.execute(MIGRATION_MOMENTS.read_text())  # idempotent
     finally:
         await conn.close()
     engine = create_async_engine(
@@ -214,3 +218,54 @@ async def test_web_routes_only_show_own_and_unowned_runs(db, monkeypatch):
     async with engine.begin() as conn:
         left = {r[0] for r in await conn.execute(text("SELECT id::text FROM research_runs"))}
     assert left == {ids["theirs"], ids["okavango"]}
+
+
+async def test_source_media_and_moments_are_located_and_cached(db, monkeypatch):
+    import json as _json
+
+    from fastapi import HTTPException
+
+    from routers import research as rr
+    from tests.test_research_moments import SEGS
+    from tests.test_research_moments import FakeLLM as MomentLLM
+
+    engine, maker = db
+    monkeypatch.setattr(rr, "async_session_maker", maker)
+    me, other = str(uuid.uuid4()), str(uuid.uuid4())
+    iid = str(uuid.uuid4())
+    findings = [{"claim": "Meta maakte serverontwerpen open source.",
+                 "quote": "we took the designs for all of our servers and network switches"},
+                {"claim": "Apple houdt zijn OS gesloten.", "quote": ""}]
+    sources = [{"ref": "S1", "item_id": iid, "title": "Ep 1", "source": "Show A", "format": "podcast",
+                "date": "2026-10-01", "url": None, "relevance": 3, "findings": findings}]
+    async with engine.begin() as conn:
+        await conn.execute(text("INSERT INTO users (id) VALUES (CAST(:a AS uuid)), (CAST(:b AS uuid))"),
+                           {"a": me, "b": other})
+        await conn.execute(text("""
+            INSERT INTO items (id, source_id, title, format, media_url, transcript_segments)
+            VALUES (CAST(:i AS uuid), CAST(:s AS uuid), 'Ep 1', 'podcast', 'https://x/ep1.mp3',
+                    CAST(:g AS jsonb))"""), {"i": iid, "s": SOURCE, "g": _json.dumps(SEGS)})
+        rid = (await conn.execute(text("""
+            INSERT INTO research_runs (question, user_id, status, sources)
+            VALUES ('Vraag over inkoop', CAST(:u AS uuid), 'done', CAST(:src AS jsonb))
+            RETURNING id::text"""), {"u": me, "src": _json.dumps(sources)})).scalar()
+
+    first = await rr.source_media(rid, "S1", user={"id": me})
+    assert first["media_url"] == "https://x/ep1.mp3" and first["has_times"]
+    assert first["moments"] == [{"t": 31.5, "exact": True}, None] and first["pending"] is True
+
+    llm = MomentLLM({"moments": [{"i": 1, "t": "1:05"}]})
+    monkeypatch.setattr(rr, "_llm", lambda request: llm)
+    done = await rr.source_moments(rid, request=None, ref="S1", user={"id": me})
+    assert done["moments"] == [{"t": 31.5, "exact": True}, {"t": 65.0, "exact": False}]
+
+    again = await rr.source_media(rid, "S1", user={"id": me})
+    assert again["moments"] == done["moments"] and again["pending"] is False
+    await rr.source_moments(rid, request=None, ref="S1", user={"id": me})
+    assert len(llm.prompts) == 1  # uit de cache, geen tweede modelaanroep
+
+    for call in (rr.source_media(rid, "S1", user={"id": other}),
+                 rr.source_media(rid, "S9", user={"id": me})):
+        with pytest.raises(HTTPException) as e:
+            await call
+        assert e.value.status_code == 404

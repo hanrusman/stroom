@@ -66,3 +66,22 @@ export function monthHistogram(dates: (string | null)[]): { month: string; label
   }
   return out;
 }
+
+/** 754 → "12:34", 3725 → "1:02:05". */
+export function fmtClock(secs: number): string {
+  const s = Math.max(0, Math.floor(secs));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const mm = h ? String(m).padStart(2, '0') : String(m);
+  return `${h ? `${h}:` : ''}${mm}:${String(r).padStart(2, '0')}`;
+}
+
+/** YouTube-id uit de vormen die in Stroom voorkomen (/v/, watch?v=, youtu.be/, /embed/). */
+export function youtubeId(url: string | null | undefined): string | null {
+  if (!url) return null;
+  const m = url.match(/(?:youtube\.com\/(?:v\/|embed\/|shorts\/|watch\?(?:.*&)?v=)|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+export function youtubeAt(id: string, secs: number): string {
+  return `https://www.youtube.com/watch?v=${id}&t=${Math.max(0, Math.floor(secs))}s`;
+}

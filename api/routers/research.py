@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import text as sa_text
@@ -19,6 +19,7 @@ from sqlalchemy import text as sa_text
 from core.auth import require_user
 from core.config import settings
 from core.db import async_session_maker, get_async_session
+from services import research_moments as rm
 from services import research_service as rs
 from services.llm_service import LLMService
 
@@ -171,6 +172,74 @@ async def funnel(run_id: str, session=Depends(get_async_session), user=Depends(r
              "date": r[4].date().isoformat() if r[4] else None, "recall_score": r[5],
              "queries": list(r[6] or []), "screen_score": r[7], "relevance": r[8],
              "n_findings": r[9]} for r in rows]
+
+
+async def _source_media(run: dict, ref: str) -> tuple[dict, dict, list]:
+    """(bron uit het dossier, item-mediagegevens, getimede segmenten)."""
+    src = next((s for s in (run.get("sources") or []) if s.get("ref") == ref), None)
+    if not src:
+        raise HTTPException(status_code=404, detail="Bron niet gevonden")
+    async with async_session_maker() as s:
+        r = (await s.exec(sa_text("""
+            SELECT format::text, media_url, thumbnail_url, transcript_segments, duration_seconds
+            FROM items WHERE id = CAST(:i AS uuid)""").bindparams(i=src["item_id"]))).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Item niet gevonden")
+    media = {"item_id": src["item_id"], "ref": ref, "title": src.get("title"),
+             "source": src.get("source"), "format": r[0], "media_url": r[1],
+             "thumbnail_url": r[2], "duration": r[4], "has_times": bool(r[3])}
+    return src, media, (r[3] or [])
+
+
+async def _cached_moments(run_id: str, item_id: str, n: int) -> Optional[list]:
+    async with async_session_maker() as s:
+        r = (await s.exec(sa_text(
+            "SELECT moments -> :k FROM research_runs WHERE id = CAST(:i AS uuid)")
+            .bindparams(k=item_id, i=run_id))).first()
+    cached = r[0] if r else None
+    return cached if isinstance(cached, list) and len(cached) == n else None
+
+
+@router.get("/research/{run_id}/sources/{ref}/media")
+async def source_media(run_id: str, ref: str = Path(pattern=r"^S\d+$"),
+                       user=Depends(require_user)):
+    """Alles om een bron af te spelen, plus per bevinding het moment in de
+    aflevering. Letterlijke citaten worden direct opgezocht; staat er nog iets
+    open, dan zegt `pending` dat POST .../moments het model kan laten zoeken."""
+    run = await _get(run_id, user)
+    src, media, segments = await _source_media(run, ref)
+    findings = src.get("findings") or []
+    cached = await _cached_moments(run_id, src["item_id"], len(findings))
+    if cached is not None:
+        return {**media, "moments": cached, "pending": False}
+    exact = rm.locate_quotes(segments, [f.get("quote") or "" for f in findings])
+    moments = [{"t": t, "exact": True} if t is not None else None for t in exact]
+    pending = bool(segments) and any(m is None for m in moments) and media["format"] in ("podcast", "video")
+    return {**media, "moments": moments, "pending": pending}
+
+
+@router.post("/research/{run_id}/sources/{ref}/moments")
+async def source_moments(run_id: str, request: Request, ref: str = Path(pattern=r"^S\d+$"),
+                         user=Depends(require_user)):
+    """Laat een goedkoop model (cloud-gemma) de overige momenten zoeken en
+    bewaar het resultaat, zodat dit per bron maar één keer gebeurt."""
+    run = await _get(run_id, user)
+    src, media, segments = await _source_media(run, ref)
+    findings = src.get("findings") or []
+    cached = await _cached_moments(run_id, src["item_id"], len(findings))
+    if cached is not None:
+        return {"moments": cached}
+    moments, model = await rm.locate_moments(_llm(request), segments, findings)
+    if model is None and any(m is None for m in moments):
+        # Model faalde (of geen transcript): niet bewaren, later opnieuw proberen.
+        return {"moments": moments}
+    async with async_session_maker() as s:
+        await s.exec(sa_text("""
+            UPDATE research_runs SET moments = moments || jsonb_build_object(:k, CAST(:v AS jsonb))
+            WHERE id = CAST(:i AS uuid)""").bindparams(k=src["item_id"], v=json.dumps(moments),
+                                                       i=run_id))
+        await s.commit()
+    return {"moments": moments}
 
 
 @router.post("/research/{run_id}/refresh")

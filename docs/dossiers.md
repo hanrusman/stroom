@@ -55,6 +55,29 @@ Een proefrun op de software-inkoopvraag (2026-11-08) duurde ~8 minuten:
 - **De verdiepingsronde verdubbelde het aantal bruikbare bronnen** (112 → 206)
   en vulde vooral tegengeluid en NL/EU-casussen aan.
 
+## Terugluisteren
+
+In het bronpaneel (klik op een `[S12]`) staat bij podcasts een knop
+*Luister* en per bevinding een tijd (`▶ 12:34`). Die start de sticky speler
+op dat moment, met twee tellen aanloop; een tweede tijd in dezelfde
+aflevering springt alleen. Bij YouTube-video's openen dezelfde knoppen
+YouTube op die seconde.
+
+Het moment komt uit het getimede transcript (`items.transcript_segments`),
+zie `services/research_moments.py`:
+
+1. **Letterlijk**: staat het citaat in het transcript (zes woorden op een
+   rij), dan is dat het moment. Op het software-inkoopdossier gold dat voor
+   94 van de 370 citaten; de rest komt uit samenvattingen en is parafrase.
+2. **Bij benadering** (`≈ 12:30`): voor de overige bevindingen leest
+   `cloud-gemma` (→ `cloud-gpt-120b`) het transcript in blokken van 30
+   seconden en wijst per bevinding het blok aan. Eén aanroep per bron, pas
+   als je die bron opent; het resultaat staat daarna in
+   `research_runs.moments` (migratie 030), dus het model kijkt maar één keer.
+
+Zonder getimed transcript (ongeveer de helft van de oudere podcasts) is er
+alleen *Luister* vanaf het begin.
+
 ## Hervatten en vernieuwen
 
 Elke stap kijkt eerst wat er al ligt: plan in `research_runs.plan`, kandidaten
@@ -84,6 +107,10 @@ Web (sessie):
 - `POST /research/{id}/ask` `{question}` — vervolgvraag
 - `POST /research/{id}/refresh | resume | cancel`, `DELETE /research/{id}`
 - `GET /research/{id}/markdown`, `POST /research/{id}/obsidian` (→ `Dossiers/<titel>.md`)
+- `GET /research/{id}/sources/{S12}/media` — media van een bron plus letterlijk
+  gevonden momenten; `pending: true` als het model nog kan zoeken
+- `POST /research/{id}/sources/{S12}/moments` — laat het model de overige
+  momenten zoeken en bewaart ze
 
 Okavango (internal token): `GET/POST /internal/research`,
 `GET /internal/research/{id}` (compact; `source_ref=S12` voor één bron),
@@ -94,7 +121,7 @@ modelgebruik.
 
 ## Config (env)
 
-`RESEARCH_{PLAN,SCREEN,EXTRACT,WRITE,CRITIQUE,ASK}_MODELS` (kommagescheiden
+`RESEARCH_{PLAN,SCREEN,EXTRACT,WRITE,CRITIQUE,ASK,MOMENT}_MODELS` (kommagescheiden
 fallback-keten), `RESEARCH_SCREEN_MAX` (650), `RESEARCH_EXTRACT_MAX` (160),
 `RESEARCH_RECALL_POOL` (40), `RESEARCH_CLOUD_CONCURRENCY` (3),
 `STROOM_WEB_BASE_URL` (voor links in markdown-export).

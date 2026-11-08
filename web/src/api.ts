@@ -1211,6 +1211,30 @@ export async function exportResearchToObsidian(id: string): Promise<{ path: stri
   return (await apiFetch(`/api/research/${id}/obsidian`, jsonPost())).json();
 }
 
+export interface ResearchMoment { t: number; exact: boolean }
+
+export interface ResearchSourceMedia {
+  item_id: string;
+  ref: string;
+  title: string | null;
+  source: string | null;
+  format: string;
+  media_url: string | null;
+  thumbnail_url: string | null;
+  duration: number | null;
+  has_times: boolean;
+  moments: (ResearchMoment | null)[];
+  pending: boolean;
+}
+
+export async function fetchResearchSourceMedia(id: string, ref: string): Promise<ResearchSourceMedia> {
+  return (await apiFetch(`/api/research/${id}/sources/${ref}/media`)).json();
+}
+
+export async function locateResearchMoments(id: string, ref: string): Promise<{ moments: (ResearchMoment | null)[] }> {
+  return (await apiFetch(`/api/research/${id}/sources/${ref}/moments`, jsonPost())).json();
+}
+
 export async function fetchResearchMarkdown(id: string): Promise<string> {
   return (await apiFetch(`/api/research/${id}/markdown`)).text();
 }

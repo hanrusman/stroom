@@ -199,3 +199,16 @@ Antwoord in het Nederlands, to the point (meestal 1-4 alinea's of een \
 lijstje), met bronverwijzingen [S12]. Gebruik alleen het dossier en de \
 bevindingen. Staat het antwoord er niet in, zeg dat eerlijk en stel voor \
 waar je in het archief verder zou zoeken (een nieuwe dossiervraag)."""
+
+MOMENT_SYSTEM = """Je krijgt het transcript van een podcast of video, in \
+blokken met een begintijd ([12:30] tekst), en een genummerde lijst \
+bevindingen die uit die aflevering komen. Een bevinding is vaak een \
+samenvatting of vertaling van wat er gezegd werd, niet letterlijk.
+
+Zoek per bevinding het blok waarin dat punt het duidelijkst gemaakt wordt.
+
+Lever JSON: {"moments": [{"i": 1, "t": "12:30"}, ...]}
+- "i" is het nummer van de bevinding, "t" de begintijd van het blok \
+  precies zoals die tussen de haken staat.
+- Staat het punt niet herkenbaar in het transcript, geef dan "t": null. \
+  Gok niet."""
