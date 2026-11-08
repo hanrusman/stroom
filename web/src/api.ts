@@ -1063,3 +1063,154 @@ export async function generatePodcast(text: string, model: PodcastModel): Promis
 export async function deletePodcastTest(id: string): Promise<void> {
   await apiFetch(`/api/podcast-tests/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+
+// ---- Dossiers (brede onderzoeksvragen over het hele archief) ----
+
+export type ResearchStatus =
+  | 'queued' | 'planning' | 'recall' | 'screening' | 'extracting' | 'deepening'
+  | 'writing' | 'critiquing' | 'revising' | 'done' | 'failed' | 'cancelled';
+
+export interface ResearchProgress {
+  stage?: string;
+  step?: 'planning' | 'recall' | 'screening' | 'extracting';
+  done?: number;
+  total?: number;
+  sources?: number;
+  issues?: number;
+  queries?: number;
+  candidates?: number;
+  screened?: number;
+  extracted?: number;
+  findings?: number;
+}
+
+export interface ResearchListItem {
+  id: string;
+  title: string | null;
+  question: string;
+  status: ResearchStatus;
+  progress: ResearchProgress;
+  parent_id: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+  error: string | null;
+  n_sources: number;
+  superseded: boolean;
+}
+
+export interface ResearchFinding {
+  claim: string;
+  aspect: string;
+  stance: string;
+  actors: string[];
+  sector: string;
+  region: string;
+  evidence: '' | 'data' | 'case' | 'expert' | 'prediction' | 'anecdote';
+  speaker: string;
+  quote: string;
+}
+
+export interface ResearchSource {
+  ref: string;
+  item_id: string;
+  title: string;
+  source: string;
+  format: string;
+  date: string | null;
+  url: string | null;
+  relevance: number;
+  findings: ResearchFinding[];
+  cited?: boolean;
+}
+
+export interface ResearchAspect { id: string; name: string; description: string }
+
+export interface ResearchFollowup { question: string; answer: string; model: string; at: string }
+
+export interface ResearchRun {
+  id: string;
+  parent_id: string | null;
+  question: string;
+  title: string | null;
+  status: ResearchStatus;
+  plan: {
+    title: string; question: string; aspects: ResearchAspect[]; queries: string[];
+    include?: string; exclude?: string; model?: string;
+    deepen?: { gaps: string; queries: string[]; model: string | null };
+  } | null;
+  progress: ResearchProgress | null;
+  stats: { llm_calls?: number; llm_failures?: number; secs?: number; by_model?: Record<string, { calls: number; failures: number; secs: number }> } | null;
+  critique: { verdict?: string; text?: string; issues?: { type: string; where: string; problem: string; fix: string }[] } | null;
+  report: string | null;
+  sources: ResearchSource[] | null;
+  models: Record<string, string> | null;
+  followups: ResearchFollowup[] | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  finished_at: string | null;
+}
+
+export interface ResearchFunnelRow {
+  item_id: string;
+  title: string;
+  source: string;
+  format: string;
+  date: string | null;
+  recall_score: number;
+  queries: string[];
+  screen_score: number | null;
+  relevance: number | null;
+  n_findings: number;
+}
+
+const jsonPost = (body?: unknown): RequestInit => ({
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: body === undefined ? undefined : JSON.stringify(body),
+});
+
+export async function fetchResearchRuns(): Promise<ResearchListItem[]> {
+  return (await apiFetch('/api/research')).json();
+}
+
+export async function fetchResearchRun(id: string, signal?: AbortSignal): Promise<ResearchRun> {
+  return (await apiFetch(`/api/research/${id}`, { signal })).json();
+}
+
+export async function fetchResearchFunnel(id: string): Promise<ResearchFunnelRow[]> {
+  return (await apiFetch(`/api/research/${id}/funnel`)).json();
+}
+
+export async function createResearchRun(question: string): Promise<{ id: string }> {
+  return (await apiFetch('/api/research', jsonPost({ question }))).json();
+}
+
+export async function refreshResearchRun(id: string): Promise<{ id: string }> {
+  return (await apiFetch(`/api/research/${id}/refresh`, jsonPost())).json();
+}
+
+export async function resumeResearchRun(id: string): Promise<void> {
+  await apiFetch(`/api/research/${id}/resume`, jsonPost());
+}
+
+export async function cancelResearchRun(id: string): Promise<void> {
+  await apiFetch(`/api/research/${id}/cancel`, jsonPost());
+}
+
+export async function deleteResearchRun(id: string): Promise<void> {
+  await apiFetch(`/api/research/${id}`, { method: 'DELETE' });
+}
+
+export async function askResearchRun(id: string, question: string): Promise<ResearchFollowup> {
+  return (await apiFetch(`/api/research/${id}/ask`, jsonPost({ question }))).json();
+}
+
+export async function exportResearchToObsidian(id: string): Promise<{ path: string }> {
+  return (await apiFetch(`/api/research/${id}/obsidian`, jsonPost())).json();
+}
+
+export async function fetchResearchMarkdown(id: string): Promise<string> {
+  return (await apiFetch(`/api/research/${id}/markdown`)).text();
+}

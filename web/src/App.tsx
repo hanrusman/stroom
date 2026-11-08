@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { motion } from 'motion/react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon, Lightbulb } from 'lucide-react';
+import { Search, User as UserIcon, Settings, ArrowRight, PlayCircle, Headphones, FileText, MessageSquare, ArrowLeft, ExternalLink, Bookmark, Clock, Archive, Sparkles, Mic, Loader2, Check, X, CalendarClock, Sun, Moon, Newspaper, RefreshCw, BookOpen, ChevronDown, ChevronUp, Plus, Inbox as InboxIcon, Lightbulb, Telescope } from 'lucide-react';
 import { AdminPage } from './AdminPage';
 import { TipsPage } from './TipsPage';
+import { ResearchPage } from './ResearchPage';
 import { PodcastConverter } from './PodcastConverter';
 import { SettingsProvider, useSettings } from './settings';
 import { GlobalAudioProvider, useGlobalAudio } from './GlobalAudioContext';
@@ -1805,7 +1806,7 @@ const ItemDetailView = ({ id, onBack, onArchive, onOpenSource, onEink }: { id: s
 const parseSearchFormat = (v: string | null): ItemFormat | null =>
   v === 'article' || v === 'podcast' || v === 'video' ? v : null;
 
-const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; tips: boolean; podcast: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null } => {
+const readUrl = (): { itemId: string | null; topic: string | null; sourceId: string | null; admin: boolean; lessons: boolean; tips: boolean; podcast: boolean; eink: boolean; q: string | null; fmt: ItemFormat | null; dossier: string | null } => {
   const p = new URLSearchParams(window.location.search);
   return {
     itemId: p.get('item'), topic: p.get('topic'),
@@ -1815,6 +1816,8 @@ const readUrl = (): { itemId: string | null; topic: string | null; sourceId: str
     eink: p.get('eink') === '1',
     // ?q= (ook leeg) = zoekpagina open
     q: p.get('q'), fmt: parseSearchFormat(p.get('fmt')),
+    // ?dossier=1 = overzicht, ?dossier=<id> = één dossier
+    dossier: p.get('dossier'),
   };
 };
 
@@ -2890,6 +2893,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   const [lessonsView, setLessonsView] = useState<boolean>(() => readUrl().lessons);
   const [podcastView, setPodcastView] = useState(() => readUrl().podcast);
   const [tipsView, setTipsView] = useState<boolean>(() => readUrl().tips);
+  const [dossierView, setDossierView] = useState<string | null>(() => readUrl().dossier);
   const [searchQuery, setSearchQuery] = useState<string | null>(() => readUrl().q);
   const [searchFormat, setSearchFormat] = useState<ItemFormat | null>(() => readUrl().fmt);
   const [inboxOpen, setInboxOpen] = useState<boolean>(false);
@@ -2898,12 +2902,13 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
   useEffect(() => {
     const onPop = () => {
       setQueueView(new URLSearchParams(location.search).has("queue"));
-      const { itemId, topic, sourceId, admin, lessons, tips, podcast, eink, q, fmt } = readUrl();
+      const { itemId, topic, sourceId, admin, lessons, tips, podcast, eink, q, fmt, dossier } = readUrl();
       setItemId(itemId);
       setSourceId(sourceId);
       setAdminMode(admin);
       setLessonsView(lessons);
       setTipsView(tips);
+      setDossierView(dossier);
       setPodcastView(podcast);
       setEinkMode(eink);
       setSearchQuery(q);
@@ -2924,7 +2929,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     url.searchParams.delete('q');
     url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
@@ -2932,7 +2937,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
     setSearchQuery(null);
     setSearchFormat(null);
     setActiveFilter('all');
@@ -2944,7 +2949,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setQueueView(false);
     // Al op de zoekpagina: geen extra history-entry (die liet browser-terug
     // naar een oudere vraag springen dan het invoerveld toonde).
-    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView && !podcastView && !queueView) {
+    if (searchQuery !== null && !itemId && !sourceId && !adminMode && !lessonsView && !tipsView && !dossierView && !podcastView && !queueView) {
       window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
       return;
     }
@@ -2958,7 +2963,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('source');
     url.searchParams.delete('admin');
     url.searchParams.delete('lessons');
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     window.history.pushState({}, '', url.toString());
     setSearchQuery(q);
     setSearchFormat(parseSearchFormat(url.searchParams.get('fmt')));
@@ -2966,7 +2971,7 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setSourceId(null);
     setAdminMode(false);
     setLessonsView(false);
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
@@ -3002,14 +3007,14 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('lessons', '1');
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
     url.searchParams.delete('q');
     url.searchParams.delete('fmt');
     window.history.pushState({}, '', url.toString());
     setLessonsView(true);
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
     setItemId(null);
     setAdminMode(false);
     setSearchQuery(null);
@@ -3020,10 +3025,10 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     setQueueView(false);
     const url = new URL(window.location.href);
     url.searchParams.delete("queue");
-    for (const key of ['item', 'source', 'admin', 'lessons', 'tips', 'q', 'fmt']) url.searchParams.delete(key);
+    for (const key of ['item', 'source', 'admin', 'lessons', 'tips', 'dossier', 'q', 'fmt']) url.searchParams.delete(key);
     url.searchParams.set('podcast', '1');
     window.history.pushState({}, '', url.toString());
-    setPodcastView(true); setAdminMode(false); setLessonsView(false); setTipsView(false);
+    setPodcastView(true); setAdminMode(false); setLessonsView(false); setTipsView(false); setDossierView(null);
     setItemId(null); setSourceId(null); setSearchQuery(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
@@ -3035,6 +3040,8 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.delete('podcast');
     setPodcastView(false);
     url.searchParams.set('tips', '1');
+    url.searchParams.delete('dossier');
+    setDossierView(null);
     url.searchParams.delete('lessons');
     url.searchParams.delete('item');
     url.searchParams.delete('admin');
@@ -3049,20 +3056,39 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
+  const openDossiers = (runId: string | null = null) => {
+    setQueueView(false);
+    const url = new URL(window.location.href);
+    for (const key of ['queue', 'podcast', 'item', 'source', 'admin', 'lessons', 'tips', 'q', 'fmt']) url.searchParams.delete(key);
+    url.searchParams.set('dossier', runId ?? '1');
+    window.history.pushState({}, '', url.toString());
+    setDossierView(runId ?? '1');
+    setPodcastView(false); setTipsView(false); setLessonsView(false); setItemId(null);
+    setSourceId(null); setAdminMode(false); setSearchQuery(null);
+    window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
+  };
+
+  const closeDossiers = () => {
+    const url = new URL(window.location.href);
+    url.searchParams.delete('dossier');
+    window.history.pushState({}, '', url.toString());
+    setDossierView(null);
+  };
+
   const closeTips = () => {
     const url = new URL(window.location.href);
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     window.history.pushState({}, '', url.toString());
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
   };
 
   const closeLessons = () => {
     const url = new URL(window.location.href);
     url.searchParams.delete('lessons');
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     window.history.pushState({}, '', url.toString());
     setLessonsView(false);
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
   };
 
   const openAdmin = () => {
@@ -3129,11 +3155,11 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
     url.searchParams.set('source', id);
     url.searchParams.delete('item');
     // Expliciete bronnavigatie verlaat Tips: anders wint tipsView (vóór sourceId in de render).
-    url.searchParams.delete('tips');
+    url.searchParams.delete('tips'); url.searchParams.delete('dossier');
     window.history.pushState({}, '', url.toString());
     setSourceId(id);
     setItemId(null);
-    setTipsView(false);
+    setTipsView(false); setDossierView(null);
     window.scrollTo({ top: 0, behavior: 'instant' as ScrollBehavior });
   };
 
@@ -3201,6 +3227,10 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
                     className="hover:text-brand-accent transition-colors min-w-11 min-h-11 inline-flex items-center justify-center">
               <Mic size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
             </button>
+            <button onClick={() => openDossiers()} title="Dossiers — onderzoeksvragen aan je hele archief" aria-label="Dossiers"
+                    className="hover:text-brand-accent transition-colors p-1 md:p-0">
+              <Telescope size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
+            </button>
             <button onClick={openTips} title="Tips uit je podcasts en video's" aria-label="Tips"
                     className="hover:text-brand-accent transition-colors p-1 md:p-0">
               <Lightbulb size={18} strokeWidth={2.5} className="md:w-5 md:h-5" />
@@ -3246,6 +3276,10 @@ function AuthedApp({ user, onLogout, onReaderModeChange }: { user: User; onLogou
         ) : tipsView ? (
           // Na itemId: een aflevering openen vanuit Tips toont het item, terug brengt je weer hier.
           <TipsPage onBack={closeTips} onOpenItem={openItem} />
+        ) : dossierView ? (
+          // Net als Tips na itemId: een bron openen toont het item, terug brengt je weer hier.
+          <ResearchPage runId={dossierView === '1' ? null : dossierView} onOpenRun={openDossiers}
+            onBack={closeDossiers} onOpenItem={openItem} />
         ) : sourceId ? (
           <SourceView id={sourceId} onBack={closeSource} onOpen={openItem} />
         ) : searchQuery !== null ? (

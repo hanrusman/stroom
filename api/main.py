@@ -40,6 +40,7 @@ from routers import inbox as inbox_router
 from routers import transcripts as transcripts_router
 from routers import decision as decision_router
 from routers import tips as tips_router
+from routers import research as research_router
 from services import tips_service
 from services import podcast_converter
 from routers import podcast_tests as podcast_tests_router
@@ -417,6 +418,16 @@ async def lifespan(app: FastAPI):
     if podcast_converter.enabled():
         worker_tasks.append(asyncio.create_task(podcast_converter.worker(async_session_maker)))
 
+    # Dossiers die midden in een stap zaten (herstart) verder laten lopen.
+    try:
+        from services import research_service
+        n = await research_service.resume_interrupted(
+            async_session_maker, LLMService(research_service.http_client()), app.state.http_client)
+        if n:
+            print(f"[lifespan] {n} onderbroken dossier(s) hervat", flush=True)
+    except Exception as e:  # tabel bestaat nog niet (migratie 028) → niet fataal
+        print(f"[lifespan] dossiers hervatten overgeslagen: {e!r:.200}", flush=True)
+
     yield
 
     for t in worker_tasks:
@@ -577,6 +588,7 @@ app.include_router(inbox_router.router)
 app.include_router(transcripts_router.router)
 app.include_router(decision_router.router)
 app.include_router(tips_router.router)
+app.include_router(research_router.router)
 app.include_router(podcast_tests_router.router)
 app.include_router(reading_queue_router.router)
 

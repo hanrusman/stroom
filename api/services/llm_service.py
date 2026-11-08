@@ -45,7 +45,10 @@ class LLMService:
         response_format: str = "text",
         timeout: float = 180.0,
         max_tokens: int | None = None,
+        meta: dict | None = None,
     ):
+        """meta (optioneel): wordt gevuld met finish_reason en usage, zodat een
+        caller afgekapte antwoorden (finish_reason 'length') kan herkennen."""
         payload = {
             "model": model,
             "messages": messages,
@@ -69,7 +72,12 @@ class LLMService:
                 detail=f"LiteLLM error: {response.text}",
             )
 
-        msg = response.json()["choices"][0]["message"]
+        body = response.json()
+        choice = body["choices"][0]
+        if meta is not None:
+            meta["finish_reason"] = choice.get("finish_reason")
+            meta["usage"] = body.get("usage")
+        msg = choice["message"]
         content = msg.get("content") or ""
         if not content:
             # Reasoning models (Kimi K2.5, Qwen3) verbruiken soms alle tokens aan
