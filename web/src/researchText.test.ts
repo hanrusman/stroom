@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { citationsToButtons, formatDateNL, monthHistogram, stageIndex } from './researchText';
+import { fmtClock, youtubeAt, youtubeId } from './researchText';
 
 describe('citationsToButtons', () => {
   it('turns single and grouped citations into buttons', () => {
@@ -41,5 +42,20 @@ describe('stageIndex / formatDateNL', () => {
     expect(formatDateNL('2026-07-10')).toMatch(/2026/);
     expect(formatDateNL(null)).toBe('?');
     expect(formatDateNL('nope')).toBe('?');
+  });
+});
+
+describe('audio moments helpers', () => {
+  it('formats clock times', () => {
+    expect(fmtClock(0)).toBe('0:00');
+    expect(fmtClock(754.9)).toBe('12:34');
+    expect(fmtClock(3725)).toBe('1:02:05');
+  });
+  it('extracts YouTube ids from Stroom media urls', () => {
+    expect(youtubeId('https://www.youtube.com/v/ILBF5l2yD10?version=3')).toBe('ILBF5l2yD10');
+    expect(youtubeId('https://www.youtube.com/watch?feature=x&v=D3kyETfX7S0')).toBe('D3kyETfX7S0');
+    expect(youtubeId('https://youtu.be/D3kyETfX7S0')).toBe('D3kyETfX7S0');
+    expect(youtubeId('https://pdst.fm/e/episode.mp3')).toBeNull();
+    expect(youtubeAt('D3kyETfX7S0', 61.7)).toBe('https://www.youtube.com/watch?v=D3kyETfX7S0&t=61s');
   });
 });

@@ -16,8 +16,6 @@ const StickyPlayer: React.FC = () => {
     close,
   } = useGlobalAudio();
 
-  if (!currentTrack) return null;
-
   const formatTime = (seconds: number): string => {
     if (!isFinite(seconds) || seconds < 0) return '0:00';
     const m = Math.floor(seconds / 60);
@@ -122,6 +120,10 @@ const StickyPlayer: React.FC = () => {
     }
     isLongPressRef.current = false;
   };
+
+  // Pas ná alle hooks: een vroege return ervoor verandert de hook-volgorde
+  // zodra er een track komt (React-fout "change in the order of Hooks").
+  if (!currentTrack) return null;
 
   const pct = duration > 0 ? (currentTime / duration) * 100 : 0;
 

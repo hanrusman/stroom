@@ -4,17 +4,22 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import {
   ArrowLeft, Check, Download, ExternalLink, FileText, Loader2, MessageSquare, NotebookPen,
-  Play, RefreshCw, Send, Square, Trash2, X,
+  Play, RefreshCw, Send, Square, Trash2, Video, X,
 } from 'lucide-react';
 import {
   askResearchRun, cancelResearchRun, createResearchRun, deleteResearchRun,
   exportResearchToObsidian, fetchResearchFunnel, fetchResearchMarkdown, fetchResearchRun,
-  fetchResearchRuns, refreshResearchRun, resumeResearchRun,
+  fetchResearchRuns, fetchResearchSourceMedia, locateResearchMoments, refreshResearchRun,
+  resumeResearchRun,
 } from './api';
 import type {
-  ResearchFinding, ResearchFunnelRow, ResearchListItem, ResearchRun, ResearchSource, ResearchStatus,
+  ResearchFinding, ResearchFunnelRow, ResearchListItem, ResearchMoment, ResearchRun, ResearchSource,
+  ResearchSourceMedia, ResearchStatus,
 } from './api';
-import { citationsToButtons, formatDateNL, monthHistogram, STAGES, stageIndex } from './researchText';
+import { useGlobalAudio } from './GlobalAudioContext';
+import {
+  citationsToButtons, fmtClock, formatDateNL, monthHistogram, STAGES, stageIndex, youtubeAt, youtubeId,
+} from './researchText';
 
 const EXAMPLES = [
   'Hoe verandert het inkopen van software, en waar kiezen organisaties voor zelf bouwen versus kopen?',
@@ -213,6 +218,8 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('dossier');
   const [activeRef, setActiveRef] = useState<string | null>(null);
+  // De sticky speler ligt over de bottom sheet heen: ruimte maken als die open is.
+  const playerOpen = !!useGlobalAudio().currentTrack;
   // Escape sluit het bronpaneel (op mobiel dekt het als bottom sheet de tabs af).
   useEffect(() => {
     if (!activeRef) return;
@@ -251,6 +258,9 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
   const sources = run?.sources ?? [];
   const byRef = useMemo(() => new Map(sources.map(s => [s.ref, s])), [sources]);
   const active = activeRef ? byRef.get(activeRef) ?? null : null;
+  // Eén keer ophalen voor beide panelen (desktop-aside én mobiele sheet zijn
+  // allebei gemount, CSS verbergt er één): anders start het momentenzoeken dubbel.
+  const sourceMedia = useSourceMedia(run?.id ?? null, active?.ref ?? null);
 
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -358,14 +368,14 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
             </div>
             <aside className="hidden lg:block">
               <div className="sticky top-24">
-                {active ? <SourcePanel source={active} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
+                {active ? <SourcePanel source={active} media={sourceMedia} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
                   : <Timeline sources={sources} />}
               </div>
             </aside>
           </div>
           {active && (
-            <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-3xl border-t border-brand-ink/10 bg-brand-cream p-5 shadow-2xl">
-              <SourcePanel source={active} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
+            <div className={`lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-3xl border-t border-brand-ink/10 bg-brand-cream p-5 shadow-2xl ${playerOpen ? 'pb-36' : ''}`}>
+              <SourcePanel source={active} media={sourceMedia} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
             </div>
           )}
         </>
@@ -638,7 +648,58 @@ function Timeline({ sources }: { sources: ResearchSource[] }) {
   );
 }
 
-function SourcePanel({ source, onClose, onOpenItem }: { source: ResearchSource; onClose: () => void; onOpenItem: (id: string) => void }) {
+/** Mediagegevens + momenten per bevinding voor één bron. Letterlijke citaten
+ *  komen direct mee; de rest zoekt een goedkoop model daarna (één keer per bron). */
+function useSourceMedia(runId: string | null, ref: string | null) {
+  const [media, setMedia] = useState<ResearchSourceMedia | null>(null);
+  const [locating, setLocating] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    setMedia(null);
+    setLocating(false);
+    if (!runId || !ref) return;
+    fetchResearchSourceMedia(runId, ref).then(m => {
+      if (!alive) return;
+      setMedia(m);
+      if (!m.pending) return;
+      setLocating(true);
+      locateResearchMoments(runId, ref)
+        .then(r => { if (alive) setMedia(prev => (prev ? { ...prev, moments: r.moments, pending: false } : prev)); })
+        .catch(() => { /* momenten blijven bij wat er letterlijk gevonden is */ })
+        .finally(() => { if (alive) setLocating(false); });
+    }).catch(() => { /* zonder media blijft het paneel gewoon tekst */ });
+    return () => { alive = false; };
+  }, [runId, ref]);
+  return { media, locating };
+}
+
+function SourcePanel({ source, media: sourceMedia, onClose, onOpenItem }: {
+  source: ResearchSource; media: ReturnType<typeof useSourceMedia>;
+  onClose: () => void; onOpenItem: (id: string) => void;
+}) {
+  // Het paneel kan heel even een vorige bron tonen terwijl de nieuwe laadt.
+  const media = sourceMedia.media?.ref === source.ref ? sourceMedia.media : null;
+  const locating = sourceMedia.locating;
+  const { loadTrack, currentTrack, isPlaying, seek, togglePlay } = useGlobalAudio();
+  const yt = media && media.format === 'video' ? youtubeId(media.media_url) : null;
+  const audio = media && media.format === 'podcast' && media.media_url ? media : null;
+  const playable = !!(audio || yt);
+  const isCurrent = !!audio && currentTrack?.itemId === audio.item_id;
+
+  const play = (t: number) => {
+    if (!audio?.media_url) return;
+    const start = Math.max(0, t - 2);  // twee tellen aanloop
+    if (isCurrent) {
+      seek(start);
+      if (!isPlaying) togglePlay();
+      return;
+    }
+    loadTrack({
+      itemId: audio.item_id, title: source.title, sourceName: source.source,
+      mediaUrl: audio.media_url, format: 'podcast', thumbnailUrl: audio.thumbnail_url || undefined,
+    }, start);
+  };
+
   return (
     <div className="rounded-2xl border border-brand-ink/10 bg-brand-surface p-4 shadow-sm">
       <div className="mb-2 flex items-start justify-between gap-2">
@@ -648,19 +709,45 @@ function SourcePanel({ source, onClose, onOpenItem }: { source: ResearchSource; 
       <div className="font-display text-[19px] leading-snug text-brand-ink">{source.title}</div>
       <div className="mt-1 text-[12px] text-brand-ink/50">{source.source} · {formatDateNL(source.date)}</div>
       <div className="mt-3 flex flex-wrap gap-2">
+        {audio && (
+          <button type="button" onClick={() => (isCurrent ? togglePlay() : play(0))} className={actionBtn}>
+            <Play size={13} /> {isCurrent && isPlaying ? 'Pauzeer' : isCurrent ? 'Verder luisteren' : 'Luister'}
+          </button>
+        )}
+        {yt && <a href={youtubeAt(yt, 0)} target="_blank" rel="noreferrer" className={actionBtn}><Video size={13} /> Bekijk op YouTube</a>}
         <button type="button" onClick={() => onOpenItem(source.item_id)} className={actionBtn}><FileText size={13} /> Open in Stroom</button>
-        {source.url && <a href={source.url} target="_blank" rel="noreferrer" className={actionBtn}><ExternalLink size={13} /> Origineel</a>}
+        {source.url && !yt && <a href={source.url} target="_blank" rel="noreferrer" className={actionBtn}><ExternalLink size={13} /> Origineel</a>}
       </div>
+      {playable && locating && (
+        <p className="mt-3 flex items-center gap-1.5 text-[12px] text-brand-ink/50">
+          <Loader2 size={12} className="animate-spin" /> Momenten in de aflevering zoeken…
+        </p>
+      )}
       <ul className="mt-4 space-y-3 max-h-[55vh] overflow-y-auto pr-1">
         {source.findings.map((f, k) => (
           <li key={k} className="text-[13.5px] leading-relaxed text-brand-ink/80">
             <p className="font-serif">{f.claim}</p>
             {f.quote && <p className="mt-1 border-l-2 border-brand-accent/40 pl-2 font-serif text-[13px] italic text-brand-ink/55">“{f.quote}”</p>}
+            {playable && media?.moments[k] && (
+              <MomentButton moment={media.moments[k]!} youtube={yt} onPlay={play} />
+            )}
           </li>
         ))}
       </ul>
     </div>
   );
+}
+
+function MomentButton({ moment, youtube, onPlay }: {
+  moment: ResearchMoment; youtube: string | null; onPlay: (t: number) => void;
+}) {
+  const label = `${moment.exact ? '' : '≈ '}${fmtClock(moment.t)}`;
+  const title = moment.exact ? `Speel af vanaf ${fmtClock(moment.t)}` : `Speel af vanaf ${fmtClock(moment.t)} (moment bij benadering)`;
+  const cls = 'mt-1.5 inline-flex items-center gap-1 rounded-full bg-brand-accent/10 px-2.5 py-0.5 font-mono text-[11px] text-brand-accent hover:bg-brand-accent hover:text-brand-cream';
+  if (youtube) {
+    return <a href={youtubeAt(youtube, Math.max(0, moment.t - 2))} target="_blank" rel="noreferrer" title={title} aria-label={title} className={cls}><Play size={10} /> {label}</a>;
+  }
+  return <button type="button" onClick={() => onPlay(moment.t)} title={title} aria-label={title} className={cls}><Play size={10} /> {label}</button>;
 }
 
 function Funnel({ id, onOpenItem }: { id: string; onOpenItem: (id: string) => void }) {
