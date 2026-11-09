@@ -139,12 +139,14 @@ def transcript_blocks(segments: Any, block_secs: float = BLOCK_SECS,
 
 def snap(t: float, block_starts: list[float]) -> Optional[float]:
     """Laat een modelantwoord landen op het begin van het blok waar het in
-    valt; tijden buiten het transcript tellen niet."""
+    valt; tijden buiten het transcript tellen niet. Het model ziet de
+    bloktijden afgekapt op hele seconden (fmt_ts: 31,8 s → [0:31]), dus
+    vergelijk met diezelfde afgekapte tijd, anders valt "0:31" in het vorige blok."""
     if not block_starts or t < 0 or t > block_starts[-1] + BLOCK_SECS * 2:
         return None
     best = block_starts[0]
     for b in block_starts:
-        if b <= t + 0.5:
+        if int(b) <= t:
             best = b
         else:
             break

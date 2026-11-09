@@ -52,6 +52,12 @@ def test_parse_ts_and_snap():
     assert rm.snap(40.0, starts) == 31.5
     assert rm.snap(31.0, starts) == 31.5      # afgerond in de weergave ([0:31])
     assert rm.snap(9999.0, starts) is None    # buiten het transcript
+    # Een blok op 31,8 s staat als [0:31] in de prompt; dat antwoord hoort bij dát blok.
+    assert rm.snap(31.0, [0.4, 31.8, 65.0]) == 31.8
+    assert rm.snap(30.0, [0.4, 31.8, 65.0]) == 0.4
+    text, starts2 = rm.transcript_blocks([{"start": 0.4, "text": "a"}, {"start": 31.8, "text": "b"}])
+    shown = rm.parse_ts(text.splitlines()[1].split("]")[0] + "]")
+    assert rm.snap(shown, starts2) == 31.8
 
 
 def test_parse_moments_ignores_garbage():

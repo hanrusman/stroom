@@ -258,6 +258,9 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
   const sources = run?.sources ?? [];
   const byRef = useMemo(() => new Map(sources.map(s => [s.ref, s])), [sources]);
   const active = activeRef ? byRef.get(activeRef) ?? null : null;
+  // Eén keer ophalen voor beide panelen (desktop-aside én mobiele sheet zijn
+  // allebei gemount, CSS verbergt er één): anders start het momentenzoeken dubbel.
+  const sourceMedia = useSourceMedia(run?.id ?? null, active?.ref ?? null);
 
   const act = async (name: string, fn: () => Promise<void>) => {
     setBusy(name);
@@ -365,14 +368,14 @@ function RunView({ id, onBack, onOpenRun, onOpenItem }: {
             </div>
             <aside className="hidden lg:block">
               <div className="sticky top-24">
-                {active ? <SourcePanel runId={run.id} source={active} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
+                {active ? <SourcePanel source={active} media={sourceMedia} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
                   : <Timeline sources={sources} />}
               </div>
             </aside>
           </div>
           {active && (
             <div className={`lg:hidden fixed inset-x-0 bottom-0 z-40 max-h-[70vh] overflow-y-auto rounded-t-3xl border-t border-brand-ink/10 bg-brand-cream p-5 shadow-2xl ${playerOpen ? 'pb-36' : ''}`}>
-              <SourcePanel runId={run.id} source={active} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
+              <SourcePanel source={active} media={sourceMedia} onClose={() => setActiveRef(null)} onOpenItem={onOpenItem} />
             </div>
           )}
         </>
@@ -647,13 +650,14 @@ function Timeline({ sources }: { sources: ResearchSource[] }) {
 
 /** Mediagegevens + momenten per bevinding voor één bron. Letterlijke citaten
  *  komen direct mee; de rest zoekt een goedkoop model daarna (één keer per bron). */
-function useSourceMedia(runId: string, ref: string) {
+function useSourceMedia(runId: string | null, ref: string | null) {
   const [media, setMedia] = useState<ResearchSourceMedia | null>(null);
   const [locating, setLocating] = useState(false);
   useEffect(() => {
     let alive = true;
     setMedia(null);
     setLocating(false);
+    if (!runId || !ref) return;
     fetchResearchSourceMedia(runId, ref).then(m => {
       if (!alive) return;
       setMedia(m);
@@ -669,10 +673,13 @@ function useSourceMedia(runId: string, ref: string) {
   return { media, locating };
 }
 
-function SourcePanel({ runId, source, onClose, onOpenItem }: {
-  runId: string; source: ResearchSource; onClose: () => void; onOpenItem: (id: string) => void;
+function SourcePanel({ source, media: sourceMedia, onClose, onOpenItem }: {
+  source: ResearchSource; media: ReturnType<typeof useSourceMedia>;
+  onClose: () => void; onOpenItem: (id: string) => void;
 }) {
-  const { media, locating } = useSourceMedia(runId, source.ref);
+  // Het paneel kan heel even een vorige bron tonen terwijl de nieuwe laadt.
+  const media = sourceMedia.media?.ref === source.ref ? sourceMedia.media : null;
+  const locating = sourceMedia.locating;
   const { loadTrack, currentTrack, isPlaying, seek, togglePlay } = useGlobalAudio();
   const yt = media && media.format === 'video' ? youtubeId(media.media_url) : null;
   const audio = media && media.format === 'podcast' && media.media_url ? media : null;

@@ -4,6 +4,7 @@ Web (sessie): /research...
 Machine-to-machine (Okavango, internal token): /internal/research...
 De pijplijn zelf staat in services/research_service.py.
 """
+import asyncio
 import json
 import os
 import re
@@ -218,6 +219,10 @@ async def source_media(run_id: str, ref: str = Path(pattern=r"^S\d+$"),
     return {**media, "moments": moments, "pending": pending}
 
 
+# Lopende momentenzoektochten per (run, item); één uvicorn-proces, dus in-process volstaat.
+_MOMENT_LOCKS: dict[str, tuple[asyncio.Lock, int]] = {}
+
+
 @router.post("/research/{run_id}/sources/{ref}/moments")
 async def source_moments(run_id: str, request: Request, ref: str = Path(pattern=r"^S\d+$"),
                          user=Depends(require_user)):
@@ -226,20 +231,33 @@ async def source_moments(run_id: str, request: Request, ref: str = Path(pattern=
     run = await _get(run_id, user)
     src, media, segments = await _source_media(run, ref)
     findings = src.get("findings") or []
-    cached = await _cached_moments(run_id, src["item_id"], len(findings))
-    if cached is not None:
-        return {"moments": cached}
-    moments, model = await rm.locate_moments(_llm(request), segments, findings)
-    if model is None and any(m is None for m in moments):
-        # Model faalde (of geen transcript): niet bewaren, later opnieuw proberen.
-        return {"moments": moments}
-    async with async_session_maker() as s:
-        await s.exec(sa_text("""
-            UPDATE research_runs SET moments = moments || jsonb_build_object(:k, CAST(:v AS jsonb))
-            WHERE id = CAST(:i AS uuid)""").bindparams(k=src["item_id"], v=json.dumps(moments),
-                                                       i=run_id))
-        await s.commit()
-    return {"moments": moments}
+    # Twee gelijktijdige verzoeken (twee tabbladen, dubbelklik) wachten op
+    # elkaar: de tweede vindt daarna het resultaat van de eerste in de cache.
+    key = f"{run_id}:{src['item_id']}"
+    lock, users = _MOMENT_LOCKS.get(key) or (asyncio.Lock(), 0)
+    _MOMENT_LOCKS[key] = (lock, users + 1)
+    try:
+        async with lock:
+            cached = await _cached_moments(run_id, src["item_id"], len(findings))
+            if cached is not None:
+                return {"moments": cached}
+            moments, model = await rm.locate_moments(_llm(request), segments, findings)
+            if model is None and any(m is None for m in moments):
+                # Model faalde (of geen transcript): niet bewaren, later opnieuw proberen.
+                return {"moments": moments}
+            async with async_session_maker() as s:
+                await s.exec(sa_text("""
+                    UPDATE research_runs SET moments = moments || jsonb_build_object(:k, CAST(:v AS jsonb))
+                    WHERE id = CAST(:i AS uuid)""").bindparams(k=src["item_id"], v=json.dumps(moments),
+                                                               i=run_id))
+                await s.commit()
+            return {"moments": moments}
+    finally:
+        lock, users = _MOMENT_LOCKS[key]
+        if users <= 1:
+            del _MOMENT_LOCKS[key]
+        else:
+            _MOMENT_LOCKS[key] = (lock, users - 1)
 
 
 @router.post("/research/{run_id}/refresh")

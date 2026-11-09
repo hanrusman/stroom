@@ -3,6 +3,7 @@ echte Postgres: DbStore, Corpus.meta/content en een volledige run met nep-LLM.
 Draait alleen met STROOM_TEST_DB_URL, in schema `stroom_test`; zie
 test_score_guards_db.py voor lokaal draaien met pgserver.
 """
+import asyncio
 import os
 import sys
 import uuid
@@ -256,8 +257,12 @@ async def test_source_media_and_moments_are_located_and_cached(db, monkeypatch):
 
     llm = MomentLLM({"moments": [{"i": 1, "t": "1:05"}]})
     monkeypatch.setattr(rr, "_llm", lambda request: llm)
-    done = await rr.source_moments(rid, request=None, ref="S1", user={"id": me})
+    # Twee panelen/tabbladen tegelijk: één modelaanroep, beide krijgen hetzelfde.
+    done, twin = await asyncio.gather(
+        rr.source_moments(rid, request=None, ref="S1", user={"id": me}),
+        rr.source_moments(rid, request=None, ref="S1", user={"id": me}))
     assert done["moments"] == [{"t": 31.5, "exact": True}, {"t": 65.0, "exact": False}]
+    assert twin == done and len(llm.prompts) == 1 and not rr._MOMENT_LOCKS
 
     again = await rr.source_media(rid, "S1", user={"id": me})
     assert again["moments"] == done["moments"] and again["pending"] is False
