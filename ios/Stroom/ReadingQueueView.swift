@@ -67,12 +67,14 @@ struct ActionFeedback: View {
         Text(text).font(.caption).foregroundStyle(store.actionError == nil ? Color.primary : .red)
         Spacer()
         if store.canUndo {
-          Button("Herstel") { Task { await store.undoArchive() } }.font(.caption.weight(.semibold))
+          Button("Herstel") { Task { await store.undoArchive() } }.font(
+            .subheadline.weight(.semibold)
+          ).frame(minHeight: 44)
         }
         Button {
           store.dismissActionFeedback()
         } label: {
-          Image(systemName: "xmark").frame(width: 36, height: 36)
+          Image(systemName: "xmark").frame(width: 44, height: 44)
         }.accessibilityLabel("Melding sluiten")
       }.padding(.horizontal, 16).background(.regularMaterial)
     }
@@ -81,28 +83,51 @@ struct ActionFeedback: View {
 struct ReadingQueueView: View {
   @EnvironmentObject var store: AppStore
   @State private var loading = false
+  @State private var format = "all"
+  var rows: [FeedItem] {
+    store.queueItems.map(store.current).filter { format == "all" || $0.format == format }
+  }
   var body: some View {
     List {
-      Section {
-        Text(
-          "Lezen, kijken en luisteren. Eerst toegevoegd staat bovenaan; dezelfde lijst op je iPhone en website."
-        ).font(.subheadline).foregroundStyle(.secondary)
+      VStack(alignment: .leading, spacing: 14) {
+        EditorialHeader(
+          eyebrow: "Bewust gekozen", title: "Voor straks",
+          subtitle:
+            "\(store.queuedIDs.count) \(store.queuedIDs.count == 1 ? "item" : "items") · op volgorde van toevoegen."
+        )
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(
+              [
+                ("all", "Alles"), ("article", "Lezen"), ("podcast", "Luisteren"),
+                ("video", "Kijken"),
+              ], id: \.0
+            ) { value, title in
+              StroomChip(title: title, selected: format == value) { format = value }
+            }
+          }
+        }
         if let message = store.queueError {
           ErrorNotice(message: message) { await store.refreshQueue() }
         }
-      }
+      }.editorialRow()
       if store.queueItems.isEmpty && store.queueError == nil {
         ContentUnavailableView(
           "Ruimte voor je volgende idee", systemImage: "text.badge.plus",
           description: Text("Veeg een artikel naar links of kies ‘In wachtrij’ in de reader."))
       }
-      ForEach(store.queueItems.map(store.current)) { item in
-        FeedCard(item: item).listRowInsets(EdgeInsets()).stroomActions(item)
+      if rows.isEmpty && !store.queueItems.isEmpty {
+        ContentUnavailableView(
+          "Geen items van dit type", systemImage: "tray",
+          description: Text("Kies Alles om je volledige wachtrij te zien.")
+        ).editorialRow()
       }
+      ForEach(rows) { item in FeedCard(item: item).editorialRow().stroomActions(item) }
       if store.queueItems.count < store.queuedIDs.count {
         Button("Meer ophalen") { Task { await more() } }.disabled(loading)
       }
-    }.navigationTitle("Wachtrij").scrollContentBackground(.hidden).background(Brand.paper)
+    }.listStyle(.plain).navigationTitle("Wachtrij").navigationBarTitleDisplayMode(.inline)
+      .scrollContentBackground(.hidden).background(Brand.paper)
       .task { await store.refreshQueue() }.refreshable { await store.refreshQueue() }
   }
   func more() async {

@@ -54,7 +54,7 @@ struct TipsView: View {
   var body: some View {
     List {
       Section {
-        Text("Aanbevolen door de stemmen die je volgt.").font(.system(.title2, design: .serif))
+        Text("Aanbevolen door de stemmen die je volgt.").font(Brand.editorial(26, relativeTo: .title2))
         Picker("Categorie", selection: $category) {
           Text("Alles").tag("")
           ForEach(categories.keys.sorted(), id: \.self) {

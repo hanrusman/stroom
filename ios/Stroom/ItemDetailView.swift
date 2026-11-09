@@ -3,7 +3,9 @@ import SwiftUI
 
 struct ItemDetailView: View {
   @EnvironmentObject var store: AppStore
+  @EnvironmentObject var player: AudioPlayer
   @Environment(\.dismiss) private var dismiss
+  @Environment(\.dynamicTypeSize) private var typeSize
   let id: String
   @State private var item: FeedItem?
   @State private var error: String?
@@ -13,9 +15,10 @@ struct ItemDetailView: View {
   @State private var scheduled = Date.now.addingTimeInterval(86400)
   @State private var scheduling = false
   @State private var curating = false
+  @State private var showingPlayer = false
   var body: some View {
     ScrollView {
-      VStack(alignment: .leading, spacing: 22) {
+      LazyVStack(alignment: .leading, spacing: 22, pinnedViews: [.sectionHeaders]) {
         if let item {
           if let source = item.sourceId {
             NavigationLink {
@@ -28,7 +31,7 @@ struct ItemDetailView: View {
             Text(item.sourceName.uppercased()).font(.caption.weight(.semibold)).foregroundStyle(
               Brand.blue)
           }
-          Text(item.title).font(.system(.largeTitle, design: .serif).weight(.medium))
+          Text(item.title).font(Brand.display(34))
           HStack {
             if let date = item.date { Text(date.formatted(date: .long, time: .omitted)) }
             Spacer()
@@ -37,40 +40,14 @@ struct ItemDetailView: View {
           if let topics = item.topics, !topics.isEmpty {
             Text(topics.joined(separator: " · ")).font(.caption).foregroundStyle(Brand.blue)
           }
-          if let track = item.track { TrackActions(track: track) }
+          if let track = item.track {
+            TrackActions(track: track)
+            if player.current?.id == track.id {
+              Button("Open speler", systemImage: "waveform") { showingPlayer = true }
+                .font(.subheadline).frame(minHeight: 44)
+            }
+          }
           if item.format == "video" { VideoPreview(item: item) }
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 20) {
-              Button(
-                item.status == "pinned" ? "Bewaard" : "Bewaren",
-                systemImage: item.status == "pinned" ? "bookmark.fill" : "bookmark"
-              ) { Task { await status(item.status == "pinned" ? "new" : "pinned") } }
-              Button(
-                store.queuedIDs.contains(id) ? "Uit wachtrij" : "In wachtrij",
-                systemImage: "text.badge.plus"
-              ) { Task { await store.setQueued(item, queued: !store.queuedIDs.contains(id)) } }
-              .disabled(item.status == "archived")
-              Button("Plan", systemImage: "calendar") {
-                scheduled =
-                  item.scheduledFor.flatMap { ScheduledDay.localDate($0) }
-                  ?? Date.now.addingTimeInterval(86400)
-                scheduling = true
-              }
-              Button("Score en onderwerpen", systemImage: "slider.horizontal.3") { curating = true }
-              Button(
-                item.status == "archived" ? "Uit archief" : "Archiveer", systemImage: "archivebox"
-              ) {
-                Task {
-                  if item.status == "archived" {
-                    await status("new")
-                  } else {
-                    await store.archive(item)
-                    if store.actionError == nil { dismiss() }
-                  }
-                }
-              }
-            }.font(.callout).frame(minHeight: 44)
-          }.disabled(updating || store.changing.contains(id))
           if let planned = item.scheduledFor.flatMap({ ScheduledDay.localDate($0) }) {
             Label(
               "Gepland voor \(planned.formatted(date: .abbreviated, time: .omitted))",
@@ -80,83 +57,71 @@ struct ItemDetailView: View {
           if item.status == "later" && item.scheduledFor == nil {
             Label("Later · geen datum", systemImage: "clock").font(.caption)
           }
-          if let message = store.actionError { Text(message).font(.callout).foregroundStyle(.red) }
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-              ForEach(
-                item.format == "article"
-                  ? ["Bron", "Samenvatting", "Lessen", "Vraag"]
-                  : ["Bron", "Samenvatting", "Lessen", "Transcript", "Vraag"], id: \.self
-              ) { name in
-                Button(name) { section = name }.font(.subheadline.weight(.medium)).padding(
-                  .horizontal, 15
-                ).frame(minHeight: 44)
-                  .background(
-                    section == name ? Brand.blue.opacity(0.14) : Color.secondary.opacity(0.06),
-                    in: Capsule()
-                  )
-                  .accessibilityAddTraits(section == name ? .isSelected : [])
+          Section {
+            switch section {
+            case "Bron":
+              ArticleBody(item: item)
+              if item.sourceBody?.isEmpty != false {
+                Text("De bron heeft geen artikeltekst meegeleverd. Open het origineel hieronder.")
+                  .foregroundStyle(.secondary)
               }
-            }
-          }
-          switch section {
-          case "Bron":
-            ArticleBody(item: item)
-            if item.sourceBody?.isEmpty != false {
-              Text("De bron heeft geen artikeltekst meegeleverd. Open het origineel hieronder.")
-                .foregroundStyle(.secondary)
-            }
 
-          case "Samenvatting":
-            if let text = item.summary, !text.isEmpty {
-              MarkdownBody(text: text)
-            } else {
-              Text("Nog geen samenvatting beschikbaar.").foregroundStyle(.secondary)
-            }
-            if let model = item.summaryModel {
-              Text("Samengevat met \(model)").font(.caption).foregroundStyle(.secondary)
-            }
-            processing(item)
-            Button(
-              item.summary == nil ? "Samenvatten" : "Opnieuw samenvatten", systemImage: "sparkles"
-            ) { Task { await action("summarize") } }.disabled(updating || store.demo)
-          case "Lessen": ItemLessonsView(id: id)
-          case "Transcript":
-            if let segments = item.transcriptSegments, !segments.isEmpty {
-              TranscriptView(item: item, segments: segments)
-            } else if let text = item.transcript, !text.isEmpty {
-              MarkdownBody(text: text)
-            } else {
-              Text("Nog geen transcript beschikbaar.").foregroundStyle(.secondary)
-              if item.format == "podcast" || item.format == "video" {
-                Button("Transcriberen", systemImage: "waveform") {
-                  Task { await action("transcribe") }
-                }.disabled(updating || store.demo)
+            case "Samenvatting":
+              if let text = item.summary, !text.isEmpty {
+                MarkdownBody(text: text)
+              } else {
+                Text("Nog geen samenvatting beschikbaar.").foregroundStyle(.secondary)
               }
+              if let model = item.summaryModel {
+                Text("Samengevat met \(model)").font(.caption).foregroundStyle(.secondary)
+              }
+              processing(item)
+              Button(
+                item.summary == nil ? "Samenvatten" : "Opnieuw samenvatten", systemImage: "sparkles"
+              ) { Task { await action("summarize") } }.disabled(updating || store.demo)
+            case "Lessen": ItemLessonsView(id: id)
+            case "Transcript":
+              if let segments = item.transcriptSegments, !segments.isEmpty {
+                TranscriptView(item: item, segments: segments)
+              } else if let text = item.transcript, !text.isEmpty {
+                MarkdownBody(text: text)
+              } else {
+                Text("Nog geen transcript beschikbaar.").foregroundStyle(.secondary)
+                if item.format == "podcast" || item.format == "video" {
+                  Button("Transcriberen", systemImage: "waveform") {
+                    Task { await action("transcribe") }
+                  }.disabled(updating || store.demo)
+                }
+              }
+              processing(item)
+            default: ItemQuestionsView(id: id)
             }
-            processing(item)
-          default: ItemQuestionsView(id: id)
-          }
-          if updating { ProgressView("Bezig…") }
-          Divider()
-          if let raw = item.mediaUrl, !item.isPodcast, let url = URL(string: raw),
-            ["https", "http"].contains(url.scheme ?? "")
-          {
-            Link("Open origineel", destination: url)
-          }
-          if let url = stroomURL(server: store.server, query: ["item": id]) {
-            ShareLink("Deel via Stroom", item: url)
-            NavigationLink(
-              "Meer artikelopties",
-              destination: StroomWebView(url: url).navigationTitle("Artikelopties"))
+            if updating { ProgressView("Bezig…") }
+            Divider()
+            if let raw = item.mediaUrl, !item.isPodcast, let url = URL(string: raw),
+              ["https", "http"].contains(url.scheme ?? "")
+            {
+              Link("Open origineel", destination: url)
+            }
+            if let url = stroomURL(server: store.server, query: ["item": id]) {
+              ShareLink("Deel via Stroom", item: url)
+              NavigationLink(
+                "Meer artikelopties",
+                destination: StroomWebView(url: url).navigationTitle("Artikelopties"))
+            }
+          } header: {
+            readerSections(item).padding(.bottom, 10).background(Brand.paper)
           }
         } else if error == nil {
           ProgressView().frame(maxWidth: .infinity)
         }
         if let error { ErrorNotice(message: error) { await load() } }
-      }.padding(22).frame(maxWidth: 760, alignment: .leading)
+      }.padding(24).frame(maxWidth: 680, alignment: .leading)
     }.frame(maxWidth: .infinity).background(Brand.paper).navigationTitle("In Stroom")
       .navigationBarTitleDisplayMode(.inline)
+      .safeAreaInset(edge: .bottom, spacing: 0) {
+        if let item { readerActions(item) }
+      }
       .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Gereed") { dismiss() } } }
       .task { await load() }
       .task(id: item?.isProcessing == true) {
@@ -176,6 +141,7 @@ struct ItemDetailView: View {
           }
         }
       }
+      .sheet(isPresented: $showingPlayer) { NowPlayingView() }
       .sheet(isPresented: $scheduling) {
         NavigationStack {
           Form {
@@ -190,6 +156,83 @@ struct ItemDetailView: View {
           }.navigationTitle("Later lezen").toolbar { Button("Sluiten") { scheduling = false } }
         }.presentationDetents([.medium, .large])
       }
+  }
+  func readerSections(_ item: FeedItem) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      Text("LEZEN & VERDIEPEN").font(Brand.meta).tracking(1.5).foregroundStyle(Brand.muted)
+      ScrollViewReader { proxy in
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 6) {
+            ForEach(
+              item.format == "article"
+                ? ["Bron", "Samenvatting", "Lessen", "Vraag"]
+                : ["Bron", "Samenvatting", "Lessen", "Transcript", "Vraag"], id: \.self
+            ) { name in
+              StroomChip(title: name, selected: section == name) { section = name }
+                .id(name)
+            }
+          }
+        }.onChange(of: section) { _, value in proxy.scrollTo(value, anchor: .center) }
+      }
+      Divider().overlay(Brand.line).padding(.top, 6)
+    }.padding(.top, 6)
+  }
+  func readerActions(_ item: FeedItem) -> some View {
+    VStack(spacing: 0) {
+      ActionFeedback()
+      HStack(spacing: 12) {
+        Button {
+          Task { await status(item.status == "pinned" ? "new" : "pinned") }
+        } label: {
+          Label(
+            item.status == "pinned" ? "Bewaard" : "Bewaren",
+            systemImage: item.status == "pinned" ? "bookmark.fill" : "bookmark"
+          )
+          .labelStyle(ReaderActionLabelStyle(compact: typeSize.isAccessibilitySize))
+          .font(.subheadline).frame(minWidth: 48, minHeight: 48)
+        }.accessibilityLabel(item.status == "pinned" ? "Bewaard" : "Bewaren")
+        Spacer(minLength: 0)
+        Button {
+          Task { await store.setQueued(item, queued: !store.queuedIDs.contains(id)) }
+        } label: {
+          Label(
+            store.queuedIDs.contains(id) ? "In wachtrij" : "Wachtrij",
+            systemImage: store.queuedIDs.contains(id) ? "text.badge.checkmark" : "text.badge.plus"
+          )
+          .labelStyle(ReaderActionLabelStyle(compact: typeSize.isAccessibilitySize))
+          .font(.subheadline).frame(minWidth: 48, minHeight: 48)
+        }.accessibilityLabel(store.queuedIDs.contains(id) ? "Uit wachtrij" : "In wachtrij")
+          .disabled(item.status == "archived")
+        Spacer(minLength: 0)
+        Menu {
+          Button("Plan", systemImage: "calendar") {
+            scheduled =
+              item.scheduledFor.flatMap { ScheduledDay.localDate($0) }
+              ?? Date.now.addingTimeInterval(86400)
+            scheduling = true
+          }
+          Button("Score en onderwerpen", systemImage: "slider.horizontal.3") { curating = true }
+          if let url = stroomURL(server: store.server, query: ["item": id]) {
+            ShareLink("Deel via Stroom", item: url)
+          }
+          Divider()
+          Button(item.status == "archived" ? "Uit archief" : "Archiveer", systemImage: "archivebox")
+          {
+            Task {
+              if item.status == "archived" {
+                await status("new")
+              } else {
+                await store.archive(item)
+                if store.actionError == nil { dismiss() }
+              }
+            }
+          }
+        } label: {
+          Image(systemName: "ellipsis").frame(width: 48, height: 48)
+        }
+        .accessibilityLabel("Artikelacties").accessibilityIdentifier("reader-actions")
+      }.padding(.horizontal, 24).disabled(updating || store.changing.contains(id))
+    }.background(.regularMaterial)
   }
   @ViewBuilder func processing(_ item: FeedItem) -> some View {
     if item.isProcessing {
@@ -221,16 +264,17 @@ struct ItemDetailView: View {
     } catch { self.error = error.localizedDescription }
   }
   func status(_ value: String) async {
-    guard let api = store.api else { return }
+    guard let current = item else { return }
     updating = true
     error = nil
     defer { updating = false }
     do {
       var updated: FeedItem
       if store.demo {
-        updated = item!
+        updated = current
         updated.status = value
       } else {
+        guard let api = store.api else { return }
         updated = try await api.update(id, status: value)
       }
       item = updated

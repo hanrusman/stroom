@@ -5,6 +5,7 @@ struct StroomApp: App {
   @UIApplicationDelegateAdaptor(AppDelegate.self) var delegate
   @StateObject private var store = AppStore.shared
   @Environment(\.scenePhase) private var scenePhase
+  @AppStorage("appearance") private var appearance = "system"
   var body: some Scene {
     WindowGroup {
       RootView().environmentObject(store).environmentObject(store.player).environmentObject(
@@ -12,8 +13,14 @@ struct StroomApp: App {
       )
       .environmentObject(store.notifications)
       .tint(Brand.blue)
+      .modifier(
+        DemoTextSize(
+          enabled: store.demo && ProcessInfo.processInfo.arguments.contains("--large-text"))
+      )
       .preferredColorScheme(
-        store.demo && ProcessInfo.processInfo.arguments.contains("--dark") ? .dark : nil
+        store.demo
+          ? (ProcessInfo.processInfo.arguments.contains("--dark") ? .dark : .light)
+          : (appearance == "dark" ? .dark : (appearance == "light" ? .light : nil))
       )
       .task { await store.start() }
       .onOpenURL { url in
@@ -41,25 +48,10 @@ struct StroomApp: App {
   }
 }
 
-enum Brand {
-  static let blue = Color(
-    uiColor: UIColor {
-      $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.48, green: 0.69, blue: 0.91, alpha: 1)
-        : UIColor(red: 0, green: 0.20, blue: 0.40, alpha: 1)
-    })
-  static let paper = Color(
-    uiColor: UIColor {
-      $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.06, green: 0.07, blue: 0.08, alpha: 1)
-        : UIColor(red: 0.977, green: 0.969, blue: 0.949, alpha: 1)
-    })
-  static let card = Color(uiColor: .secondarySystemGroupedBackground)
-}
-
 struct RootView: View {
   @EnvironmentObject var store: AppStore
   @EnvironmentObject var player: AudioPlayer
+  @Environment(\.dynamicTypeSize) private var typeSize
   @State private var showingPlayer = false
   var body: some View {
     Group {
@@ -83,18 +75,22 @@ struct RootView: View {
           }.tag(3)
           tabRoot { MoreView() }.tabItem { Label("Meer", systemImage: "ellipsis.circle") }.tag(4)
         }
-        .sheet(isPresented: $showingPlayer) { NowPlayingView() }
+        .sheet(isPresented: $showingPlayer) {
+          NowPlayingView().environment(\.dynamicTypeSize, typeSize)
+        }
         .sheet(
           item: Binding(
             get: { store.incomingURL.map(ItemLink.init) }, set: { store.incomingURL = $0?.id })
         ) { link in
           NavigationStack { SubmitView(initialURL: link.id, presentedAsSheet: true) }
+            .environment(\.dynamicTypeSize, typeSize)
         }
         .sheet(
           item: Binding(
             get: { store.openItemID.map(ItemLink.init) }, set: { store.openItemID = $0?.id })
         ) { link in
           NavigationStack { ItemDetailView(id: link.id) }
+            .environment(\.dynamicTypeSize, typeSize)
         }
       }
     }
@@ -126,7 +122,7 @@ struct LoginView: View {
             Brand.blue
           ).padding(.top, 48)
           Text("Een wereld aan ideeën.\nOp jouw ritme.").font(
-            .system(.largeTitle, design: .serif).weight(.medium))
+            Brand.display(34))
           Text("Je onderwerpen, inzichten en podcasts.\nDezelfde Stroom, nu op je iPhone.")
             .foregroundStyle(.secondary)
           VStack(spacing: 14) {
@@ -167,5 +163,12 @@ struct LoginView: View {
       }.frame(maxWidth: .infinity).background(Brand.paper).navigationTitle("Stroom")
         .navigationBarTitleDisplayMode(.inline)
     }
+  }
+}
+
+private struct DemoTextSize: ViewModifier {
+  let enabled: Bool
+  @ViewBuilder func body(content: Content) -> some View {
+    if enabled { content.environment(\.dynamicTypeSize, .accessibility2) } else { content }
   }
 }

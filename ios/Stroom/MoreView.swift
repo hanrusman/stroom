@@ -12,7 +12,9 @@ struct MoreView: View {
   @EnvironmentObject var store: AppStore
   var body: some View {
     List {
-      Section("Verder ontdekken") {
+      EditorialHeader(eyebrow: "Van nieuwsgierigheid naar inzicht", title: "Meer Stroom")
+        .listRowBackground(Color.clear)
+      Section("Ontdekken & verdiepen") {
         NavigationLink {
           TipsView()
         } label: {
@@ -40,12 +42,15 @@ struct MoreView: View {
         } label: {
           Label("Instellingen en meldingen", systemImage: "slider.horizontal.3")
         }
+      } header: {
+        Text("Jouw Stroom")
       } footer: {
         Text(
           "Podcastgeneratie en beheer openen de volledige Stroom-website binnen de app, met je bestaande sessie."
         )
       }
-    }.navigationTitle("Meer Stroom").scrollContentBackground(.hidden).background(Brand.paper)
+    }.navigationTitle("Meer").navigationBarTitleDisplayMode(.inline)
+      .listRowSpacing(4).scrollContentBackground(.hidden).background(Brand.paper)
   }
   @ViewBuilder func webLink(_ title: String, symbol: String, query: [String: String]) -> some View {
     if let url = stroomURL(server: store.server, query: query) {
