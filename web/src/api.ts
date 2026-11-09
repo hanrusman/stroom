@@ -379,9 +379,21 @@ export async function regenerateTopicDigest(slug: string, model: DigestModel = '
 
 // --- Lessons: distill / expand / digest ---
 
+interface DistillJob { status: 'idle' | 'running' | 'done' | 'error'; inserted: number; error: string | null; }
+
+// Distill draait server-side als job: een reasoning-model doet er vaak langer
+// over dan de reverse proxy wacht (504). POST start, daarna pollen tot klaar.
 export async function distillMoreLessons(itemId: string, model: DigestModel = 'opus'): Promise<Lesson[]> {
-  const r = await apiFetch(`/api/huygens/items/${itemId}/lessons/distill?model=${model}`, { method: 'POST' });
-  return r.json();
+  const url = `/api/huygens/items/${itemId}/lessons/distill`;
+  let job: DistillJob = await (await apiFetch(`${url}?model=${model}`, { method: 'POST' })).json();
+  const deadline = Date.now() + 8 * 60_000;
+  while (job.status === 'running') {
+    if (Date.now() > deadline) throw new Error('Lessen genereren duurt te lang — probeer het later opnieuw.');
+    await new Promise(res => setTimeout(res, 3000));
+    job = await (await apiFetch(url)).json();
+  }
+  if (job.status === 'error') throw new Error(job.error ?? 'Lessen genereren mislukt');
+  return fetchLessons(itemId);
 }
 
 export async function expandLesson(lessonId: string, model: DigestModel = 'opus', force = false): Promise<Lesson> {
