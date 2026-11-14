@@ -2,6 +2,8 @@
 
 Een native SwiftUI-app naast de bestaande Stroom-website. De app gebruikt dezelfde HTTPS-API, login en bewaarde items. Voor de gedeelde leeswachtrij moet ook de Stroom-server worden bijgewerkt: voer migratie `schema/migrations/027-reading-queue.sql` uit en deploy de nieuwe API en website. Tot dat moment geeft de wachtrij een foutmelding; de bestaande lees- en podcastfuncties blijven beschikbaar.
 
+De geplande vervolgstappen, in volgorde van prioriteit, staan in [ROADMAP.md](./ROADMAP.md).
+
 ## Op je iPhone zetten
 
 1. Open **Stroom.xcodeproj** in Xcode. Je hoeft geen packages te installeren; het project is al gegenereerd.
