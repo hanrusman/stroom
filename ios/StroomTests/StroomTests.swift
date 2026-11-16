@@ -452,3 +452,10 @@ extension StroomTests {
     }
   }
 }
+
+extension StroomTests {
+  @MainActor func testEditorialFontsAreBundledAndRegistered() {
+    XCTAssertNotNil(UIFont(name: "Newsreader16pt-Regular", size: 22))
+    XCTAssertNotNil(UIFont(name: "PlayfairDisplay-Regular", size: 32))
+  }
+}

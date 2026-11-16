@@ -11,30 +11,43 @@ struct DigestPreview: View {
   @EnvironmentObject var store: AppStore
   let topic: String
   let window: String
+  let open: () -> Void
   @State private var digest: Digest?
   @State private var error: String?
   @State private var loading = true
   var body: some View {
-    NavigationLink {
-      DigestView(topic: topic, initialWindow: window)
-    } label: {
-      VStack(alignment: .leading, spacing: 8) {
-        Label(
-          window == "daily" ? "Vandaag" : "Deze week",
-          systemImage: window == "daily" ? "sun.max" : "calendar"
-        )
-        .font(.headline).foregroundStyle(Brand.blue)
-        if digest?.isGenerating == true { Text("Wordt gemaakt…").font(.caption) }
-        if let text = digest?.markdown {
-          Text(ContentText.excerpt(text)).font(.subheadline).lineLimit(3).foregroundStyle(.primary)
-        } else if loading {
-          ProgressView()
+    Button(action: open) {
+      VStack(alignment: .leading, spacing: 10) {
+        HStack {
+          Image(systemName: window == "daily" ? "sun.max" : "calendar")
+          Spacer()
+          Image(systemName: "arrow.up.right").font(.caption)
+        }.foregroundStyle(Brand.blue).accessibilityHidden(true)
+        Text(window == "daily" ? "Vandaag" : "Deze week")
+          .font(Brand.editorial(22)).foregroundStyle(Brand.ink)
+        if let markdown = digest?.markdown, !ContentText.excerpt(markdown).isEmpty {
+          Text(ContentText.excerpt(markdown)).font(.caption).foregroundStyle(Brand.muted)
+            .lineLimit(3).multilineTextAlignment(.leading)
+            .accessibilityIdentifier("digest-excerpt-\(window)")
+          if digest?.isGenerating == true {
+            Text("Wordt vernieuwd…").font(.caption).foregroundStyle(Brand.muted)
+          }
         } else {
-          Text(error ?? "Nog geen overzicht. Tik om er een te maken.").font(.caption)
-            .foregroundStyle(.secondary)
+          Text(
+            digest?.isGenerating == true
+              ? "Wordt gemaakt…"
+              : (loading
+                ? "Ophalen…" : (error != nil ? "Ophalen mislukt · open" : "Maak een overzicht"))
+          )
+          .font(.caption).foregroundStyle(Brand.muted).fixedSize(horizontal: false, vertical: true)
         }
-      }.padding(.vertical, 6)
-    }.task(id: "\(topic)|\(window)") {
+      }.frame(minWidth: 120, maxWidth: .infinity, alignment: .leading)
+        .padding(16).background(Brand.card, in: RoundedRectangle(cornerRadius: 18))
+    }.buttonStyle(.plain).accessibilityHint(
+      "Open het \(window == "daily" ? "dagoverzicht" : "weekoverzicht")"
+    )
+    .accessibilityIdentifier("digest-\(window)")
+    .task(id: "\(topic)|\(window)") {
       digest = nil
       error = nil
       loading = true
@@ -91,7 +104,7 @@ struct DigestView: View {
           Text("Dag").tag("daily")
           Text("Week").tag("weekly")
         }.pickerStyle(.segmented)
-        Text("Het grotere plaatje").font(.system(.largeTitle, design: .serif))
+        Text("Het grotere plaatje").font(Brand.display())
         if let date = digest?.generatedAt.flatMap(StroomDate.parse) {
           Text(date.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(
             .secondary)

@@ -1,5 +1,7 @@
 # Stroom voor iPhone
 
+De ontwerpversie van 30 oktober gebruikt de kleuren en lettertypen van de website, met eigen contentkaarten, vaste readeracties en een vernieuwde podcastspeler. Zie [ontwerpkeuzes en controle](DESIGN.md). De bestaande swipe-acties en curatiefuncties blijven beschikbaar.
+
 Een native SwiftUI-app naast de bestaande Stroom-website. De app gebruikt dezelfde HTTPS-API, login en bewaarde items. Voor de gedeelde leeswachtrij moet ook de Stroom-server worden bijgewerkt: voer migratie `schema/migrations/027-reading-queue.sql` uit en deploy de nieuwe API en website. Tot dat moment geeft de wachtrij een foutmelding; de bestaande lees- en podcastfuncties blijven beschikbaar.
 
 ## Op je iPhone zetten
@@ -24,7 +26,7 @@ Met een gratis Personal Team verlopen provisioning profiles na **7 dagen**. Bouw
 - Excerpts worden opgeschoond van HTML, entities en Markdown; de reader toont bron en samenvatting apart met leesbare opmaak.
 - Naar rechts vegen archiveert (met Herstel); naar links vegen voegt toe aan de gedeelde wachtrij of haalt het item eruit.
 - Een eigen tab Wachtrij, opgeslagen per account op de server, met dezelfde FIFO-volgorde op website en iPhone. Bewaren blijft een aparte actie. Archiveren verwijdert het item uit alle wachtrijen, omdat de bestaande itemstatus gedeeld is.
-- Volledige artikeltekst onder Bron, afbeelding, openingscitaat en onthouden leesgrootte (18–28 pt). Podcasttranscripten met sprekers, aanklikbare tijdcodes en markering van de actieve passage.
+- Volledige artikeltekst onder Bron, afbeelding en onthouden leesgrootte (18–28 pt), met Newsreader en Dynamic Type. Podcasttranscripten met sprekers, aanklikbare tijdcodes en markering van de actieve passage.
 - Native lessen destilleren, verdiepen, beoordelen en naar Vikunja sturen; vraagvoorstellen, antwoordgeschiedenis en bronvermelding. AI-acties gebruiken de modelinstellingen van de website.
 - Dag- en weekoverzichten met geschiedenis en opnieuw genereren; automatische voortgangscontrole zolang het scherm open is.
 - Score en onderwerpen aanpassen, score-uitleg, plannen op datum, Later zonder datum en Wis. Snelle acties via lang indrukken en een hele rail archiveren na bevestiging.

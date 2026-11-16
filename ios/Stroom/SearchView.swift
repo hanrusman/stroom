@@ -26,7 +26,7 @@ struct SearchResultsView: View {
         } label: {
           VStack(alignment: .leading, spacing: 8) {
             Text(hit.sourceName.uppercased()).font(.caption).foregroundStyle(Brand.blue)
-            Text(hit.title).font(.headline).foregroundStyle(.primary)
+            Text(hit.title).font(Brand.editorial(23)).foregroundStyle(.primary)
             if let snippet = hit.snippet {
               Text(highlightedSnippet(snippet)).font(.subheadline).foregroundStyle(.secondary)
                 .lineLimit(4)

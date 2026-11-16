@@ -456,6 +456,9 @@ final class AppStore: ObservableObject {
         sourceName: "Nooit meer slapen", format: "podcast", qualityScore: 9.1),
     ]
     items[0].summaryModel = "Voorbeeldmodel"
+    if ProcessInfo.processInfo.arguments.contains("--design-preview") {
+      items[0].mediaUrl = "https://example.invalid/preview.mp3"
+    }
     items[0].transcriptSegments = [
       TranscriptSegment(
         start: 0, end: 30, text: "Goede technologie begint met betere vragen.",
@@ -475,6 +478,7 @@ final class AppStore: ObservableObject {
     }
     selectInitialTopic()
     lastSync = Date()
+    player.loadDesignPreview()
   }
 }
 private struct FeedCache: Codable {

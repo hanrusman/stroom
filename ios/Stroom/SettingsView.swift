@@ -9,10 +9,18 @@ struct SettingsView: View {
   @State private var message: String?
   @State private var saving = false
   @State private var confirmLogout = false
+  @AppStorage("appearance") private var appearance = "system"
   var body: some View {
     Form {
+      Section("Weergave") {
+        Picker("Kleurmodus", selection: $appearance) {
+          Text("Volg iPhone").tag("system")
+          Text("Licht").tag("light")
+          Text("Donker").tag("dark")
+        }
+      }
       Section {
-        Text("Maak ruimte voor wat telt.").font(.system(.title2, design: .serif))
+        Text("Maak ruimte voor wat telt.").font(Brand.editorial(26, relativeTo: .title2))
         Text("Jij kiest wanneer Stroom je aandacht vraagt.").font(.subheadline).foregroundStyle(
           .secondary)
       }
