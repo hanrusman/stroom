@@ -15,12 +15,29 @@ RAM-teller op strongbad.nl geldt voor de fysieke host. De A2 wordt gedeeld.
 |---|---|---|
 | `kittentts` | Ja | VoiceStudio het model meldt (CPU, KittenML/kitten-tts-mini-0.8) |
 | `omnivoice` | Ja | VoiceStudio het model geïnstalleerd en `accelerated` meldt |
-| `cosyvoice` | Ja | VoiceStudio het model geïnstalleerd en `accelerated` meldt |
+| `cosyvoice` | Nee | Past niet in het geheugen van deze guest (zie hieronder) |
 
-Sinds de GPU-route werkt staan alle drie standaard in `PODCAST_ENABLED_MODELS`.
-Een model zonder bevestigde GPU-versnelling blijft in de keuzelijst uitgeschakeld.
-Beperk tot `PODCAST_ENABLED_MODELS=kittentts` als een GPU-model het guestbudget
-overschrijdt.
+`PODCAST_ENABLED_MODELS` staat standaard op `kittentts,omnivoice`. Een model zonder
+bevestigde GPU-versnelling blijft in de keuzelijst uitgeschakeld. Beperk tot
+`PODCAST_ENABLED_MODELS=kittentts` als ook OmniVoice het guestbudget overschrijdt.
+
+Proef van 20 november 2026 met één Engelse tekst van 1.396 tekens (237 woorden):
+
+| Model | Resultaat | Rekentijd | Audio |
+|---|---|---|---|
+| `omnivoice` | Klaar | 103 s, inclusief koud laden | 1:25 |
+| `kittentts` | Klaar | 348 s (circa 0,25 s per teken) | 2:15 |
+| `cosyvoice` | Mislukt | OOM bij 3 GiB én bij tijdelijk 5 GiB | geen |
+
+CosyVoice meldt zich in VoiceStudio als `accelerated`, maar bij het laden ontbreekt
+`CUDAExecutionProvider` voor de ONNX-delen, die daardoor in het werkgeheugen draaien.
+Bij 3 GiB stopte de OOM-killer de sidecar; bij 5 GiB de hele container (exit 137,
+automatische herstart). De guest heeft 7,6 GB, dus verder verhogen is geen optie.
+Geef het model pas weer vrij (`PODCAST_ENABLED_MODELS=kittentts,omnivoice,cosyvoice`
+in de root-`.env`) als die ONNX-delen aantoonbaar op de A2 draaien.
+
+Zet in de wachtrij de GPU-modellen vóór Kitten: er loopt één conversie tegelijk en
+Kitten houdt de rij minutenlang bezet.
 
 VoiceStudio draait apart van de API: 3 GiB hard geheugenmaximum, geen extra swap,
 1 CPU en maximaal drie herstartpogingen. Meet ook het totale guestgebruik: andere
