@@ -7,7 +7,8 @@ services:
       PODCAST_VOICESTUDIO_KEY: ${STROOM_VOICESTUDIO_KEY:?Set a private VoiceStudio API key}
       PODCAST_HOST_STATS_URL: https://strongbad.nl/stats.json
       PODCAST_MEDIA_DIR: /data/podcast-tests
-      PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts,omnivoice,cosyvoice}
+      # CosyVoice exceeds this guest's memory (see PODCAST.md); opt in via the root .env.
+      PODCAST_ENABLED_MODELS: ${PODCAST_ENABLED_MODELS:-kittentts,omnivoice}
 
   stroom-voice:
     image: stroom-voice:0.5.6-gpu4
