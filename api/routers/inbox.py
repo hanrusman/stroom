@@ -26,6 +26,28 @@ class InboxSubmitRequest(BaseModel):
     topic_slug: str
     description: Optional[str] = None
     author: Optional[str] = None
+    # Eigen tekst in plaats van de pagina achter `url` (alleen voor format
+    # "article"), bijvoorbeeld een digest die Talon uit nieuwsbrieven schrijft.
+    # Met body haalt Stroom de URL niet op; de URL dient dan als vaste sleutel.
+    body: Optional[str] = None
+
+
+BODY_MIN_WORDS = 100
+BODY_MAX_CHARS = 100_000
+
+
+def _body_from_request(body: InboxSubmitRequest) -> Optional[str]:
+    """Gevalideerde eigen tekst uit het verzoek, of None als er geen is."""
+    if body.body is None:
+        return None
+    text = body.body.strip()
+    if body.format != "article":
+        raise HTTPException(status_code=400, detail="Eigen tekst (body) kan alleen bij format 'article'")
+    if len(text) > BODY_MAX_CHARS:
+        raise HTTPException(status_code=400, detail=f"Tekst te lang (max {BODY_MAX_CHARS} tekens)")
+    if len(text.split()) < BODY_MIN_WORDS:
+        raise HTTPException(status_code=400, detail=f"Tekst te kort (minimaal {BODY_MIN_WORDS} woorden)")
+    return text
 
 
 class InboxSubmitResponse(BaseModel):
@@ -134,10 +156,10 @@ async def inbox_submit(
     }
     content_kind = kind_map.get(body.format, "rss")
 
-    # For articles: extract full content via trafilatura first,
-    # zodat we de juiste status kunnen kiezen.
-    article_body: Optional[str] = None
-    if body.format == "article":
+    # For articles: eigen tekst uit het verzoek, anders full content via
+    # trafilatura, zodat we de juiste status kunnen kiezen.
+    article_body: Optional[str] = _body_from_request(body)
+    if body.format == "article" and article_body is None:
         article_body = await _extract_article_body(request.app.state.http_client, url)
 
     # Determine initial processing status:
@@ -183,7 +205,8 @@ async def inbox_submit(
 
     # Link to topic
     await session.exec(sa_text(
-        "INSERT INTO item_topics (item_id, topic_id) VALUES (CAST(:iid AS uuid), CAST(:tid AS uuid))"
+        "INSERT INTO item_topics (item_id, topic_id) VALUES (CAST(:iid AS uuid), CAST(:tid AS uuid)) "
+        "ON CONFLICT DO NOTHING"
     ).bindparams(iid=item_id, tid=topic_id))
 
     await session.commit()
