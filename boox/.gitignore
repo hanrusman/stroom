@@ -1,0 +1,13 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+captures/
+/keystore.properties
+*.jks
+*.keystore
+
+# De hoofd-.gitignore negeert elke map "data/" (serverdata); de Kotlin-package hoort er wel in.
+!app/src/main/java/nl/c4w/stroom/boox/data/

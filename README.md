@@ -113,6 +113,15 @@ notifications. It uses the existing API without a backend deployment. Open
 is supported. See [the iPhone installation guide](ios/README.md) for setup,
 notification limitations and device checks.
 
+## Boox e-ink app
+
+The `boox/` directory contains an Android app for e-ink readers, tuned for the
+Boox Go Color 7 (Kaleido 3 colour e-ink, physical page-turn buttons). It pages
+instead of scrolling, uses no animations, keeps text pure black with colour only
+as an accent, and keeps your reading queue readable offline. It uses the existing
+API without a backend change. See [the Boox guide](boox/README.md) (Dutch) for
+installation, Boox settings and signing.
+
 ## Configuration
 
 All configuration is via environment variables. See [`.env.example`](./.env.example)

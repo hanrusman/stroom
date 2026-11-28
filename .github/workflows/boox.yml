@@ -1,0 +1,64 @@
+name: Boox-app
+
+on:
+  pull_request:
+    paths:
+      - "boox/**"
+      - ".github/workflows/boox.yml"
+  push:
+    branches: [main]
+    paths:
+      - "boox/**"
+      - ".github/workflows/boox.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: boox-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    name: Boox (tests + APK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: boox
+    env:
+      # Optioneel: een vaste sleutel zodat updates over de bestaande app heen installeren.
+      BOOX_KEYSTORE_BASE64: ${{ secrets.BOOX_KEYSTORE_BASE64 }}
+      BOOX_KEYSTORE_PASSWORD: ${{ secrets.BOOX_KEYSTORE_PASSWORD }}
+      BOOX_KEY_ALIAS: ${{ secrets.BOOX_KEY_ALIAS }}
+      BOOX_KEY_PASSWORD: ${{ secrets.BOOX_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v7
+      # De standaard-JDK van de runner (25) is te nieuw voor Kotlin 2.2; zet 21 vast.
+      # De Android SDK staat al op ubuntu-latest.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Sleutel klaarzetten
+        if: env.BOOX_KEYSTORE_BASE64 != ''
+        run: |
+          echo "$BOOX_KEYSTORE_BASE64" | base64 -d > stroom-boox.jks
+          {
+            echo "storeFile=stroom-boox.jks"
+            echo "storePassword=$BOOX_KEYSTORE_PASSWORD"
+            echo "keyAlias=$BOOX_KEY_ALIAS"
+            echo "keyPassword=$BOOX_KEY_PASSWORD"
+          } > keystore.properties
+      - run: ./gradlew --no-daemon testDebugUnitTest assembleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stroom-boox-apk
+          path: boox/app/build/outputs/apk/release/app-release.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: stroom-boox-schermen
+          path: boox/app/build/outputs/roborazzi/
+          if-no-files-found: ignore
