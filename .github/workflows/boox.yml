@@ -34,7 +34,12 @@ jobs:
       BOOX_KEY_PASSWORD: ${{ secrets.BOOX_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v7
-      # ubuntu-latest heeft JDK 17 en de Android SDK al aan boord.
+      # De standaard-JDK van de runner (25) is te nieuw voor Kotlin 2.2; zet 21 vast.
+      # De Android SDK staat al op ubuntu-latest.
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
       - name: Sleutel klaarzetten
         if: env.BOOX_KEYSTORE_BASE64 != ''
         run: |

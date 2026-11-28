@@ -76,7 +76,7 @@ cd boox
 ./gradlew assembleRelease     # app/build/outputs/apk/release/app-release.apk
 ```
 
-Je hebt JDK 17 of nieuwer en de Android SDK nodig (`ANDROID_HOME` of `local.properties` met `sdk.dir`).
+Je hebt JDK 17 of 21 nodig (Kotlin 2.2 draait nog niet op JDK 25) en de Android SDK (`ANDROID_HOME` of `local.properties` met `sdk.dir`).
 
 | Bestand | Inhoud |
 |---------|--------|
