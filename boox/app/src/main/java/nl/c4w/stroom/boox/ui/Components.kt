@@ -253,7 +253,8 @@ fun Field(
             cursorBrush = SolidColor(Ink.Black),
             visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
             keyboardOptions = KeyboardOptions(keyboardType = keyboard, imeAction = ime, autoCorrectEnabled = !password && keyboard == KeyboardType.Text),
-            keyboardActions = KeyboardActions(onAny = { onDone() }),
+            // „Volgende” moet naar het volgende veld springen; een eigen actie schakelt dat standaardgedrag uit.
+            keyboardActions = KeyboardActions(onAny = { if (ime == ImeAction.Next) defaultKeyboardAction(ime) else onDone() }),
             modifier = Modifier.fillMaxWidth().border(1.5.dp, Ink.Black).padding(12.dp)
                 .semantics { contentDescription = label },
         )

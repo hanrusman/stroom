@@ -112,7 +112,8 @@ fun Modifier.readerTapZones(paging: Paging, enabled: Boolean) =
 class BuiltDocument(
     val text: AnnotatedString,
     val spacerOffsets: Set<Int>,
-    val keepOffsets: Set<Int>,
+    /** Tekenbereiken van koppen en titels: elke regel daarin blijft bij de regel erna. */
+    val keepRanges: List<IntRange>,
     val style: TextStyle,
 )
 
@@ -136,7 +137,9 @@ fun PagedDocument(
         val width = constraints.maxWidth
         val height = constraints.maxHeight
         var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-        LaunchedEffect(document, pager, width, height) {
+        // Ook dichtheid en lettertypen als sleutel: een andere systeemlettergrootte herstart de
+        // activity niet (configChanges), dus de opmaak moet hier opnieuw.
+        LaunchedEffect(document, pager, width, height, density, direction, resolver) {
             val measurer = TextMeasurer(resolver, density, direction, 0)
             val result = withContext(Dispatchers.Default) {
                 measurer.measure(document.text, style = document.style, constraints = Constraints(maxWidth = width.coerceAtLeast(1)))
@@ -148,7 +151,7 @@ fun PagedDocument(
                     bottom = result.getLineBottom(i),
                     startOffset = start,
                     spacer = start in document.spacerOffsets,
-                    keepWithNext = start in document.keepOffsets,
+                    keepWithNext = document.keepRanges.any { start in it },
                 )
             }
             pager.update(Pagination.slice(lines, height.toFloat()))

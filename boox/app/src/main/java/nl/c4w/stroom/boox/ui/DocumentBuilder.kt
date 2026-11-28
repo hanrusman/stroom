@@ -27,7 +27,7 @@ object DocumentBuilder {
         val size = type.size.toFloat()
         val spacing = type.settings.lineSpacing
         val spacers = mutableSetOf<Int>()
-        val keeps = mutableSetOf<Int>()
+        val keeps = mutableListOf<IntRange>()
         val text = buildAnnotatedString {
             fun gap(height: Float) {
                 spacers += length
@@ -37,8 +37,11 @@ object DocumentBuilder {
             }
 
             fun paragraph(style: ParagraphStyle, keep: Boolean = false, body: () -> Unit) {
-                if (keep) keeps += length
+                val start = length
                 withStyle(style) { body() }
+                // Het hele blok markeren, niet alleen het begin: een kop die over twee regels loopt
+                // mag ook na zijn laatste regel niet onderaan een pagina achterblijven.
+                if (keep && length > start) keeps.add(start until length)
             }
 
             blocks.forEachIndexed { index, block ->
