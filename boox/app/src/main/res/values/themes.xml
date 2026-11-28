@@ -1,0 +1,13 @@
+<resources>
+    <!-- Geen vensteranimaties: op e-ink kost elke overgang een extra verversing. -->
+    <style name="Theme.Stroom" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/white</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowActivityTransitions">false</item>
+        <item name="android:windowContentTransitions">false</item>
+        <item name="android:windowDisablePreview">false</item>
+    </style>
+</resources>
