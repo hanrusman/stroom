@@ -111,6 +111,19 @@ class AppState(
     private var turns = 0
     private var pendingShare: String? = null
     private var bannerJob: Job? = null
+    private var offlineJob: Job? = null
+    private var topicLoads = 0
+
+    /** Telt geslaagde itemacties; zo merkt een verversing dat haar lijsten al verouderd zijn. */
+    private var actionsDone = 0
+
+    /** Zoekopdracht en resultaten blijven staan als je een resultaat opent en terugkomt. */
+    var searchQuery by mutableStateOf("")
+    var searchResults by mutableStateOf<List<FeedItem>?>(null)
+    var searchSnippets by mutableStateOf<Map<String, String>>(emptyMap())
+
+    /** Gekozen tabblad per geopend item; blijft staan als je vanuit de lezer een antwoord of verdieping opent. */
+    val readerSections = mutableStateMapOf<String, String>()
 
     /** Lessen en vragen per item, zodat lange AI-taken doorlopen als je het scherm verlaat. */
     val lessons = mutableStateMapOf<String, List<Lesson>>()
@@ -140,7 +153,9 @@ class AppState(
 
     fun back(): Boolean {
         if (stack.size <= 1) return false
+        val closed = stack.last()
         stack = stack.dropLast(1)
+        if (closed is Screen.Reader) readerSections.remove(closed.id)
         return true
     }
 
@@ -223,7 +238,14 @@ class AppState(
         val client = api ?: return@launch
         busy = true
         try {
-            client.logout()
+            try {
+                client.logout()
+            } catch (e: ApiException) {
+                // Een verlopen sessie is op de server al weg: dan hier gewoon opruimen. Bij andere
+                // fouten (geen wifi) blijf je bewust ingelogd, net als op de iPhone; zie de README.
+                if (!e.isUnauthorized) throw e
+                client.clearSession()
+            }
             clearLocal()
             user = null
             stack = listOf(Screen.Home)
@@ -235,6 +257,20 @@ class AppState(
     }
 
     private fun clearLocal() {
+        offlineJob?.cancel()
+        offlineSync = null
+        bannerJob?.cancel()
+        banner = null
+        actionItem = null
+        pending.clear()
+        lastSync = null
+        offline = false
+        queueError = null
+        topicError = null
+        searchQuery = ""
+        searchResults = null
+        searchSnippets = emptyMap()
+        readerSections.clear()
         cache.clear()
         positions.clear()
         topics = emptyList()
@@ -270,7 +306,12 @@ class AppState(
     private fun persist() {
         val account = settings.account ?: return
         val owner = user ?: return
-        cache.save(FeedCache(account, owner, topics, topicFeeds, allItems, queue, saved, lastSync ?: 0))
+        // Lokale wijzigingen (archiveren, later) gaan mee de cache in; anders staat een
+        // gearchiveerd item na een herstart zonder wifi weer in de lijst.
+        val feeds = topicFeeds.mapValues { (_, feed) ->
+            feed.copy(rails = feed.rails.map { rail -> rail.copy(items = visible(rail.items)) })
+        }
+        cache.save(FeedCache(account, owner, topics, feeds, visible(allItems), visible(queue), visible(saved), lastSync ?: 0))
     }
 
     fun refresh() = scope.launch { refreshNow() }
@@ -279,6 +320,8 @@ class AppState(
         val client = api ?: return
         if (syncing || user == null) return
         syncing = true
+        val actionsAtStart = actionsDone
+        var again = false
         try {
             coroutineScope {
                 val fetchedTopics = async { client.get<List<Topic>>("topics") }
@@ -301,25 +344,39 @@ class AppState(
                     queueError = "Wachtrij niet beschikbaar. Is de Stroom-server bijgewerkt? ${it.message}"
                 }
             }
-            mutations.clear()
+            // Slaagde er tijdens het ophalen een actie (bewaren, archiveren, wachtrij), dan kunnen
+            // deze lijsten nog de oude stand bevatten: houd de lokale wijziging aan en haal opnieuw op.
+            if (actionsDone == actionsAtStart) mutations.clear() else again = true
             selectInitialTopic()
             if (selectedTopic != ALL_TOPICS && selectedTopic.isNotEmpty()) loadTopicNow(selectedTopic)
             offline = false
             lastSync = System.currentTimeMillis()
             persist()
-            scope.launch { syncOffline() }
+            offlineJob?.cancel()
+            offlineJob = scope.launch { syncOffline() }
         } catch (e: ApiException) {
             if (e.isUnauthorized) {
-                client.clearSession()
-                user = null
-                loginError = e.message
+                expire(client, e.message)
             } else {
                 offline = true
+                // Nog niets geladen sinds de start: toon de laatst bewaarde lijsten, geen leeg scherm.
+                if (lastSync == null) loadCache()
                 notify(e.message ?: "Verversen mislukt.")
             }
         } finally {
             syncing = false
         }
+        if (again) refreshNow()
+    }
+
+    /** De server kent de sessie niet meer: terug naar het inlogscherm, zonder open menu of melding. */
+    private fun expire(client: ApiClient, message: String?) {
+        client.clearSession()
+        user = null
+        loginError = message
+        actionItem = null
+        bannerJob?.cancel()
+        banner = null
     }
 
     /** Haalt de volledige tekst van elk wachtrij-item op, zodat je ook zonder wifi kunt lezen. */
@@ -327,17 +384,22 @@ class AppState(
         val client = api ?: return
         val ids = queue.map { it.id }
         val stale = System.currentTimeMillis() - 6 * 3600_000L
-        var done = 0
-        for (id in ids) {
+        ids.forEachIndexed { index, id ->
             val cached = cache.detail(id)
             if (cached == null || cached.fetchedAt < stale) {
-                offlineSync = "Offline kopieën bijwerken: ${done + 1} van ${ids.size}"
-                runCatching { client.item(id) }.onSuccess { cache.saveDetail(it) }
+                offlineSync = "Offline kopieën bijwerken: ${index + 1} van ${ids.size}"
+                // Bewust geen runCatching: een geannuleerde sync (nieuwe verversing, uitloggen) stopt hier.
+                try {
+                    cache.saveDetail(client.item(id))
+                } catch (e: ApiException) {
+                    // Dit item komt bij de volgende verversing opnieuw aan de beurt.
+                }
             }
-            done++
         }
-        cache.prune(ids.toSet())
-        offlineIds = cache.cachedIds() intersect ids.toSet()
+        // De wachtrij kan intussen zijn veranderd: ruim op met de actuele stand, niet met de momentopname.
+        val keep = queueIds
+        cache.prune(keep)
+        offlineIds = cache.cachedIds() intersect keep
         offlineSync = null
     }
 
@@ -360,16 +422,19 @@ class AppState(
     private suspend fun loadTopicNow(slug: String) {
         val client = api ?: return
         if (slug == ALL_TOPICS || slug.isEmpty()) return
+        // Bij snel wisselen lopen er meerdere aanvragen; pas als de laatste klaar is, is het laden voorbij.
+        topicLoads++
         topicLoading = true
         try {
             val topic = client.get<HuygensTopic>("huygens/$slug")
             topicFeeds = topicFeeds + (slug to topic)
-            topicError = null
+            if (slug == selectedTopic) topicError = null
             persist()
         } catch (e: ApiException) {
-            if (topicFeeds[slug] == null) topicError = e.message
+            if (slug == selectedTopic && topicFeeds[slug] == null) topicError = e.message
         } finally {
-            topicLoading = false
+            topicLoads--
+            topicLoading = topicLoads > 0
         }
     }
 
@@ -403,13 +468,9 @@ class AppState(
         scope.launch {
             try {
                 block(client)
+                actionsDone++
             } catch (e: ApiException) {
-                if (e.isUnauthorized) {
-                    client.clearSession()
-                    user = null
-                    loginError = e.message
-                }
-                notify(e.message ?: "Dat lukte niet.")
+                if (e.isUnauthorized) expire(client, e.message) else notify(e.message ?: "Dat lukte niet.")
             } finally {
                 pending.remove(item.id)
             }
@@ -446,6 +507,7 @@ class AppState(
     fun later(item: FeedItem) = action(item, "Later") { client ->
         apply(client.setStatus(item.id, "later"))
         notify("Op later gezet")
+        persist()
     }
 
     fun archive(item: FeedItem, leaveReader: Boolean = false) = action(item, "Archiveren") { client ->
@@ -453,7 +515,8 @@ class AppState(
         val wasQueued = isQueued(item)
         val updated = client.setStatus(item.id, "archived")
         apply(updated)
-        if (leaveReader && screen is Screen.Reader) back()
+        // Alleen de lezer van dít item sluiten; intussen kan er een ander scherm bovenop staan.
+        if (leaveReader && (screen as? Screen.Reader)?.id == item.id) back()
         persist()
         notify("Gearchiveerd: ${before.title.take(60)}", action = "Herstel", onAction = { restore(before, wasQueued) })
     }

@@ -48,7 +48,7 @@ fun LoginScreen(state: AppState) {
     var server by rememberSaveable { mutableStateOf(state.server) }
     var email by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    val submit = { if (!state.busy) state.login(server, email, password) }
+    val submit = { if (!state.busy && email.isNotBlank() && password.isNotBlank()) state.login(server, email, password) }
     Box(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), contentAlignment = Alignment.TopCenter) {
         Column(
             Modifier.widthIn(max = 520.dp).fillMaxWidth().padding(Space.gutter),
@@ -187,6 +187,7 @@ fun SubmitScreen(state: AppState, initialUrl: String) {
     }
     fun preview() {
         val api = state.api ?: return
+        if (busy) return
         busy = true
         error = null
         scope.launch {
@@ -204,6 +205,7 @@ fun SubmitScreen(state: AppState, initialUrl: String) {
     }
     fun submit() {
         val api = state.api ?: return
+        if (busy) return
         busy = true
         error = null
         scope.launch {

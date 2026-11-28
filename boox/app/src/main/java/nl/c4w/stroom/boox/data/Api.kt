@@ -131,7 +131,13 @@ class ApiClient(
                     url = next
                     return@repeat
                 }
-                val text = withContext(Dispatchers.IO) { response.body?.string().orEmpty() }
+                // De body komt pas hier binnen; wifi die halverwege wegvalt of een time-out geeft
+                // een IOException, en aanroepers vangen alleen ApiException af.
+                val text = try {
+                    withContext(Dispatchers.IO) { response.body?.string().orEmpty() }
+                } catch (e: IOException) {
+                    throw ApiException("De verbinding met Stroom viel weg tijdens het laden. Probeer het opnieuw.")
+                }
                 if (!response.isSuccessful) throw ApiException.fromResponse(response.code, text)
                 if (path == "auth/login") storeSessionCookie(response)
                 return text
@@ -142,7 +148,13 @@ class ApiClient(
 
     private fun storeSessionCookie(response: Response) {
         val cookie = Cookie.parseAll(response.request.url, response.headers).firstOrNull { it.name == COOKIE }
-        if (cookie != null) session.save(account, cookie.value)
+        if (cookie == null) return
+        try {
+            session.save(account, cookie.value)
+        } catch (e: Exception) {
+            // De Android Keystore kan weigeren (bijvoorbeeld direct na een herstart); dat mag geen crash zijn.
+            throw ApiException("De sessie kon niet veilig op dit apparaat worden bewaard. Herstart de Boox en log opnieuw in.")
+        }
     }
 
     suspend fun login(email: String, password: String): StroomUser {

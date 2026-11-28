@@ -74,10 +74,12 @@ class ReadingPositions(context: Context) {
 
     fun set(key: String, offset: Int) {
         val editor = prefs.edit().putString(key, "$offset:${System.currentTimeMillis()}")
-        val all = prefs.all
-        if (all.size > MAX) {
-            all.entries.sortedBy { (it.value as? String)?.substringAfter(':')?.toLongOrNull() ?: 0L }
-                .take(all.size - MAX).forEach { editor.remove(it.key) }
+        // De sleutel die nu wordt bijgewerkt telt niet mee bij het opruimen: zijn oude tijdstempel
+        // zou hem anders als oudste laten verwijderen, direct nadat hij is opgeslagen.
+        val others = prefs.all.filterKeys { it != key }
+        if (others.size >= MAX) {
+            others.entries.sortedBy { (it.value as? String)?.substringAfter(':')?.toLongOrNull() ?: 0L }
+                .take(others.size - MAX + 1).forEach { editor.remove(it.key) }
         }
         editor.apply()
     }

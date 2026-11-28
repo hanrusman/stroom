@@ -9,6 +9,7 @@ import nl.c4w.stroom.boox.data.MemorySessionStore
 import nl.c4w.stroom.boox.data.ServerAddress
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -95,11 +96,22 @@ class ApiClientTest {
 
         server.enqueue(
             MockResponse().setBody(
-                """{"id":"p","title":"P","format":"podcast","transcript_segments":[{"start":1,"end":2,"text":"ok"},{"start":"x"}]}""",
+                """{"id":"p","title":"P","format":"podcast","transcript_segments":[{"start":1,"end":2,"text":"ok"},{"start":"x"},{"start":{},"end":2,"text":"object in plaats van getal"}]}""",
             ),
         )
         val podcast: FeedItem = api.item("p")
         assertEquals(1, podcast.segments.size)
+    }
+
+    @Test
+    fun connectionLostWhileReadingBodyBecomesApiException() = runTest {
+        // Wifi die wegvalt nadat de headers binnen zijn mag de app niet laten crashen.
+        server.enqueue(
+            MockResponse().setBody("""{"user":{"id":"u1","email":"a@b.nl"}}""")
+                .setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY),
+        )
+        val error = runCatching { api.me() }.exceptionOrNull()
+        assertTrue("verwacht ApiException, kreeg $error", error is ApiException)
     }
 
     @Test

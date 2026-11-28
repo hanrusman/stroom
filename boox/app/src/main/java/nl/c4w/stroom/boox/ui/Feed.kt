@@ -284,6 +284,8 @@ fun QueueScreen(state: AppState) {
         FeedList(state, items.map { FeedRow.Entry(it) }, state.listPager("queue|$format")) {
             if (state.queueError != null) {
                 Notice("Wachtrij niet beschikbaar", state.queueError, "Opnieuw", { state.refresh() })
+            } else if (format != "all" && state.visible(state.queue).isNotEmpty()) {
+                Notice("Niets van deze soort", "Je wachtrij bevat wel andere items.", "Toon alles", { state.queueFormat = "all" })
             } else {
                 Notice(
                     "Je wachtrij is leeg",
@@ -311,23 +313,23 @@ fun SavedScreen(state: AppState) {
 
 @Composable
 fun SearchScreen(state: AppState) {
-    var query by remember { mutableStateOf("") }
-    var results by remember { mutableStateOf<List<FeedItem>?>(null) }
-    var snippets by remember { mutableStateOf<Map<String, String>>(emptyMap()) }
+    // Zoekopdracht en resultaten staan in AppState: dit scherm verdwijnt uit beeld zodra je een
+    // resultaat opent, en moet er bij Terug nog net zo staan.
+    val query = state.searchQuery
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val pager = state.listPager("search")
     fun search() {
         val api = state.api ?: return
-        if (query.trim().length < 2) return
+        if (busy || query.trim().length < 2) return
         busy = true
         error = null
         scope.launch {
             try {
                 val hits: List<SearchHit> = api.get("search", mapOf("q" to query.trim(), "limit" to "60"))
-                snippets = hits.associate { it.id to ContentText.excerpt(it.snippet) }
-                results = hits.map { FeedItem(id = it.id, title = it.title, sourceName = it.sourceName, format = it.format, publishedAt = it.publishedAt) }
+                state.searchSnippets = hits.associate { it.id to ContentText.excerpt(it.snippet) }
+                state.searchResults = hits.map { FeedItem(id = it.id, title = it.title, sourceName = it.sourceName, format = it.format, publishedAt = it.publishedAt) }
                 pager.reset()
             } catch (e: ApiException) {
                 error = e.message
@@ -339,11 +341,12 @@ fun SearchScreen(state: AppState) {
     Column(Modifier.fillMaxSize()) {
         TopBar("Zoeken", onBack = { state.back() })
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Field("Zoek in titels, samenvattingen en transcripten", query, { query = it }, Modifier.weight(1f), ime = ImeAction.Search, onDone = ::search)
+            Field("Zoek in titels, samenvattingen en transcripten", query, { state.searchQuery = it }, Modifier.weight(1f), ime = ImeAction.Search, onDone = ::search)
             EButton(if (busy) "Zoekt…" else "Zoek", ::search, filled = true, enabled = !busy && query.trim().length >= 2)
         }
         Rule()
-        val found = results
+        val found = state.searchResults
+        val snippets = state.searchSnippets
         when {
             error != null -> Notice("Zoeken mislukt", error, "Opnieuw", ::search)
             found == null -> Notice("Zoek in je hele archief", "Gebruik \"aanhalingstekens\" voor een exacte zin of OR voor alternatieven.")

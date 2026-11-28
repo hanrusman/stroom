@@ -89,7 +89,10 @@ data class FeedItem(
 
 data class TranscriptSegment(val start: Double, val end: Double, val text: String, val speaker: String?) {
     companion object {
-        fun from(element: JsonElement): TranscriptSegment? {
+        /** Tolerant: ook een segment met een object of lijst waar een getal of tekst hoort telt als kapot. */
+        fun from(element: JsonElement): TranscriptSegment? = runCatching { parse(element) }.getOrNull()
+
+        private fun parse(element: JsonElement): TranscriptSegment? {
             val obj = element as? JsonObject ?: return null
             val start = obj["start"]?.jsonPrimitive?.doubleOrNull ?: return null
             val end = obj["end"]?.jsonPrimitive?.doubleOrNull ?: return null

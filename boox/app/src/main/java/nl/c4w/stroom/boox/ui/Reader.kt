@@ -88,7 +88,9 @@ fun ReaderScreen(state: AppState, id: String) {
     var cachedAt by remember(id) { mutableStateOf<Long?>(null) }
     var error by remember(id) { mutableStateOf<String?>(null) }
     var loaded by remember(id) { mutableStateOf(false) }
-    var section by rememberSaveable(id) { mutableStateOf("") }
+    // Het gekozen tabblad staat in AppState: de lezer verdwijnt uit beeld als je een antwoord of
+    // verdieping opent, en moet bij Terug weer op hetzelfde tabblad staan.
+    val section = state.readerSections[id].orEmpty()
     val scope = rememberCoroutineScope()
 
     suspend fun load() {
@@ -113,8 +115,10 @@ fun ReaderScreen(state: AppState, id: String) {
 
     val current = item?.let(state::current)
     val available = SECTIONS.filter { it != "Transcript" || current?.format == "podcast" || current?.format == "video" }
-    if (section.isEmpty() && loaded && current != null) section = if (current.hasSummaryText) "Samenvatting" else "Bron"
-    val active = section.ifEmpty { "Samenvatting" }
+    if (section.isEmpty() && loaded && current != null) {
+        state.readerSections[id] = if (current.hasSummaryText) "Samenvatting" else "Bron"
+    }
+    val active = state.readerSections[id] ?: "Samenvatting"
 
     Column(Modifier.fillMaxSize()) {
         TopBar(current?.sourceName?.ifBlank { null } ?: "In Stroom", onBack = { state.back() }) {
@@ -131,7 +135,7 @@ fun ReaderScreen(state: AppState, id: String) {
         Segmented(
             available.map { it to it },
             active,
-            { section = it },
+            { state.readerSections[id] = it },
             Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
         )
         val notes = listOfNotNull(
@@ -147,6 +151,23 @@ fun ReaderScreen(state: AppState, id: String) {
         val summary = remember(current.summary) { ContentText.document(current.summary) }
         val source = remember(current.sourceBody) { ContentText.document(current.sourceBody) }
         val transcript = remember(current.transcript, current.transcriptSegments) { ContentText.transcriptDocument(current) }
+        // Lijsten leveren geen samenvatting of transcript mee. Zolang de volledige tekst nog niet is
+        // opgehaald (of ophalen mislukte) is „nog geen samenvatting” dus niet waar, en zou de knop
+        // Samenvatten een dure AI-taak starten voor iets wat er al is.
+        val missing = when (active) {
+            "Samenvatting" -> summary.isEmpty()
+            "Bron" -> source.isEmpty()
+            "Transcript" -> transcript.isEmpty()
+            else -> false
+        }
+        if (missing && !loaded) {
+            Notice("Laden…")
+            return@Column
+        }
+        if (missing && error != null) {
+            Notice("Niet geladen", error, "Opnieuw", { scope.launch { load() } })
+            return@Column
+        }
         when (active) {
             "Samenvatting" -> {
                 val body = summary
@@ -158,7 +179,7 @@ fun ReaderScreen(state: AppState, id: String) {
                         {
                             if (current.isProcessing) scope.launch { load() } else state.process(current, "summarize") { item = it }
                         },
-                        secondary = "Lees de bron" to { section = "Bron" },
+                        secondary = "Lees de bron" to { state.readerSections[id] = "Bron" },
                     )
                 } else {
                     val model = current.summaryModel?.let { listOf(Block.Rule, Block.Meta("Samengevat met $it")) }.orEmpty()
@@ -215,7 +236,8 @@ private fun LessonsPane(state: AppState, item: FeedItem) {
         }
     }
     fun distill() {
-        if (distilling) return
+        // Rechtstreeks in pending kijken: `distilling` is de stand van de laatste tekening.
+        if (state.pending.containsKey(distillKey)) return
         state.pending[distillKey] = "Lessen destilleren"
         error = null
         state.scope.launch {
@@ -316,7 +338,7 @@ private fun QuestionsPane(state: AppState, item: FeedItem) {
     }
     fun ask() {
         val text = question.trim()
-        if (text.length < 3 || asking) return
+        if (text.length < 3 || state.pending.containsKey(askKey)) return
         state.pending[askKey] = "Vraag stellen"
         error = null
         state.scope.launch {
@@ -408,20 +430,31 @@ fun DigestScreen(state: AppState, screen: Screen.Digest) {
     var digest by remember { mutableStateOf<Digest?>(null) }
     var loaded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var generating by remember { mutableStateOf(false) }
+    // Het venster (dag/week) waarvoor een overzicht wordt gemaakt; null als er niets loopt.
+    var generating by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
     suspend fun load() {
         val api = state.api ?: return
-        loaded = false
-        error = null
+        val requested = window
         try {
-            digest = api.digest(screen.topic, window)
+            val result = api.digest(screen.topic, requested)
+            if (window == requested) {
+                digest = result
+                error = null
+            }
         } catch (e: ApiException) {
-            error = e.message
+            if (window == requested) error = e.message
         }
-        loaded = true
+        if (window == requested) loaded = true
     }
-    LaunchedEffect(window) { load() }
+    LaunchedEffect(window) {
+        // Alleen bij wisselen van venster „Laden…” tonen; het periodieke opnieuw kijken hieronder
+        // mag het scherm niet elke 15 seconden laten verspringen.
+        loaded = false
+        digest = null
+        error = null
+        load()
+    }
     LaunchedEffect(window, digest?.isGenerating) {
         while (digest?.isGenerating == true) {
             delay(15_000)
@@ -430,16 +463,21 @@ fun DigestScreen(state: AppState, screen: Screen.Digest) {
     }
     fun generate() {
         val api = state.api ?: return
-        generating = true
+        if (generating != null) return
+        // Vastleggen voor welk venster dit is: wie intussen van dag naar week wisselt, mag het
+        // dagoverzicht niet onder „Week” te zien krijgen.
+        val requested = window
+        generating = requested
         error = null
         scope.launch {
             try {
-                val model = api.model(if (window == "weekly") "digest_weekly" else "digest")
-                digest = api.send("huygens/${screen.topic}/digest", query = model + ("window" to window))
+                val model = api.model(if (requested == "weekly") "digest_weekly" else "digest")
+                val result: Digest = api.send("huygens/${screen.topic}/digest", query = model + ("window" to requested))
+                if (window == requested) digest = result
             } catch (e: ApiException) {
-                error = e.message
+                if (window == requested) error = e.message
             } finally {
-                generating = false
+                generating = null
             }
         }
     }
@@ -453,7 +491,7 @@ fun DigestScreen(state: AppState, screen: Screen.Digest) {
         when {
             !loaded -> Notice("Laden…")
             error != null -> Notice("Overzicht niet geladen", error, "Opnieuw", { scope.launch { load() } })
-            generating || value?.isGenerating == true -> Notice(
+            generating == window || value?.isGenerating == true -> Notice(
                 "$label wordt gemaakt",
                 "Dit duurt meestal een paar minuten. Deze pagina kijkt vanzelf opnieuw.",
                 "Opnieuw laden", { scope.launch { load() } },
